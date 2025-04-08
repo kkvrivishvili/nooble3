@@ -12,8 +12,7 @@ from common.config import get_settings
 from common.context import with_context, set_current_collection_id, get_current_conversation_id
 from common.utils.http import call_service_with_context
 from common.errors import ServiceError
-from common.cache.contextual import get_cached_value_multi_level, build_cache_key
-from common.cache.redis import cache_set
+from common.cache.manager import CacheManager
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -41,16 +40,14 @@ async def create_rag_tool(tool_config: Dict[str, Any], tenant_id: str, agent_id:
         """Herramienta para consultar documentos usando RAG."""
         logger.info(f"RAG consulta: {query}")
         
-        # Generar hash de la consulta para caché
-        query_hash = hashlib.md5(query.encode()).hexdigest()
-        
         # Verificar caché para esta consulta específica
-        cached_result = await get_cached_value_multi_level(
-            key_type="rag_result",
-            resource_id=query_hash,
+        cached_result = await CacheManager.get_rag_result(
+            query=query,
             tenant_id=tenant_id,
             agent_id=agent_id,
-            collection_ids=[collection_id] if collection_id else None
+            collection_id=collection_id,
+            similarity_top_k=similarity_top_k,
+            response_mode=response_mode
         )
         
         if cached_result:
@@ -98,14 +95,16 @@ async def create_rag_tool(tool_config: Dict[str, Any], tenant_id: str, agent_id:
                     rag_response += f"\n[{i}] {source_name}: {source_text[:200]}..."
             
             # Cachear el resultado formateado
-            cache_key = build_cache_key(
-                key_type="rag_result",
-                resource_id=query_hash,
+            await CacheManager.set_rag_result(
+                query=query,
+                result=rag_response,
                 tenant_id=tenant_id,
                 agent_id=agent_id,
-                collection_ids=[collection_id] if collection_id else None
+                collection_id=collection_id,
+                similarity_top_k=similarity_top_k,
+                response_mode=response_mode,
+                ttl=1800
             )
-            await cache_set(cache_key, rag_response, ttl=1800)
             
             return rag_response
                 

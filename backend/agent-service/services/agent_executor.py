@@ -13,16 +13,13 @@ from langchain.agents import AgentExecutor, create_tool_calling_agent
 
 from common.config import get_settings
 from common.context import ContextManager, with_context
-from common.cache.contextual import build_cache_key, get_cached_value_multi_level, cache_embedding_multi_level
-from common.cache.redis import cache_set
 from common.errors import ServiceError, handle_service_error_simple
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
 from common.llm.token_counters import count_tokens
 from common.tracking import track_token_usage
 from common.llm.streaming import stream_llm_response
-from common.cache.specialized import AgentCache
-
+from common.cache.manager import CacheManager
 
 from services.callbacks import AgentCallbackHandler, StreamingCallbackHandler
 from services.tools import create_agent_tools
@@ -33,17 +30,10 @@ settings = get_settings()
 @with_context(tenant=True, agent=True)
 async def get_agent_config(agent_id: str, tenant_id: str) -> Dict[str, Any]:
     """Obtiene la configuración de un agente desde Supabase."""
-    # Construir clave de caché con formato estandarizado
-    cache_key = build_cache_key(
-        key_type="agent_config",
-        resource_id=agent_id,
-        tenant_id=tenant_id
-    )
     
-    # Buscar en la caché multinivel
-    cached_config = await get_cached_value_multi_level(
-        key_type="agent_config",
-        resource_id=agent_id,
+    # Verificar caché primero
+    cached_config = await CacheManager.get_agent_config(
+        agent_id=agent_id,
         tenant_id=tenant_id
     )
     
@@ -78,7 +68,12 @@ async def get_agent_config(agent_id: str, tenant_id: str) -> Dict[str, Any]:
         )
     
     # Guardar en caché para futuros usos (TTL de 5 minutos)
-    await cache_set(cache_key, result.data, ttl=300)
+    await CacheManager.set_agent_config(
+        agent_id=agent_id,
+        config=result.data,
+        tenant_id=tenant_id,
+        ttl=300
+    )
     
     return result.data
 
@@ -111,10 +106,9 @@ async def execute_agent(
     await context_manager.add_user_message(query, metadata=context)
     
     # Verificar caché para esta consulta específica
-    query_hash = generate_hash(query)
-    cached_response = await AgentCache.get_response(
+    cached_response = await CacheManager.get_agent_response(
         agent_id=agent_id,
-        query_hash=query_hash,
+        query=query,  # La función se encarga de generar el hash
         tenant_id=tenant_id,
         conversation_id=conversation_id
     )
@@ -272,17 +266,15 @@ async def execute_agent(
         
         # Guardar en caché para futuras consultas idénticas
         # (solo si no es streaming y la respuesta no es un error)
-
-    # Guardar en caché para futuras consultas idénticas
-    if not streaming and "error" not in agent_response:
-        await AgentCache.set_response(
-            agent_id=agent_id,
-            query_hash=query_hash,
-            response=agent_response,
-            tenant_id=tenant_id,
-            conversation_id=conversation_id,
-            ttl=1800  # 30 minutos
-        )
+        if not streaming and "error" not in agent_response:
+            await CacheManager.set_agent_response(
+                agent_id=agent_id,
+                query=query,  # La función se encarga de generar el hash
+                response=agent_response,
+                tenant_id=tenant_id,
+                conversation_id=conversation_id,
+                ttl=1800
+            )
     
     logger.info(f"Ejecución de agente completada en {processing_time:.2f}s")
     return agent_response

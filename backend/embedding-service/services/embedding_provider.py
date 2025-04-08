@@ -6,7 +6,7 @@ from typing import List, Dict, Any, Optional
 from common.config import get_settings
 from common.errors import ServiceError, handle_service_error_simple
 from common.context.vars import get_current_tenant_id, get_current_agent_id, get_current_conversation_id
-from common.cache.specialized import EmbeddingCache  # Usar la implementación especializada
+from common.cache.manager import CacheManager  # Usar la implementación unificada de caché
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -46,7 +46,7 @@ class CachedEmbeddingProvider:
     
     @handle_service_error_simple
     async def get_embedding(self, text: str) -> List[float]:
-        """Obtiene un embedding con soporte de caché especializada."""
+        """Obtiene un embedding con soporte de caché unificada."""
         if not text.strip():
             # Vector de ceros para texto vacío
             return [0.0] * self.dimensions
@@ -54,15 +54,13 @@ class CachedEmbeddingProvider:
         # Usar tenant_id del contexto si no se proporcionó
         tenant_id = self.tenant_id or get_current_tenant_id()
         agent_id = get_current_agent_id()
-        conversation_id = get_current_conversation_id()
         
-        # Verificar caché usando el sistema especializado
-        cached_embedding = await EmbeddingCache.get(
+        # Verificar caché usando el sistema unificado
+        cached_embedding = await CacheManager.get_embedding(
             text=text,
             model_name=self.model_name,
             tenant_id=tenant_id,
-            agent_id=agent_id,
-            conversation_id=conversation_id
+            agent_id=agent_id
         )
         
         if cached_embedding:
@@ -74,14 +72,13 @@ class CachedEmbeddingProvider:
         else:
             embedding = await self.embedder.get_embedding(text)
         
-        # Guardar en caché especializada
-        await EmbeddingCache.set(
+        # Guardar en caché unificada
+        await CacheManager.set_embedding(
             text=text,
             embedding=embedding,
             model_name=self.model_name,
             tenant_id=tenant_id,
             agent_id=agent_id,
-            conversation_id=conversation_id,
             ttl=86400  # 24 horas
         )
         
@@ -100,7 +97,11 @@ class CachedEmbeddingProvider:
         result: List[Optional[List[float]]] = [None] * len(texts)
         
         # Verificar caché para todos los textos
-        cached_embeddings = await EmbeddingCache.get_batch(texts, self.model_name, tenant_id)
+        cached_embeddings = await CacheManager.get_embeddings_batch(
+            texts=texts,
+            model_name=self.model_name,
+            tenant_id=tenant_id
+        )
         
         # Identificar textos no cacheados que necesitan procesamiento
         texts_to_process = []
@@ -130,7 +131,7 @@ class CachedEmbeddingProvider:
                 result[i] = embedding
                 
                 # Guardar en caché
-                await EmbeddingCache.set(
+                await CacheManager.set_embedding(
                     text=texts[i],
                     embedding=embedding,
                     model_name=self.model_name,

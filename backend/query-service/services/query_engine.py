@@ -15,7 +15,7 @@ from common.context import with_context, get_current_tenant_id, get_current_coll
 from common.errors import ServiceError
 from common.tracking import track_token_usage
 from common.llm.token_counters import count_tokens
-from common.cache.specialized import QueryResultCache
+from common.cache.manager import CacheManager
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ async def process_query_with_sources(
     agent_id = get_current_agent_id()
     
     # Verificar caché primero
-    cached_result = await QueryResultCache.get(
+    cached_result = await CacheManager.get_query_result(
         query=query,
         collection_id=collection_id,
         tenant_id=tenant_id,
@@ -134,7 +134,7 @@ async def process_query_with_sources(
         }
         
         # Guardar en caché (1 hora)
-        await QueryResultCache.set(
+        await CacheManager.set_query_result(
             query=query,
             result=result,
             collection_id=collection_id,
