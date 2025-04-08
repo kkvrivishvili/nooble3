@@ -111,7 +111,7 @@ async def execute_agent(
     await context_manager.add_user_message(query, metadata=context)
     
     # Verificar caché para esta consulta específica
-    query_hash = f"query:{generate_hash(query)}"
+    query_hash = generate_hash(query)
     cached_response = await AgentCache.get_response(
         agent_id=agent_id,
         query_hash=query_hash,
