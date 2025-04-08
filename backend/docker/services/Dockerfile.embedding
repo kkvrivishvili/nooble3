@@ -1,0 +1,49 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# Instalar dependencias base críticas
+RUN pip install --upgrade pip
+
+# Copiar requirements.txt para instalar dependencias
+COPY embedding-service/requirements.txt ./embedding-service/requirements.txt
+
+# Instalar dependencias desde requirements.txt
+RUN pip install -r ./embedding-service/requirements.txt
+
+# Copiar código de la aplicación
+COPY embedding-service/ ./embedding-service/
+COPY common/ ./common/
+COPY .env.example ./.env.example
+
+# Instalar curl para health checks
+RUN apt-get update && apt-get install -y curl && apt-get clean
+
+# Hacer que el script de inicialización sea ejecutable
+RUN chmod +x /app/common/init_ollama.sh
+
+# Variables mínimas de identificación del servicio
+ENV PYTHONPATH=/app
+ENV SERVICE_NAME=embedding-service
+
+# Variables mínimas para modo de prueba (pueden ser sobreescritas por config.py o .env)
+ENV CONFIG_ENVIRONMENT=development
+ENV TENANT_ID=default
+ENV LOAD_CONFIG_FROM_SUPABASE=false
+
+# Variables de credenciales (estas deben ser sobreescritas en producción)
+ENV SUPABASE_URL=https://example.supabase.co
+ENV SUPABASE_KEY=dummy-key-for-testing
+ENV OPENAI_API_KEY=sk-dummy-key-for-testing
+
+# Puerto en el que se ejecutará el servicio (definido en config.py)
+EXPOSE 8001
+
+# Directorio de trabajo para el servicio
+WORKDIR /app/embedding-service
+
+# Health check para K8s
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 CMD curl -f http://localhost:8001/status || exit 1
+
+# Comando para ejecutar el servicio
+CMD /app/common/init_ollama.sh && uvicorn embedding_service:app --host 0.0.0.0 --port 8001

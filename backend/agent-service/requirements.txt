@@ -1,0 +1,23 @@
+# backend/agent-service/requirements.txt
+# Dependencias principales
+fastapi==0.115.12
+uvicorn==0.34.0
+pydantic==2.10.6
+pydantic-settings==2.8.1  # Necesario para BaseSettings en Pydantic v2
+python-multipart==0.0.20
+httpx==0.28.1
+openai==1.69.0
+tiktoken==0.9.0
+redis==5.2.1
+python-dotenv==1.0.1
+tenacity==9.0.0
+pytest==8.3.5
+supabase==2.15.0
+
+# Componentes de LangChain alineados con la versión 0.3
+langchain>=0.3,<0.4
+langchain-core>=0.3,<0.4
+langchain-openai>=0.3,<0.4
+langchain-community>=0.3,<0.4
+
+# Nota: La biblioteca común se instalará usando PYTHONPATH
