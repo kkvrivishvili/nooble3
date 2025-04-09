@@ -56,7 +56,7 @@ async def upload_document(
     
     # 2. Subir a Supabase Storage
     file_key = await upload_to_storage(
-        tenant_id=tenant_info.id,
+        tenant_id=tenant_info.tenant_id,
         collection_id=collection_id,
         file_content=await file.read(),
         file_name=file.filename
@@ -64,7 +64,7 @@ async def upload_document(
     
     # 3. Encolar procesamiento
     job_id = await queue_document_processing_job(
-        tenant_id=tenant_info.id,
+        tenant_id=tenant_info.tenant_id,
         collection_id=collection_id,
         document_id=str(uuid.uuid4()),
         file_key=file_key  # Referencia al archivo en Storage

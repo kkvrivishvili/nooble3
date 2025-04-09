@@ -1,10 +1,40 @@
 """
+Servicio unificado para extracción y procesamiento de documentos.
+"""
+
+import logging
+import os
+import tempfile
+import mimetypes
+from datetime import datetime
+from typing import Dict, Any, Optional, List
+import asyncio
+
+from common.config import get_settings
+from common.db.storage import get_file_from_storage
+from common.errors import DocumentProcessingError
+from services.embedding import generate_embeddings
+from services.storage import store_document_chunks
+
+import fitz  # PyMuPDF
+from bs4 import BeautifulSoup
+from docx import Document
+import pandas as pd
+
+logger = logging.getLogger(__name__)
+settings = get_settings()
+
+# --------------------------
+# Funciones de Extracción Existente
+# --------------------------
+"""
 Servicio para extracción de texto de diferentes formatos de archivo.
 """
 
 import logging
 import os
 import tempfile
+import mimetypes
 from datetime import datetime
 from typing import Dict, Any, Optional
 
@@ -395,462 +425,66 @@ async def extract_document_metadata(file_path: str, mimetype: str) -> Dict[str, 
         
     return metadata
 
-# Consolidated document processing functions from document_processor.py
-
-async def validate_file(file: UploadFile, max_size_mb: int = settings.MAX_FILE_SIZE_MB) -> Dict[str, Any]:
-    """
-    Valida un archivo cargado, verificando tipo y tamaño.
-    
-    Args:
-        file: Archivo a validar
-        max_size_mb: Tamaño máximo permitido en MB
-        
-    Returns:
-        Dict: Información del archivo
-        
-    Raises:
-        ValidationError: Si el archivo no es válido
-    """
-    if not file.filename:
-        raise ValidationError(
-            message="Nombre de archivo inválido",
-            details={"filename": None}
-        )
-    
-    # Verificar extensión
-    file_extension = os.path.splitext(file.filename)[1].lower().replace(".", "")
-    if file_extension not in settings.SUPPORTED_FILE_TYPES:
-        raise ValidationError(
-            message=f"Tipo de archivo no soportado: {file_extension}",
-            details={"filename": file.filename, "supported_types": settings.SUPPORTED_FILE_TYPES}
-        )
-    
-    # Verificar tamaño
-    file.file.seek(0, 2)
-    file_size = file.file.tell()
-    file.file.seek(0)
-    
-    if file_size > max_size_mb * 1024 * 1024:
-        raise ValidationError(
-            message=f"Archivo demasiado grande: {file_size / (1024 * 1024):.2f}MB (máximo {max_size_mb}MB)",
-            details={"filename": file.filename, "file_size": file_size, "max_size": max_size_mb * 1024 * 1024}
-        )
-    
-    return {
-        "filename": file.filename,
-        "extension": file_extension,
-        "size": file_size,
-        "mimetype": file.content_type
-    }
-
+# --------------------------
+# Funciones Consolidadas de Procesamiento
+# --------------------------
 async def process_file(
-    file_content: bytes, 
+    file_content: bytes,
     file_type: str,
     metadata: Dict[str, Any] = None
 ) -> Dict[str, Any]:
     """
-    Procesa un archivo según su tipo, incluyendo metadatos.
+    Procesa un archivo y extrae texto, metadatos y chunks optimizados.
     
     Args:
         file_content: Contenido del archivo en bytes
-        file_type: Tipo del archivo
+        file_type: Tipo de archivo (pdf, docx, etc)
         metadata: Metadatos adicionales
         
     Returns:
         Dict: {
-            'text': texto extraído,
-            'metadata': metadatos combinados,
-            'optimal_chunk_size': tamaño sugerido para chunking
+            'text': str,
+            'metadata': dict,
+            'optimal_chunk_size': int,
+            'chunks': list[str]
         }
     """
     try:
-        # Guardar temporalmente para análisis
-        with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            tmp.write(file_content)
-            tmp_path = tmp.name
-        
-        # Determinar mimetype real
-        mimetype = detect_mimetype(tmp_path)
-        
-        # Obtener procesador específico
-        processor = get_file_processor(file_type)
-        
-        if not processor:
-            raise DocumentProcessingError(f"Tipo de archivo no soportado: {file_type}")
-        
-        # Procesar archivo
-        result = await processor(file_content)
-        
-        # Extraer metadatos del documento
-        doc_metadata = await extract_document_metadata(tmp_path, mimetype)
-        
-        # Combinar metadatos
-        full_metadata = {
-            **(metadata or {}),
-            **doc_metadata,
-            'file_size': os.path.getsize(tmp_path),
-            'processed_at': datetime.utcnow().isoformat()
-        }
-        
-        # Analizar texto para chunking óptimo
-        optimal_chunk_size = await detect_optimal_chunk_size(result['text'])
-        
-        # Eliminar temporal
-        os.unlink(tmp_path)
-        
-        return {
-            'text': result['text'],
-            'metadata': full_metadata,
-            'optimal_chunk_size': optimal_chunk_size
-        }
-        
-    except Exception as e:
-        logger.error(f"Error procesando archivo: {str(e)}")
-        raise DocumentProcessingError(f"Error procesando archivo: {str(e)}")
-
-async def process_pdf(file_content: bytes) -> Dict[str, Any]:
-    """
-    Procesa un archivo PDF, usando método optimizado para archivos grandes.
-    
-    Args:
-        file_content: Contenido del archivo PDF en bytes
-        
-    Returns:
-        Dict: {
-            'text': texto extraído,
-            'metadata': metadatos del documento
-        }
-    """
-    try:
-        # Guardar temporalmente para analizar tamaño
-        with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            tmp.write(file_content)
-            tmp_path = tmp.name
-        
-        # Determinar método basado en tamaño
-        file_size = os.path.getsize(tmp_path) / (1024 * 1024)  # MB
-        mimetype = detect_mimetype(tmp_path)
-        
-        if file_size > 10:  # Usar método para archivos grandes >10MB
-            text = await extract_text_from_large_pdf(tmp_path)
-        else:
-            text = await extract_text_from_pdf(tmp_path)
+        # Guardar temporalmente el archivo
+        with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+            tmp_file.write(file_content)
+            tmp_path = tmp_file.name
             
-        # Extraer metadatos
-        metadata = await extract_document_metadata(tmp_path, mimetype)
+        # Extraer contenido
+        text = await extract_text_from_file(tmp_path, file_type)
+        metadata = await extract_document_metadata(tmp_path, file_type)
+        chunk_size = await detect_optimal_chunk_size(text)
         
-        # Eliminar temporal
-        os.unlink(tmp_path)
+        # Dividir en chunks
+        chunks = [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
         
         return {
             'text': text,
             'metadata': metadata,
-            'optimal_chunk_size': await detect_optimal_chunk_size(text)
+            'optimal_chunk_size': chunk_size,
+            'chunks': chunks
         }
         
-    except Exception as e:
-        logger.error(f"Error procesando PDF: {str(e)}")
-        raise DocumentProcessingError(f"Error procesando PDF: {str(e)}")
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except:
+            pass
 
-async def process_file_content(file_content: bytes, file_type: str) -> str:
-    """Procesa contenido de archivo desde API"""
-    processor = get_file_processor(file_type)
-    if not processor:
-        raise DocumentProcessingError(
-            message=f"Tipo de archivo no soportado: {file_type}",
-            details={"supported_types": list(processors.keys())}
-        )
-    return await processor(file_content)
-
-async def process_file_from_storage(tenant_id: str, collection_id: str, file_key: str) -> str:
-    """Procesa archivo descargado de Supabase Storage"""
-    from backend.common.db.storage import get_file_from_storage
-    
-    file_path = await get_file_from_storage(tenant_id, collection_id, file_key)
-    file_type = file_key.split('.')[-1].lower()
-    
-    with open(file_path, 'rb') as f:
-        content = f.read()
-    
-    return await process_file_content(content, file_type)
-
-def get_file_processor(file_type: str):
-    """Obtiene el procesador adecuado para el tipo de archivo"""
-    processors = {
-        "pdf": process_pdf,
-        "docx": process_docx,
-        "xlsx": process_xlsx,
-        "pptx": process_pptx,
-        "html": process_html,
-        "md": process_markdown,
-        "txt": process_text
+async def process_text(
+    text_content: str,
+    metadata: Dict[str, Any] = None
+) -> Dict[str, Any]:
+    """Procesa texto plano."""
+    chunk_size = await detect_optimal_chunk_size(text_content)
+    return {
+        'text': text_content,
+        'metadata': metadata or {},
+        'optimal_chunk_size': chunk_size,
+        'chunks': [text_content[i:i+chunk_size] for i in range(0, len(text_content), chunk_size)]
     }
-    return processors.get(file_type.lower())
-
-async def process_docx(file_content: bytes) -> Dict[str, Any]:
-    """
-    Procesa un archivo Word (.docx).
-    
-    Args:
-        file_content: Contenido del archivo Word en bytes
-        
-    Returns:
-        Dict: {
-            'text': texto extraído,
-            'metadata': metadatos del documento
-        }
-    """
-    try:
-        # Guardar temporalmente para análisis
-        with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            tmp.write(file_content)
-            tmp_path = tmp.name
-        
-        mimetype = detect_mimetype(tmp_path)
-        text = await extract_text_from_docx(tmp_path)
-        metadata = await extract_document_metadata(tmp_path, mimetype)
-        
-        os.unlink(tmp_path)
-        
-        return {
-            'text': text,
-            'metadata': metadata,
-            'optimal_chunk_size': await detect_optimal_chunk_size(text)
-        }
-    except Exception as e:
-        logger.error(f"Error procesando DOCX: {str(e)}")
-        raise DocumentProcessingError(f"Error procesando DOCX: {str(e)}")
-
-async def process_xlsx(file_content: bytes) -> Dict[str, Any]:
-    """
-    Procesa un archivo Excel (.xlsx, .xls) o CSV.
-    
-    Args:
-        file_content: Contenido del archivo Excel o CSV en bytes
-        
-    Returns:
-        Dict: {
-            'text': texto extraído,
-            'metadata': metadatos del documento
-        }
-    """
-    try:
-        with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            tmp.write(file_content)
-            tmp_path = tmp.name
-        
-        mimetype = detect_mimetype(tmp_path)
-        text = await extract_text_from_excel(tmp_path)
-        metadata = await extract_document_metadata(tmp_path, mimetype)
-        
-        os.unlink(tmp_path)
-        
-        return {
-            'text': text,
-            'metadata': metadata,
-            'optimal_chunk_size': await detect_optimal_chunk_size(text)
-        }
-    except Exception as e:
-        logger.error(f"Error procesando Excel/CSV: {str(e)}")
-        raise DocumentProcessingError(f"Error procesando Excel/CSV: {str(e)}")
-
-async def process_pptx(file_content: bytes) -> Dict[str, Any]:
-    """
-    Procesa un archivo PowerPoint (.pptx).
-    
-    Args:
-        file_content: Contenido del archivo PowerPoint en bytes
-        
-    Returns:
-        Dict: {
-            'text': texto extraído,
-            'metadata': metadatos del documento
-        }
-    """
-    try:
-        # Guardar temporalmente para análisis
-        with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            tmp.write(file_content)
-            tmp_path = tmp.name
-        
-        mimetype = detect_mimetype(tmp_path)
-        text = await extract_text_from_pptx(tmp_path)
-        metadata = await extract_document_metadata(tmp_path, mimetype)
-        
-        os.unlink(tmp_path)
-        
-        return {
-            'text': text,
-            'metadata': metadata,
-            'optimal_chunk_size': await detect_optimal_chunk_size(text)
-        }
-    except Exception as e:
-        logger.error(f"Error procesando PPTX: {str(e)}")
-        raise DocumentProcessingError(f"Error procesando PPTX: {str(e)}")
-
-async def process_html(file_content: bytes) -> Dict[str, Any]:
-    """
-    Procesa un archivo HTML.
-    
-    Args:
-        file_content: Contenido del archivo HTML en bytes
-        
-    Returns:
-        Dict: {
-            'text': texto extraído,
-            'metadata': metadatos del documento
-        }
-    """
-    try:
-        # Guardar temporalmente para análisis
-        with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            tmp.write(file_content)
-            tmp_path = tmp.name
-        
-        mimetype = detect_mimetype(tmp_path)
-        text = await extract_text_from_html(tmp_path)
-        metadata = await extract_document_metadata(tmp_path, mimetype)
-        
-        os.unlink(tmp_path)
-        
-        return {
-            'text': text,
-            'metadata': metadata,
-            'optimal_chunk_size': await detect_optimal_chunk_size(text)
-        }
-    except Exception as e:
-        logger.error(f"Error procesando HTML: {str(e)}")
-        raise DocumentProcessingError(f"Error procesando HTML: {str(e)}")
-
-async def process_markdown(file_content: bytes) -> Dict[str, Any]:
-    """
-    Procesa un archivo Markdown (.md).
-    
-    Args:
-        file_content: Contenido del archivo Markdown en bytes
-        
-    Returns:
-        Dict: {
-            'text': texto extraído,
-            'metadata': metadatos del documento
-        }
-    """
-    try:
-        # Guardar temporalmente para análisis
-        with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            tmp.write(file_content)
-            tmp_path = tmp.name
-        
-        mimetype = detect_mimetype(tmp_path)
-        text = await extract_text_from_markdown(tmp_path)
-        metadata = await extract_document_metadata(tmp_path, mimetype)
-        
-        os.unlink(tmp_path)
-        
-        return {
-            'text': text,
-            'metadata': metadata,
-            'optimal_chunk_size': await detect_optimal_chunk_size(text)
-        }
-    except Exception as e:
-        logger.error(f"Error procesando Markdown: {str(e)}")
-        raise DocumentProcessingError(f"Error procesando Markdown: {str(e)}")
-
-async def process_text(file_content: bytes) -> Dict[str, Any]:
-    """
-    Procesa un archivo de texto plano (.txt).
-    
-    Args:
-        file_content: Contenido del archivo de texto plano en bytes
-        
-    Returns:
-        Dict: {
-            'text': texto extraído,
-            'metadata': metadatos del documento
-        }
-    """
-    try:
-        # Guardar temporalmente para análisis
-        with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            tmp.write(file_content)
-            tmp_path = tmp.name
-        
-        mimetype = detect_mimetype(tmp_path)
-        text = await extract_text_from_text(tmp_path)
-        metadata = await extract_document_metadata(tmp_path, mimetype)
-        
-        os.unlink(tmp_path)
-        
-        return {
-            'text': text,
-            'metadata': metadata,
-            'optimal_chunk_size': await detect_optimal_chunk_size(text)
-        }
-    except Exception as e:
-        logger.error(f"Error procesando texto plano: {str(e)}")
-        raise DocumentProcessingError(f"Error procesando texto plano: {str(e)}")
-
-async def extract_text_from_pptx(file_path: str) -> str:
-    """
-    Extrae texto de un archivo PowerPoint (.pptx).
-    
-    Args:
-        file_path: Ruta al archivo PowerPoint
-        
-    Returns:
-        str: Texto extraído del documento
-    """
-    try:
-        from pptx import Presentation
-        presentation = Presentation(file_path)
-        
-        full_text = []
-        for slide in presentation.slides:
-            for shape in slide.shapes:
-                if hasattr(shape, "text"):
-                    full_text.append(shape.text)
-        
-        return "\n".join(full_text)
-    except Exception as e:
-        logger.error(f"Error extrayendo texto de PowerPoint: {str(e)}")
-        return ""
-
-async def extract_text_from_markdown(file_path: str) -> str:
-    """
-    Extrae texto de un archivo Markdown (.md).
-    
-    Args:
-        file_path: Ruta al archivo Markdown
-        
-    Returns:
-        str: Texto extraído del documento
-    """
-    try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            return f.read()
-    except Exception as e:
-        logger.error(f"Error extrayendo markdown: {str(e)}")
-        raise DocumentProcessingError(
-            message=f"Error procesando archivo markdown: {str(e)}",
-            error_code="MARKDOWN_EXTRACTION_ERROR"
-        )
-
-async def extract_text_from_text(file_path: str) -> str:
-    """
-    Extrae texto de un archivo de texto plano (.txt).
-    
-    Args:
-        file_path: Ruta al archivo de texto plano
-        
-    Returns:
-        str: Texto extraído del documento
-    """
-    try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            return f.read()
-    except Exception as e:
-        logger.error(f"Error extrayendo texto: {str(e)}")
-        raise DocumentProcessingError(
-            message=f"Error procesando archivo de texto: {str(e)}",
-            error_code="TEXT_EXTRACTION_ERROR"
-        )
