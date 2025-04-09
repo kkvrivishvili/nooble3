@@ -1,32 +1,31 @@
 """
-Endpoints para generación de embeddings.
+Endpoints para generación de embeddings vectoriales.
 """
 
-import time
 import logging
-from typing import List, Dict, Any, Optional, Union
+import time
+from typing import Dict, List, Any, Optional
+from fastapi import APIRouter, Depends
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
-
-from common.models import (
-    TenantInfo, EmbeddingRequest, BatchEmbeddingRequest, 
-    EmbeddingResponse, BatchEmbeddingResponse, BatchEmbeddingData, BatchEmbeddingError
-)
-from common.errors import (
-    ServiceError, handle_service_error_simple, ErrorCode,
-    EmbeddingGenerationError, EmbeddingModelError,
-    TextTooLargeError, BatchTooLargeError, InvalidEmbeddingParamsError
-)
-from common.context import with_context
-from common.auth import verify_tenant, check_tenant_quotas, validate_model_access
-from common.tracking import track_embedding_usage
+from common.models import TenantInfo
+from common.errors import handle_service_error, handle_service_error_simple
+from common.auth import verify_tenant
+from common.auth.quotas import check_tenant_quotas
+from common.context.decorator import with_context
 from common.config import get_settings
 
 from services.embedding_provider import CachedEmbeddingProvider
+from services.tracking import track_embedding_usage
+from models.api import (
+    EmbeddingRequest, EmbeddingResponse, 
+    BatchEmbeddingRequest, BatchEmbeddingResponse,
+    BatchEmbeddingItem, BatchEmbeddingResult
+)
+from utils.validators import validate_model_access
+from errors import EmbeddingGenerationError, InvalidEmbeddingParamsError
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("embedding-service")
 settings = get_settings()
 
 @router.post("/embeddings", response_model=EmbeddingResponse)
@@ -90,13 +89,9 @@ async def generate_embeddings(
         logger.info(f"Generados {len(embeddings)} embeddings en {processing_time:.2f}s con modelo {model_name}")
         
         return EmbeddingResponse(
-            success=True,
-            message="Embeddings generados exitosamente",
-            embeddings=embeddings,
+            data=embeddings,
             model=model_name,
-            collection_id=collection_id,
-            processing_time=processing_time,
-            total_tokens=int(tokens_estimate)
+            collection_id=collection_id
         )
         
     except Exception as e:
@@ -159,7 +154,7 @@ async def batch_generate_embeddings(
     for i, item in enumerate(request.items):
         if not item.text or not item.text.strip():
             # Registrar item fallido debido a texto vacío
-            failed_items.append(BatchEmbeddingError(
+            failed_items.append(BatchEmbeddingResult(
                 index=i,
                 text=item.text,
                 metadata=item.metadata or {},
@@ -203,7 +198,7 @@ async def batch_generate_embeddings(
         result_embeddings = []
         for orig_idx, embedding in zip(original_indices, embeddings):
             item = request.items[orig_idx]
-            result_embeddings.append(BatchEmbeddingData(
+            result_embeddings.append(BatchEmbeddingItem(
                 embedding=embedding,
                 text=item.text,
                 metadata=item.metadata or {}
@@ -213,14 +208,10 @@ async def batch_generate_embeddings(
         logger.info(f"Generados {len(embeddings)} embeddings en {processing_time:.2f}s con modelo {model_name}")
         
         return BatchEmbeddingResponse(
-            success=True,
-            message="Embeddings batch generados exitosamente",
-            embeddings=result_embeddings,
+            data=result_embeddings,
             failed_items=failed_items,
             model=model_name,
-            collection_id=collection_id,
-            processing_time=processing_time,
-            total_tokens=int(tokens_estimate)
+            collection_id=collection_id
         )
         
     except Exception as e:

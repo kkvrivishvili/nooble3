@@ -1,5 +1,12 @@
 """
-Punto de entrada para el servicio de ingesta.
+Punto de entrada principal para el servicio de ingesta (ingestion-service).
+
+Este servicio se encarga de:
+1. Recibir documentos
+2. Procesar y extraer texto
+3. Dividir en chunks
+4. Generar embeddings (a través del embedding-service)
+5. Almacenar los embeddings en la base de datos
 """
 
 import logging
@@ -13,6 +20,7 @@ from common.errors import setup_error_handling
 from common.utils.logging import init_logging
 from common.context import Context
 from common.db.supabase import init_supabase
+from common.cache.manager import CacheManager
 from common.swagger import configure_swagger_ui
 from common.cache.redis import get_redis_client
 from common.utils.rate_limiting import setup_rate_limiting
@@ -36,12 +44,19 @@ async def lifespan(app: FastAPI):
         # Inicializar Supabase
         init_supabase()
         
-        # Verificar conexión a Redis para caché y colas
-        redis = await get_redis_client()
-        if redis:
-            logger.info("Conexión a Redis establecida correctamente")
-        else:
-            logger.warning("No se pudo conectar a Redis - servicio funcionará sin caché y sin colas")
+        # Verificar conexión a Redis para caché y colas mediante CacheManager
+        cache_available = True
+        try:
+            # Intentar operación simple para verificar disponibilidad del cache
+            await CacheManager.get(
+                data_type="system",
+                resource_id="health_check"
+            )
+            logger.info("Conexión a Cache establecida correctamente")
+        except Exception as e:
+            logger.warning(f"No se pudo conectar al sistema de caché: {str(e)}")
+            cache_available = False
+            logger.warning("El servicio funcionará sin caché y sin colas")
         
         # Inicializar sistema de colas
         await initialize_queue()

@@ -5,12 +5,19 @@ Cliente Supabase centralizado con funciones de utilidad.
 from functools import lru_cache
 import logging
 import json
+import os
 from typing import Dict, Any, List, Optional
 from supabase import create_client, Client
 
 from ..context.vars import get_current_tenant_id
 
 logger = logging.getLogger(__name__)
+
+# Constantes para configuración de Supabase, evitando importación circular
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
+SUPABASE_TABLE_PREFIX = os.getenv("SUPABASE_TABLE_PREFIX", "")
 
 @lru_cache
 def get_supabase_client(use_service_role: bool = True) -> Client:
@@ -25,21 +32,22 @@ def get_supabase_client(use_service_role: bool = True) -> Client:
     Returns:
         Client: Cliente Supabase
     """
-    # Importar get_settings aquí para evitar importación circular
-    from ..config.settings import get_settings
-    settings = get_settings()
+    url = SUPABASE_URL
     
-    # Usar clave de service role si está disponible y se solicita
-    api_key = settings.supabase_key
-    if use_service_role and hasattr(settings, 'supabase_service_key') and settings.supabase_service_key:
-        api_key = settings.supabase_service_key
-        logger.debug("Usando clave de servicio (service role) para Supabase")
+    # Determinar qué clave usar
+    key = SUPABASE_KEY
+    if use_service_role and SUPABASE_SERVICE_KEY:
+        key = SUPABASE_SERVICE_KEY
     
-    supabase = create_client(
-        settings.supabase_url,
-        api_key
-    )
-    return supabase
+    if not url or not key:
+        logger.error("Credenciales Supabase no configuradas")
+        raise ValueError("Supabase URL and key must be configured")
+    
+    try:
+        return create_client(url, key)
+    except Exception as e:
+        logger.error(f"Error creando cliente Supabase: {e}")
+        raise
 
 
 def get_supabase_client_with_token(token: Optional[str] = None, use_service_role: bool = True) -> Client:
@@ -54,19 +62,15 @@ def get_supabase_client_with_token(token: Optional[str] = None, use_service_role
     Returns:
         Client: Cliente Supabase configurado
     """
-    # Importar get_settings aquí para evitar importación circular
-    from ..config.settings import get_settings
-    settings = get_settings()
-    
     if token:
         # Si hay token, usar para autenticación de usuario
         # Usar la clave pública (anon) ya que el token maneja la autenticación
-        api_key = settings.supabase_key
+        key = SUPABASE_KEY
         
         logger.debug("Creando cliente Supabase con token JWT de usuario")
         return create_client(
-            settings.supabase_url,
-            api_key,
+            SUPABASE_URL,
+            key,
             options={"headers": {"Authorization": f"Bearer {token}"}}
         )
     else:

@@ -7,7 +7,7 @@ import os
 import tempfile
 import mimetypes
 from datetime import datetime
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Callable, Protocol, Type
 import asyncio
 
 from common.config import get_settings
@@ -23,45 +23,301 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 # --------------------------
-# Funciones de Extracción Existente
+# Clases de Estrategia para Extracción
 # --------------------------
-"""
-Servicio para extracción de texto de diferentes formatos de archivo.
-"""
 
-def detect_mimetype(file_path: str) -> str:
+class DocumentExtractor(Protocol):
+    """Protocolo que define la interfaz para extractores de documentos."""
+    
+    @staticmethod
+    def can_handle(mimetype: str) -> bool:
+        """Determina si este extractor puede manejar el tipo de documento dado."""
+        ...
+    
+    @staticmethod
+    async def extract(file_path: str) -> str:
+        """Extrae texto del documento."""
+        ...
+
+class PDFExtractor:
+    """Extractor para documentos PDF."""
+    
+    SUPPORTED_MIMETYPES = ['application/pdf']
+    
+    @staticmethod
+    def can_handle(mimetype: str) -> bool:
+        return mimetype in PDFExtractor.SUPPORTED_MIMETYPES
+    
+    @staticmethod
+    async def extract(file_path: str) -> str:
+        """Extrae texto de un archivo PDF."""
+        try:
+            # Usar PyMuPDF para extraer texto
+            doc = fitz.open(file_path)
+            text = ""
+            # Tamaño para determinar si es un PDF grande
+            large_file = doc.page_count > 50 or os.path.getsize(file_path) > 10 * 1024 * 1024
+            
+            if large_file:
+                # Para archivos grandes, usar extracción optimizada
+                return await LargePDFExtractor.extract(file_path)
+            
+            for page in doc:
+                page_text = page.get_text("text")
+                if page_text.strip():
+                    text += page_text + "\n\n"
+            doc.close()
+            
+            # Si no se extrajo texto, intentar con otro modo
+            if not text.strip():
+                logger.warning(f"No se pudo extraer texto en modo normal, intentando con modo alternativo")
+                doc = fitz.open(file_path)
+                text = ""
+                for page in doc:
+                    page_text = page.get_text("html")
+                    soup = BeautifulSoup(page_text, "html.parser")
+                    text_content = soup.get_text(separator=" ", strip=True)
+                    if text_content.strip():
+                        text += text_content + "\n\n"
+                doc.close()
+            
+            return text.strip()
+        except Exception as e:
+            logger.error(f"Error extrayendo texto de PDF: {str(e)}", exc_info=True)
+            raise DocumentProcessingError(
+                message=f"Error extracting text from PDF: {str(e)}",
+                details={"file_path": file_path}
+            )
+
+class LargePDFExtractor:
+    """Extractor especializado para PDFs grandes."""
+    
+    SUPPORTED_MIMETYPES = ['application/pdf']
+    
+    @staticmethod
+    def can_handle(mimetype: str) -> bool:
+        return mimetype in LargePDFExtractor.SUPPORTED_MIMETYPES
+    
+    @staticmethod
+    async def extract(file_path: str) -> str:
+        """Extrae texto de un archivo PDF grande usando procesamiento por partes."""
+        try:
+            doc = fitz.open(file_path)
+            text_parts = []
+            
+            # Procesar grupos de páginas en paralelo
+            batch_size = 20  # Número de páginas por lote
+            batches = [range(i, min(i + batch_size, doc.page_count)) 
+                     for i in range(0, doc.page_count, batch_size)]
+            
+            async def process_batch(batch):
+                batch_text = ""
+                for i in batch:
+                    try:
+                        page = doc[i]
+                        page_text = page.get_text("text")
+                        if page_text.strip():
+                            batch_text += page_text + "\n\n"
+                    except Exception as e:
+                        logger.warning(f"Error en página {i}: {str(e)}")
+                return batch_text
+            
+            # Ejecutar extracción por lotes
+            tasks = [process_batch(batch) for batch in batches]
+            results = await asyncio.gather(*tasks)
+            
+            text = "".join(results)
+            doc.close()
+            
+            return text.strip()
+        except Exception as e:
+            logger.error(f"Error extrayendo texto de PDF grande: {str(e)}", exc_info=True)
+            raise DocumentProcessingError(
+                message=f"Error extracting text from large PDF: {str(e)}",
+                details={"file_path": file_path}
+            )
+
+class DocxExtractor:
+    """Extractor para documentos Word (.docx)."""
+    
+    SUPPORTED_MIMETYPES = [
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/msword'
+    ]
+    
+    @staticmethod
+    def can_handle(mimetype: str) -> bool:
+        return mimetype in DocxExtractor.SUPPORTED_MIMETYPES
+    
+    @staticmethod
+    async def extract(file_path: str) -> str:
+        """Extrae texto de un archivo Word (.docx)."""
+        try:
+            doc = Document(file_path)
+            
+            paragraphs = []
+            for para in doc.paragraphs:
+                if para.text.strip():
+                    paragraphs.append(para.text)
+            
+            # Procesar también tablas
+            for table in doc.tables:
+                for row in table.rows:
+                    row_text = []
+                    for cell in row.cells:
+                        if cell.text.strip():
+                            row_text.append(cell.text.strip())
+                    if row_text:
+                        paragraphs.append(" | ".join(row_text))
+            
+            return "\n\n".join(paragraphs)
+        except Exception as e:
+            logger.error(f"Error extrayendo texto de DOCX: {str(e)}", exc_info=True)
+            raise DocumentProcessingError(
+                message=f"Error extracting text from DOCX: {str(e)}",
+                details={"file_path": file_path}
+            )
+
+class ExcelExtractor:
+    """Extractor para hojas de cálculo (Excel, CSV)."""
+    
+    SUPPORTED_MIMETYPES = [
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'application/vnd.ms-excel',
+        'text/csv',
+        'application/csv'
+    ]
+    
+    @staticmethod
+    def can_handle(mimetype: str) -> bool:
+        return mimetype in ExcelExtractor.SUPPORTED_MIMETYPES
+    
+    @staticmethod
+    async def extract(file_path: str) -> str:
+        """Extrae texto de un archivo Excel (.xlsx, .xls) o CSV."""
+        try:
+            if file_path.lower().endswith('.csv'):
+                df = pd.read_csv(file_path)
+            else:
+                df = pd.read_excel(file_path, sheet_name=None)  # Leer todas las hojas
+            
+            text_parts = []
+            
+            # Si es un diccionario de DataFrames (múltiples hojas)
+            if isinstance(df, dict):
+                for sheet_name, sheet_df in df.items():
+                    text_parts.append(f"Sheet: {sheet_name}")
+                    text_parts.append(sheet_df.to_string(index=False))
+            else:
+                # Si es un único DataFrame
+                text_parts.append(df.to_string(index=False))
+            
+            return "\n\n".join(text_parts)
+        except Exception as e:
+            logger.error(f"Error extrayendo texto de Excel/CSV: {str(e)}", exc_info=True)
+            raise DocumentProcessingError(
+                message=f"Error extracting text from Excel/CSV: {str(e)}",
+                details={"file_path": file_path}
+            )
+
+class HtmlExtractor:
+    """Extractor para documentos HTML."""
+    
+    SUPPORTED_MIMETYPES = ['text/html', 'application/xhtml+xml']
+    
+    @staticmethod
+    def can_handle(mimetype: str) -> bool:
+        return mimetype in HtmlExtractor.SUPPORTED_MIMETYPES
+    
+    @staticmethod
+    async def extract(file_path: str) -> str:
+        """Extrae texto de un archivo HTML."""
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                html_content = f.read()
+            
+            soup = BeautifulSoup(html_content, 'html.parser')
+            
+            # Eliminar scripts y estilos
+            for script in soup(["script", "style"]):
+                script.extract()
+            
+            # Obtener texto
+            text = soup.get_text(separator=' ', strip=True)
+            
+            # Limpiar espacios excesivos
+            lines = (line.strip() for line in text.splitlines())
+            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+            text = '\n'.join(chunk for chunk in chunks if chunk)
+            
+            return text
+        except Exception as e:
+            logger.error(f"Error extrayendo texto de HTML: {str(e)}", exc_info=True)
+            raise DocumentProcessingError(
+                message=f"Error extracting text from HTML: {str(e)}",
+                details={"file_path": file_path}
+            )
+
+class TextExtractor:
+    """Extractor para archivos de texto plano."""
+    
+    SUPPORTED_MIMETYPES = ['text/plain', 'text/markdown']
+    
+    @staticmethod
+    def can_handle(mimetype: str) -> bool:
+        return mimetype in TextExtractor.SUPPORTED_MIMETYPES
+    
+    @staticmethod
+    async def extract(file_path: str) -> str:
+        """Extrae texto de un archivo de texto plano."""
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                return f.read()
+        except Exception as e:
+            logger.error(f"Error leyendo archivo de texto: {str(e)}", exc_info=True)
+            raise DocumentProcessingError(
+                message=f"Error reading text file: {str(e)}",
+                details={"file_path": file_path}
+            )
+
+# --------------------------
+# Registro y Factory de Extractores
+# --------------------------
+
+# Lista de todos los extractores disponibles
+DOCUMENT_EXTRACTORS = [
+    PDFExtractor,
+    DocxExtractor,
+    ExcelExtractor,
+    HtmlExtractor,
+    TextExtractor
+]
+
+def get_extractor_for_mimetype(mimetype: str) -> Type[DocumentExtractor]:
     """
-    Detecta el tipo MIME de un archivo.
+    Devuelve el extractor adecuado para un tipo MIME dado.
     
     Args:
-        file_path: Ruta al archivo
+        mimetype: Tipo MIME del documento
         
     Returns:
-        str: Tipo MIME del archivo
+        Type[DocumentExtractor]: Clase del extractor
+        
+    Raises:
+        DocumentProcessingError: Si no se encuentra un extractor para el tipo MIME
     """
-    mime_type, _ = mimetypes.guess_type(file_path)
+    for extractor in DOCUMENT_EXTRACTORS:
+        if extractor.can_handle(mimetype):
+            return extractor
     
-    if not mime_type:
-        # Intentar detectar por extensión
-        _, extension = os.path.splitext(file_path.lower())
-        extension_map = {
-            ".pdf": "application/pdf",
-            ".txt": "text/plain",
-            ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            ".doc": "application/msword",
-            ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            ".xls": "application/vnd.ms-excel",
-            ".csv": "text/csv",
-            ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            ".ppt": "application/vnd.ms-powerpoint",
-            ".md": "text/markdown",
-            ".json": "application/json",
-            ".html": "text/html",
-            ".htm": "text/html"
-        }
-        mime_type = extension_map.get(extension, "application/octet-stream")
-    
-    return mime_type
+    raise DocumentProcessingError(
+        message=f"No se encontró extractor para el tipo MIME: {mimetype}",
+        details={"mimetype": mimetype}
+    )
+
+# --------------------------
+# Funciones Principales de Extracción
+# --------------------------
 
 async def extract_text_from_file(file_path: str, mimetype: Optional[str] = None) -> str:
     """
@@ -75,50 +331,50 @@ async def extract_text_from_file(file_path: str, mimetype: Optional[str] = None)
         str: Texto extraído del archivo
     """
     if not mimetype:
-        mimetype = detect_mimetype(file_path)
+        mimetype, _ = mimetypes.guess_type(file_path)
     
-    # Obtener configuración específica para este tipo MIME
-    extraction_config = get_extraction_config_for_mimetype(mimetype)
+    if not mimetype:
+        # Si no se puede determinar el tipo, adivinar basado en la extensión
+        extension = os.path.splitext(file_path)[1].lower()
+        mime_map = {
+            '.pdf': 'application/pdf',
+            '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            '.html': 'text/html',
+            '.txt': 'text/plain',
+            '.md': 'text/markdown',
+            '.csv': 'text/csv'
+        }
+        mimetype = mime_map.get(extension, 'application/octet-stream')
     
     try:
-        # Usar LlamaIndex SimpleDirectoryReader para extraer texto
-        from llama_index.readers.file import SimpleDirectoryReader
+        # Obtener el extractor adecuado
+        extractor = get_extractor_for_mimetype(mimetype)
         
-        # El directorio debe existir para que SimpleDirectoryReader funcione
-        file_dir = os.path.dirname(file_path)
-        file_name = os.path.basename(file_path)
+        # Extraer texto usando el extractor
+        text = await extractor.extract(file_path)
         
-        # Configurar opciones según el tipo de documento
-        file_extractor = SimpleDirectoryReader(
-            input_dir=file_dir,
-            file_extractor={
-                # Configuraciones específicas para cada tipo
-                ".pdf": extraction_config.get("pdf_parser", "default"),
-                ".docx": "default",
-                ".xlsx": "default",
-                ".csv": "default"
-            }
-        )
+        # Verificar que se obtuvo texto
+        if not text or not text.strip():
+            logger.warning(f"El extractor principal no obtuvo texto. Intentando método alternativo.")
+            return await extract_with_specific_method(file_path, mimetype)
         
-        # Cargar solo el archivo específico
-        documents = file_extractor.load_data(file=file_name)
-        
-        if not documents:
-            logger.warning(f"No se pudo extraer texto del archivo {file_path}")
-            return ""
-        
-        # Combinar texto de todos los documentos (puede haber múltiples páginas)
-        combined_text = "\n\n".join([doc.text for doc in documents])
-        
-        return combined_text
+        return text
     except Exception as e:
-        logger.error(f"Error extrayendo texto de {file_path}: {str(e)}")
-        # Intentar extraer con métodos específicos según el tipo MIME
-        return await extract_with_specific_method(file_path, mimetype)
+        logger.error(f"Error en extracción de texto: {str(e)}", exc_info=True)
+        try:
+            # Si falla el extractor principal, intentar método alternativo
+            return await extract_with_specific_method(file_path, mimetype)
+        except Exception as e2:
+            # Si ambos métodos fallan, propagar error
+            raise DocumentProcessingError(
+                message=f"Error extracting text: {str(e)}. Fallback also failed: {str(e2)}",
+                details={"file_path": file_path, "mimetype": mimetype}
+            )
 
 async def extract_with_specific_method(file_path: str, mimetype: str) -> str:
     """
-    Intenta extraer texto con métodos específicos según el tipo MIME si LlamaIndex falla.
+    Intenta extraer texto con métodos específicos según el tipo MIME si el extractor principal falla.
     
     Args:
         file_path: Ruta al archivo

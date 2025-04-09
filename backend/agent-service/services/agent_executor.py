@@ -61,8 +61,9 @@ async def get_agent_config(agent_id: str, tenant_id: str) -> Dict[str, Any]:
             details={"agent_id": agent_id, "tenant_id": tenant_id}
         )
     
-    # Verificar propiedad del agente explícitamente
-    if result.data["tenant_id"] != tenant_id:
+    # Verificar propiedad del agente explícitamente 
+    # CORREGIDO: Convertir ambos ids a string para evitar problemas con tipos diferentes
+    if str(result.data["tenant_id"]) != str(tenant_id):
         logger.warning(f"Intento de acceso a agente de otro tenant: {agent_id}")
         raise ServiceError(
             message="Access denied: agent belongs to another tenant",
