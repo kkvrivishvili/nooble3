@@ -6,6 +6,7 @@ import json
 import logging
 import time
 import uuid
+import asyncio
 from typing import Dict, Any, Optional, List
 
 from common.cache.redis import get_redis_client
@@ -49,134 +50,42 @@ async def shutdown_queue():
 async def queue_document_processing_job(
     tenant_id: str,
     document_id: str,
-    collection_id: str,
-    file_content: bytes = None,
-    text_content: str = None,
-    url: str = None,
-    file_info: Dict[str, Any] = None,
-    batch_id: Optional[str] = None
-) -> str:
+    file_key: str,
+    metadata: Optional[Dict] = None
+) -> bool:
     """
     Encola un trabajo de procesamiento de documento.
     
     Args:
         tenant_id: ID del tenant
         document_id: ID del documento
-        collection_id: ID de la colección
-        file_content: Contenido del archivo en bytes (opcional)
-        text_content: Contenido de texto (opcional)
-        url: URL a procesar (opcional)
-        file_info: Información del archivo
-        batch_id: ID del lote (opcional)
+        file_key: Clave del archivo en storage
+        metadata: Metadatos adicionales
         
     Returns:
-        str: ID del trabajo
+        bool: True si se encoló correctamente
     """
-    # Verificar que se proporcionó al menos una fuente de contenido
-    if not file_content and not text_content and not url:
-        raise ServiceError(
-            message="Se debe proporcionar contenido de archivo, texto o URL",
-            error_code="MISSING_CONTENT_SOURCE"
-        )
-    
-    # Generar ID para el trabajo
-    job_id = str(uuid.uuid4())
-    
     try:
-        # Crear registro del trabajo en la base de datos
-        job_data = {
-            "job_id": job_id,
-            "tenant_id": tenant_id,
-            "document_id": document_id,
-            "collection_id": collection_id,
-            "status": "pending",
-            "progress": 0,
-            "file_info": file_info or {},
-            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ")
-        }
-        
-        if batch_id:
-            job_data["batch_id"] = batch_id
-        
-        # Guardar en Supabase
         supabase = get_supabase_client()
-        result = await supabase.table(get_table_name("processing_jobs")).insert(job_data).execute()
         
+        result = await supabase.table(get_table_name("processing_jobs")) \
+            .insert({
+                "tenant_id": tenant_id,
+                "document_id": document_id,
+                "file_key": file_key,
+                "metadata": metadata or {},
+                "status": "pending"
+            }) \
+            .execute()
+            
         if result.error:
-            raise ServiceError(
-                message=f"Error creando trabajo de procesamiento: {result.error}",
-                error_code="JOB_CREATION_ERROR"
-            )
-        
-        # Actualizar estado del documento a "pending"
-        await update_document_status(document_id, tenant_id, "pending")
-        
-        # Preparar datos para la cola
-        queue_data = {
-            "job_id": job_id,
-            "tenant_id": tenant_id,
-            "document_id": document_id,
-            "collection_id": collection_id,
-            "has_file": file_content is not None,
-            "has_text": text_content is not None,
-            "has_url": url is not None,
-            "file_type": file_info.get("type") if file_info else None,
-            "url": url,
-            "batch_id": batch_id,
-            "created_at": time.time()
-        }
-        
-        # Encolar trabajo
-        redis = await get_redis_client()
-        if not redis:
-            raise ServiceError(
-                message="Cola de procesamiento no disponible",
-                error_code="QUEUE_UNAVAILABLE"
-            )
-        
-        # Guardar el archivo/texto en Redis temporalmente
-        if file_content:
-            await redis.set(
-                f"{JOB_PREFIX}{job_id}:file", 
-                file_content,
-                ex=settings.queue_ttl
-            )
-        
-        if text_content:
-            await redis.set(
-                f"{JOB_PREFIX}{job_id}:text", 
-                text_content,
-                ex=settings.queue_ttl
-            )
-        
-        # Guardar datos del trabajo en Redis
-        await redis.set(
-            f"{JOB_PREFIX}{job_id}:data",
-            json.dumps(queue_data),
-            ex=settings.queue_ttl
-        )
-        
-        # Encolar el trabajo
-        await redis.lpush(INGESTION_QUEUE, json.dumps(queue_data))
-        
-        # Establecer estado inicial
-        await redis.set(
-            f"{JOB_STATUS_PREFIX}{job_id}",
-            json.dumps({"status": "pending", "progress": 0}),
-            ex=settings.queue_ttl
-        )
-        
-        logger.info(f"Trabajo {job_id} encolado para documento {document_id}")
-        return job_id
-        
+            logger.error(f"Error encolando trabajo: {result.error}")
+            return False
+            
+        return True
     except Exception as e:
-        logger.error(f"Error encolando trabajo: {str(e)}")
-        if isinstance(e, ServiceError):
-            raise
-        raise ServiceError(
-            message=f"Error encolando trabajo: {str(e)}",
-            error_code="QUEUE_ERROR"
-        )
+        logger.error(f"Error inesperado encolando trabajo: {str(e)}")
+        return False
 
 async def check_stuck_jobs():
     """Verifica trabajos estancados y los marca como fallidos."""

@@ -1,21 +1,24 @@
 """
-Funciones para extracción de texto de diferentes formatos de documento.
+Servicio para extracción de texto de diferentes formatos de archivo.
 """
 
-import os
 import logging
-import mimetypes
+import os
 import tempfile
 from datetime import datetime
 from typing import Dict, Any, Optional
-from fastapi import UploadFile, ValidationError
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
 
+from common.config import get_settings
+from common.db.storage import get_file_from_storage
 from common.errors import DocumentProcessingError
-from config import get_extraction_config_for_mimetype, MAX_FILE_SIZE_MB, SUPPORTED_FILE_TYPES
+
+import fitz  # PyMuPDF
+from bs4 import BeautifulSoup
+from docx import Document
+import pandas as pd
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 def detect_mimetype(file_path: str) -> str:
     """
@@ -153,7 +156,6 @@ async def extract_text_from_pdf(file_path: str) -> str:
     """
     try:
         # Intentar primero con PyMuPDF (más rápido)
-        import fitz  # PyMuPDF
         doc = fitz.open(file_path)
         text = ""
         
@@ -197,8 +199,6 @@ async def extract_text_from_large_pdf(file_path: str) -> str:
         str: Texto extraído del PDF
     """
     try:
-        import fitz
-        
         doc = fitz.open(file_path)
         
         # Procesar por lotes de páginas para reducir uso de memoria
@@ -233,7 +233,6 @@ async def extract_text_from_docx(file_path: str) -> str:
         str: Texto extraído del documento
     """
     try:
-        from docx import Document
         doc = Document(file_path)
         
         full_text = []
@@ -299,10 +298,7 @@ async def extract_text_from_html(file_path: str) -> str:
         str: Texto extraído del documento
     """
     try:
-        from bs4 import BeautifulSoup
-        
-        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-            soup = BeautifulSoup(f.read(), 'html.parser')
+        soup = BeautifulSoup(open(file_path, 'r', encoding='utf-8', errors='ignore').read(), 'html.parser')
         
         # Extraer texto visible y estructurado
         text = soup.get_text(separator='\n', strip=True)
@@ -364,7 +360,6 @@ async def extract_document_metadata(file_path: str, mimetype: str) -> Dict[str, 
     try:
         # Extraer metadatos específicos según tipo
         if "pdf" in mimetype:
-            import fitz
             doc = fitz.open(file_path)
             
             # Extraer metadatos básicos
@@ -380,7 +375,6 @@ async def extract_document_metadata(file_path: str, mimetype: str) -> Dict[str, 
             doc.close()
             
         elif "docx" in mimetype:
-            from docx import Document
             doc = Document(file_path)
             
             # Extraer propiedades del documento
@@ -403,7 +397,7 @@ async def extract_document_metadata(file_path: str, mimetype: str) -> Dict[str, 
 
 # Consolidated document processing functions from document_processor.py
 
-async def validate_file(file: UploadFile, max_size_mb: int = MAX_FILE_SIZE_MB) -> Dict[str, Any]:
+async def validate_file(file: UploadFile, max_size_mb: int = settings.MAX_FILE_SIZE_MB) -> Dict[str, Any]:
     """
     Valida un archivo cargado, verificando tipo y tamaño.
     
@@ -425,10 +419,10 @@ async def validate_file(file: UploadFile, max_size_mb: int = MAX_FILE_SIZE_MB) -
     
     # Verificar extensión
     file_extension = os.path.splitext(file.filename)[1].lower().replace(".", "")
-    if file_extension not in SUPPORTED_FILE_TYPES:
+    if file_extension not in settings.SUPPORTED_FILE_TYPES:
         raise ValidationError(
             message=f"Tipo de archivo no soportado: {file_extension}",
-            details={"filename": file.filename, "supported_types": SUPPORTED_FILE_TYPES}
+            details={"filename": file.filename, "supported_types": settings.SUPPORTED_FILE_TYPES}
         )
     
     # Verificar tamaño
@@ -832,10 +826,14 @@ async def extract_text_from_markdown(file_path: str) -> str:
         str: Texto extraído del documento
     """
     try:
-        return file_path.read().decode("utf-8")
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return f.read()
     except Exception as e:
-        logger.error(f"Error extrayendo texto de Markdown: {str(e)}")
-        return ""
+        logger.error(f"Error extrayendo markdown: {str(e)}")
+        raise DocumentProcessingError(
+            message=f"Error procesando archivo markdown: {str(e)}",
+            error_code="MARKDOWN_EXTRACTION_ERROR"
+        )
 
 async def extract_text_from_text(file_path: str) -> str:
     """
@@ -848,7 +846,11 @@ async def extract_text_from_text(file_path: str) -> str:
         str: Texto extraído del documento
     """
     try:
-        return file_path.read().decode("utf-8")
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return f.read()
     except Exception as e:
-        logger.error(f"Error extrayendo texto de texto plano: {str(e)}")
-        return ""
+        logger.error(f"Error extrayendo texto: {str(e)}")
+        raise DocumentProcessingError(
+            message=f"Error procesando archivo de texto: {str(e)}",
+            error_code="TEXT_EXTRACTION_ERROR"
+        )
