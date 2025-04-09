@@ -1,0 +1,128 @@
+"""
+Punto de entrada para el servicio de ingesta.
+"""
+
+import logging
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from common.config import get_settings
+from common.errors import setup_error_handling
+from common.utils.logging import init_logging
+from common.context import Context
+from common.db.supabase import init_supabase
+from common.swagger import configure_swagger_ui
+from common.cache.redis import get_redis_client
+from common.utils.rate_limiting import setup_rate_limiting
+
+from config import get_settings
+from routes import register_routes
+from services.queue import initialize_queue, shutdown_queue
+
+# Configuración
+settings = get_settings()
+logger = logging.getLogger("ingestion_service")
+init_logging(settings.log_level)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Gestiona el ciclo de vida de la aplicación."""
+    try:
+        logger.info(f"Inicializando servicio de {settings.service_name}")
+        
+        # Inicializar Supabase
+        init_supabase()
+        
+        # Verificar conexión a Redis para caché y colas
+        redis = await get_redis_client()
+        if redis:
+            logger.info("Conexión a Redis establecida correctamente")
+        else:
+            logger.warning("No se pudo conectar a Redis - servicio funcionará sin caché y sin colas")
+        
+        # Inicializar sistema de colas
+        await initialize_queue()
+        
+        # Establecer contexto de servicio estándar
+        async with Context(tenant_id=settings.default_tenant_id):
+            # Cargar configuraciones específicas del servicio
+            try:
+                if settings.load_config_from_supabase:
+                    # Cargar configuraciones...
+                    logger.info(f"Configuraciones cargadas para {settings.service_name}")
+            except Exception as config_err:
+                logger.error(f"Error cargando configuraciones: {config_err}")
+        
+        logger.info(f"Servicio {settings.service_name} inicializado correctamente")
+        yield
+    except Exception as e:
+        logger.error(f"Error al inicializar el servicio: {str(e)}")
+        yield
+    finally:
+        # Limpieza de recursos
+        await shutdown_queue()
+        logger.info(f"Servicio {settings.service_name} detenido correctamente")
+
+# Inicializar la aplicación FastAPI
+app = FastAPI(
+    title="Linktree AI - Ingestion Service",
+    description="""
+    Servicio encargado de la ingesta y procesamiento de documentos para la plataforma Linktree AI.
+    
+    ## Funcionalidad
+    - Carga y procesamiento de documentos (PDF, Word, Excel, texto, etc.)
+    - División de documentos en fragmentos optimizados para RAG
+    - Generación de embeddings a través del servicio de embeddings
+    - Almacenamiento en base de datos vectorial
+    - Procesamiento asíncrono en segundo plano
+    
+    ## Dependencias
+    - Redis: Para caché y gestión de colas de procesamiento
+    - Supabase: Para almacenamiento de metadatos y vectores
+    - Embedding Service: Para generación de embeddings
+    - Múltiples bibliotecas de procesamiento de documentos
+    """,
+    version=settings.service_version,
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
+    lifespan=lifespan
+)
+
+# Configurar Swagger UI
+configure_swagger_ui(
+    app=app,
+    service_name="Ingestion Service",
+    service_description="API para ingesta y procesamiento de documentos para RAG",
+    version=settings.service_version,
+    tags=[
+        {"name": "Ingestion", "description": "Endpoints para carga y procesamiento de documentos"},
+        {"name": "Documents", "description": "Gestión de documentos existentes"},
+        {"name": "Jobs", "description": "Gestión de trabajos de procesamiento en segundo plano"},
+        {"name": "Health", "description": "Verificación de salud del servicio"}
+    ]
+)
+
+# Configurar CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], 
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Configurar manejo de errores
+setup_error_handling(app)
+
+# Configurar rate limiting
+setup_rate_limiting(app)
+
+# Registrar rutas
+register_routes(app)
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

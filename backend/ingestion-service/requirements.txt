@@ -1,0 +1,34 @@
+# Dependencias principales
+fastapi==0.115.12
+uvicorn==0.34.0
+pydantic==2.10.6
+pydantic-settings==2.8.1
+python-multipart==0.0.20
+httpx==0.28.1
+redis==5.2.1
+supabase==2.15.0
+
+# Procesamiento de documentos
+pypdf2==3.0.1
+docx2txt==0.8
+python-pptx==0.6.22
+openpyxl==3.1.2
+beautifulsoup4==4.12.2
+markdown==3.5
+pandas==2.1.0
+
+# LlamaIndex para integración
+llama-index==0.12.26
+llama-index-embeddings-openai>=0.1.0
+
+# Background jobs
+rq==1.15.1
+
+# Utilidades
+python-dotenv==1.0.1
+tenacity==9.0.0
+
+# Testing
+pytest==8.3.5
+
+# Nota: La biblioteca común se instalará usando PYTHONPATH
