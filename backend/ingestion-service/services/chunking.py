@@ -5,7 +5,7 @@ Funciones para dividir documentos en fragmentos (chunks).
 import logging
 from typing import List, Dict, Any
 
-from common.errors import DocumentProcessingError
+from common.errors import ServiceError, ErrorCode, DocumentProcessingError
 from config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -171,7 +171,8 @@ async def split_document_intelligently(
             
     except Exception as e:
         logger.error(f"Error dividiendo documento {document_id}: {str(e)}")
-        raise DocumentProcessingError(
+        raise ServiceError(
+            error_code=ErrorCode.PROCESSING_ERROR, 
             message=f"Error dividiendo documento: {str(e)}",
             details={"document_id": document_id}
         )

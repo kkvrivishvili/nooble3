@@ -9,7 +9,7 @@ from fastapi import APIRouter
 from common.models import HealthResponse
 from common.errors import handle_service_error_simple
 from common.config import get_settings
-from common.cache.redis import get_redis_client
+from common.cache.manager import CacheManager
 from common.db.supabase import get_supabase_client
 from common.utils.http import check_service_health
 
@@ -25,9 +25,17 @@ async def get_service_status() -> HealthResponse:
     Este endpoint proporciona información detallada sobre el estado operativo 
     del servicio de ingesta y sus componentes dependientes.
     """
-    # Verificar Redis
-    redis_client = await get_redis_client()
-    redis_status = "available" if redis_client and await redis_client.ping() else "unavailable"
+    # Verificar Redis usando CacheManager
+    redis_status = "unavailable"
+    try:
+        # Intentar una operación simple con CacheManager
+        await CacheManager.get(
+            data_type="system",
+            resource_id="health_check"
+        )
+        redis_status = "available"
+    except Exception as e:
+        logger.warning(f"Cache no disponible: {str(e)}")
     
     # Verificar Supabase
     supabase_status = "available"

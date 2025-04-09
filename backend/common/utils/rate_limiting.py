@@ -9,9 +9,11 @@ from fastapi import Request, HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from ..models.base import TenantInfo
-from ..cache.redis import get_redis_client
+# Eliminamos la importación directa a Redis ya que usaremos sólo CacheManager
 from ..cache.manager import CacheManager
-from ..config.settings import get_tier_rate_limit, get_tenant_rate_limit
+# Actualizamos las importaciones para evitar ciclos
+from ..config.tiers import get_tier_rate_limit
+from ..config.settings import get_tenant_rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +34,7 @@ async def apply_rate_limit(tenant_id: str, tier: str, limit_key: str = "api") ->
     """
     # Determinar el servicio para obtener configuraciones específicas
     service_name = None
-    if limit_key in ["agent", "query", "embedding"]:
+    if limit_key in ["agent", "query", "embedding", "chat"]:
         service_name = limit_key
     
     # Obtener límite según configuraciones específicas del tenant
@@ -40,7 +42,6 @@ async def apply_rate_limit(tenant_id: str, tier: str, limit_key: str = "api") ->
     
     # Generar clave única para este tenant/servicio
     limit_period = 60  # 1 minuto por defecto
-    redis_key = f"rate_limit:{tenant_id}:{limit_key}"
     
     try:
         # Obtener contador actual usando CacheManager

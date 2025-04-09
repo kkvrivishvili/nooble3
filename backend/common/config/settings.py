@@ -13,7 +13,8 @@ from pydantic_settings import BaseSettings
 
 # Importaciones internas (minimizadas para evitar ciclos)
 from .schema import get_service_configurations, get_mock_configurations
-from .tiers import get_tier_rate_limit
+# Eliminamos la importación circular
+# from .tiers import get_tier_rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -280,7 +281,12 @@ def get_tenant_rate_limit(tenant_id: str, tier: str, service_name: Optional[str]
         int: Límite de solicitudes personalizado para el tenant
     """
     # Obtener límite base según tier
-    default_limit = get_tier_rate_limit(tier)
+    default_limits = {
+        'free': 600,
+        'pro': 1200,
+        'business': 3000
+    }
+    default_limit = default_limits.get(tier, 600)
     
     try:
         # Obtener configuraciones específicas del tenant

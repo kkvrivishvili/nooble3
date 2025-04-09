@@ -17,14 +17,13 @@ def get_tier_rate_limit(tier: str) -> int:
     Returns:
         int: Número de solicitudes permitidas en el periodo
     """
-    from .settings import get_settings
-    settings = get_settings()
+    # Definimos los límites directamente para evitar la importación circular
     limits = {
-        "free": settings.rate_limit_free_tier,
-        "pro": settings.rate_limit_pro_tier,
-        "business": settings.rate_limit_business_tier
+        "free": 600,        # Valores predeterminados
+        "pro": 1200,
+        "business": 3000
     }
-    return limits.get(tier, settings.rate_limit_free_tier)
+    return limits.get(tier, 600)  # Valor por defecto para free tier
 
 
 def get_tier_limits(tier: str) -> Dict[str, Any]:

@@ -6,6 +6,7 @@ import os
 from typing import Dict, Any, Optional, List
 
 from common.config import get_settings as get_common_settings
+from common.config.tiers import get_tier_limits
 
 class IngestionConfig:
     """
@@ -43,15 +44,26 @@ class IngestionConfig:
 # Instancia global de configuración
 ingestion_config = IngestionConfig()
 
-def get_settings():
+def get_settings(tenant_id: Optional[str] = None):
     """
     Obtiene configuración combinada (common + ingestion).
-    Mantenido por compatibilidad.
-    """
-    settings = get_common_settings()
     
-    # Se podrían combinar las propiedades principales de ingestion_config en settings
-    # para mantener un objeto de configuración único pero por ahora devolvemos el común
+    Args:
+        tenant_id: ID del tenant para obtener configuraciones específicas
+        
+    Returns:
+        Objeto con configuración combinada de ingestion y common
+    """
+    # Obtener configuración base desde common
+    common_settings = get_common_settings(tenant_id)
+    
+    # Combinar ambas configuraciones en un solo objeto
+    # primero configuraciones de common, luego específicas de ingestion
+    settings = common_settings
+    
+    # Añadir las configuraciones específicas del servicio de ingesta
+    # como atributos adicionales
+    settings.ingestion = ingestion_config
     
     return settings
 

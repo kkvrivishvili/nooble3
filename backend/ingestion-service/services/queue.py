@@ -31,13 +31,19 @@ JOB_STATUS_PREFIX = "job_status:"
 
 async def initialize_queue():
     """Inicializa el sistema de colas."""
-    redis = await get_redis_client()
-    if not redis:
-        logger.warning("Redis no disponible - procesamiento asíncrono deshabilitado")
+    # Comprobar la disponibilidad del servicio de caché mediante CacheManager
+    try:
+        # Intentar una operación simple para verificar disponibilidad
+        test_value = await CacheManager.get(
+            data_type="system",
+            resource_id="queue_test"
+        )
+        
+        logger.info("Sistema de colas inicializado correctamente")
+        return True
+    except Exception as e:
+        logger.warning(f"Redis no disponible - procesamiento asíncrono deshabilitado: {str(e)}")
         return False
-    
-    logger.info("Sistema de colas inicializado correctamente")
-    return True
 
 async def shutdown_queue():
     """Limpia recursos del sistema de colas."""
@@ -240,9 +246,19 @@ async def process_next_job() -> bool:
 
         # Limpiar recursos
         await CacheManager.delete(
-            f"{JOB_PREFIX}{job_id}:file", 
-            f"{JOB_PREFIX}{job_id}:text",
-            f"{JOB_PREFIX}{job_id}:data"
+            data_type="job",
+            resource_id=f"{job_id}:file",
+            tenant_id=tenant_id
+        )
+        await CacheManager.delete(
+            data_type="job",
+            resource_id=f"{job_id}:text",
+            tenant_id=tenant_id
+        )
+        await CacheManager.delete(
+            data_type="job",
+            resource_id=f"{job_id}:data",
+            tenant_id=tenant_id
         )
 
         return True
@@ -270,9 +286,19 @@ async def process_next_job() -> bool:
 
         # Limpiar recursos
         await CacheManager.delete(
-            f"{JOB_PREFIX}{job_id}:file", 
-            f"{JOB_PREFIX}{job_id}:text",
-            f"{JOB_PREFIX}{job_id}:data"
+            data_type="job",
+            resource_id=f"{job_id}:file",
+            tenant_id=tenant_id
+        )
+        await CacheManager.delete(
+            data_type="job",
+            resource_id=f"{job_id}:text",
+            tenant_id=tenant_id
+        )
+        await CacheManager.delete(
+            data_type="job",
+            resource_id=f"{job_id}:data",
+            tenant_id=tenant_id
         )
 
         return False
