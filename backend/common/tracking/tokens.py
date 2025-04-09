@@ -14,9 +14,68 @@ from ..cache.manager import CacheManager
 from ..cache.counters import increment_token_counter
 from ..config.settings import get_settings
 from ..context.vars import get_current_tenant_id
-from ..auth.quotas import track_token_usage as quotas_track_token_usage
+
+# Eliminamos la importación circular y reemplazamos con la implementación unificada
+# from ..auth.quotas import track_token_usage as quotas_track_token_usage
 
 logger = logging.getLogger(__name__)
+
+async def _internal_track_token_usage(
+    tenant_id: str,
+    model: str = "default",
+    tokens: int = 0,
+    operation: str = "query",
+    metadata: Optional[Dict[str, Any]] = None
+) -> bool:
+    """
+    Implementación interna para registrar el uso de tokens para un tenant.
+    Esta función es utilizada tanto por auth.quotas como por tracking.tokens
+    para evitar duplicación de código.
+    
+    Args:
+        tenant_id: ID del tenant
+        model: Nombre del modelo utilizado
+        tokens: Número de tokens consumidos
+        operation: Tipo de operación (query, embed, chat, etc)
+        metadata: Metadatos adicionales de la operación
+        
+    Returns:
+        bool: True si se registró correctamente
+    """
+    if tokens <= 0:
+        return True  # Nada que registrar
+        
+    # Preparar datos para registro
+    usage_data = {
+        "tenant_id": tenant_id,
+        "model": model,
+        "tokens": tokens,
+        "operation": operation,
+        "timestamp": time.time()
+    }
+    
+    if metadata:
+        usage_data["metadata"] = metadata
+    
+    try:
+        # 1. Actualizar contador en Redis para operaciones de alta frecuencia
+        await CacheManager.increment(
+            tenant_id=tenant_id,
+            data_type="token_usage",
+            resource_id=f"{model}:{operation}",
+            amount=tokens
+        )
+        
+        # 2. Añadir a la cola de persistencia para almacenar en Supabase
+        await CacheManager.rpush(
+            queue_name="token_usage_queue",
+            data=usage_data
+        )
+        
+        return True
+    except Exception as e:
+        logger.error(f"Error registrando uso de tokens: {str(e)}")
+        return False
 
 async def track_token_usage(
     tenant_id: str, 
@@ -69,8 +128,8 @@ async def track_token_usage(
         if conversation_id:
             metadata["conversation_id"] = conversation_id
         
-        # Usar el nuevo sistema centralizado de tracking de tokens
-        await quotas_track_token_usage(
+        # Usar implementación interna unificada
+        await _internal_track_token_usage(
             tenant_id=tenant_id,
             model=model or "default",
             tokens=adjusted_tokens,
@@ -92,7 +151,6 @@ async def track_token_usage(
     except Exception as e:
         logger.error(f"Error tracking {token_type} token usage: {str(e)}")
         return False
-
 
 async def estimate_prompt_tokens(text: str) -> int:
     """

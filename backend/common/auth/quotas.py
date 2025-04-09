@@ -138,6 +138,9 @@ async def track_token_usage(
     """
     Registra el uso de tokens para un tenant.
     
+    NOTA: Esta función es un wrapper para compatibilidad. La implementación principal
+    se encuentra en common.tracking.tokens.track_token_usage para evitar duplicación.
+    
     Args:
         tenant_id: ID del tenant (si es None, se obtiene del contexto actual)
         model: Nombre del modelo utilizado
@@ -158,34 +161,16 @@ async def track_token_usage(
             logger.warning("No se pudo registrar uso de tokens: tenant_id no disponible")
             return False
     
-    # Preparar datos para registro
-    usage_data = {
-        "tenant_id": tenant_id,
-        "model": model,
-        "tokens": tokens,
-        "operation": operation,
-        "timestamp": time.time()
-    }
-    
-    if metadata:
-        usage_data["metadata"] = metadata
-    
     try:
-        # 1. Actualizar contador en Redis para operaciones de alta frecuencia
-        await CacheManager.increment(
+        # Importamos aquí para evitar circular imports
+        from ..tracking.tokens import _internal_track_token_usage
+        return await _internal_track_token_usage(
             tenant_id=tenant_id,
-            data_type="token_usage",
-            resource_id=f"{model}:{operation}",
-            amount=tokens
+            model=model,
+            tokens=tokens,
+            operation=operation,
+            metadata=metadata
         )
-        
-        # 2. Añadir a la cola de persistencia para almacenar en Supabase
-        await CacheManager.rpush(
-            queue_name="token_usage_queue",
-            data=usage_data
-        )
-        
-        return True
     except Exception as e:
         logger.error(f"Error registrando uso de tokens: {str(e)}")
         return False

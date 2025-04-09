@@ -148,7 +148,7 @@ async def check_supabase_connection() -> bool:
     try:
         supabase = get_supabase_client()
         # Intentar una operación sencilla
-        result = await supabase.table("tenants").select("count", count="exact").limit(1).execute()
+        result = await supabase.table(get_table_name("tenants")).select("count", count="exact").limit(1).execute()
         return True
     except Exception as e:
         logger.error(f"Error al verificar conexión con Supabase: {str(e)}")

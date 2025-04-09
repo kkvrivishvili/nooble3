@@ -27,6 +27,7 @@ def get_current_tenant_id() -> str:
     
     # Solo validar si se necesita explícitamente
     if tenant_id and tenant_id != "default" and should_validate_tenant():
+        # Importación lazy para evitar ciclo de dependencias
         from ..auth.tenant import is_tenant_active
         if not is_tenant_active(tenant_id):
             from ..errors.exceptions import ServiceError

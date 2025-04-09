@@ -10,7 +10,7 @@ from common.models import HealthResponse
 from common.errors import handle_service_error_simple
 from common.config import get_settings
 from common.cache.manager import CacheManager
-from common.db.supabase import get_supabase_client
+from common.db.supabase import get_supabase_client, get_table_name
 from common.utils.http import check_service_health
 
 router = APIRouter()
@@ -41,7 +41,7 @@ async def get_service_status() -> HealthResponse:
     supabase_status = "available"
     try:
         supabase = get_supabase_client()
-        supabase.table("tenants").select("tenant_id").limit(1).execute()
+        supabase.table(get_table_name("tenants")).select("tenant_id").limit(1).execute()
     except Exception as e:
         logger.warning(f"Supabase no disponible: {str(e)}")
         supabase_status = "unavailable"

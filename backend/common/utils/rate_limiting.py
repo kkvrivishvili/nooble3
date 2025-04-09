@@ -15,6 +15,8 @@ from ..cache.manager import CacheManager
 # Actualizamos las importaciones para evitar ciclos
 from ..config.tiers import get_tier_rate_limit
 from ..config.settings import get_tenant_rate_limit
+from ..context.vars import get_current_tenant_id
+from ..db.supabase import get_tenant_configurations
 
 logger = logging.getLogger(__name__)
 

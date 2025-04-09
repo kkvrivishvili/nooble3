@@ -5,7 +5,7 @@ Endpoints para generación de embeddings vectoriales.
 import logging
 import time
 from typing import Dict, List, Any, Optional
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Body
 
 from common.models import TenantInfo
 from common.errors import handle_service_error, handle_service_error_simple

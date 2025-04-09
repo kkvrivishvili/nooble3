@@ -511,8 +511,8 @@ class InvalidEmbeddingParamsError(ServiceError):
             details=details
         )
 
-class ServiceError(HTTPException):
-    """Error base para servicios"""
+class HTTPServiceError(HTTPException):
+    """Error base para servicios (versión HTTP)"""
     def __init__(self, 
                  message: str, 
                  error_code: str, 
@@ -526,7 +526,8 @@ class ServiceError(HTTPException):
                 "details": details or {}
             }
         )
-class CacheError(ServiceError):
+
+class CacheError(HTTPServiceError):
     """Errores de caché"""
     def __init__(self, message: str, details: Optional[dict] = None):
         super().__init__(
@@ -536,7 +537,7 @@ class CacheError(ServiceError):
             details=details
         )
 
-class DatabaseError(ServiceError):
+class DatabaseError(HTTPServiceError):
     """Errores de base de datos"""
     def __init__(self, message: str, details: Optional[dict] = None):
         super().__init__(
