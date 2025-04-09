@@ -62,6 +62,10 @@ class ErrorCode(Enum):
     AGENT_EXECUTION_ERROR = "AGENT_EXECUTION_ERROR"
     AGENT_SETUP_ERROR = "AGENT_SETUP_ERROR"
     AGENT_TOOL_ERROR = "AGENT_TOOL_ERROR"
+    AGENT_LIMIT_EXCEEDED = "AGENT_LIMIT_EXCEEDED"
+    INVALID_AGENT_ID = "INVALID_AGENT_ID"
+    AGENT_ALREADY_EXISTS = "AGENT_ALREADY_EXISTS"
+    AGENT_QUOTA_EXCEEDED = "AGENT_QUOTA_EXCEEDED"
     
     # Errores específicos de consultas RAG (8xxx)
     QUERY_PROCESSING_ERROR = "QUERY_PROCESSING_ERROR"
@@ -116,6 +120,10 @@ ERROR_CODES = {
     ErrorCode.AGENT_EXECUTION_ERROR.value: {"code": 7002, "message": "Error en ejecución de agente", "status": 500},
     ErrorCode.AGENT_SETUP_ERROR.value: {"code": 7003, "message": "Error en configuración de agente", "status": 500},
     ErrorCode.AGENT_TOOL_ERROR.value: {"code": 7004, "message": "Error en herramienta de agente", "status": 500},
+    ErrorCode.AGENT_LIMIT_EXCEEDED.value: {"code": 7005, "message": "Límite de agentes alcanzado", "status": 429},
+    ErrorCode.INVALID_AGENT_ID.value: {"code": 7006, "message": "ID de agente inválido", "status": 422},
+    ErrorCode.AGENT_ALREADY_EXISTS.value: {"code": 7007, "message": "Agente ya existe", "status": 409},
+    ErrorCode.AGENT_QUOTA_EXCEEDED.value: {"code": 7008, "message": "Cuota de agentes alcanzada", "status": 429},
     
     # Errores específicos de consultas RAG (8xxx)
     ErrorCode.QUERY_PROCESSING_ERROR.value: {"code": 8000, "message": "Error procesando consulta", "status": 500},
@@ -374,6 +382,42 @@ class AgentToolError(ServiceError):
         super().__init__(
             message=message,
             error_code=ErrorCode.AGENT_TOOL_ERROR,
+            details=details
+        )
+
+class AgentLimitExceededError(ServiceError):
+    """Error de límite de agentes alcanzado."""
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            message=message,
+            error_code=ErrorCode.AGENT_LIMIT_EXCEEDED,
+            details=details
+        )
+
+class InvalidAgentIdError(ServiceError):
+    """Error de ID de agente inválido."""
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            message=message,
+            error_code=ErrorCode.INVALID_AGENT_ID,
+            details=details
+        )
+
+class AgentAlreadyExistsError(ServiceError):
+    """Error de agente ya existente."""
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            message=message,
+            error_code=ErrorCode.AGENT_ALREADY_EXISTS,
+            details=details
+        )
+
+class AgentQuotaExceededError(ServiceError):
+    """Error de cuota de agentes alcanzada."""
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            message=message,
+            error_code=ErrorCode.AGENT_QUOTA_EXCEEDED,
             details=details
         )
 

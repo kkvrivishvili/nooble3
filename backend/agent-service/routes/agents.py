@@ -1,11 +1,12 @@
 import logging
 import uuid
 from typing import Optional, List
+import re
 
 from fastapi import APIRouter, Depends, Path, Query, HTTPException
 
 from common.models import TenantInfo, AgentConfig, AgentRequest, AgentResponse, AgentListResponse, DeleteAgentResponse
-from common.errors import ServiceError, handle_service_error_simple
+from common.errors import ServiceError, handle_service_error_simple, InvalidAgentIdError, ErrorCode
 from common.context import with_context
 from common.config import get_settings, invalidate_settings_cache
 from common.db.supabase import get_supabase_client
@@ -39,6 +40,10 @@ async def create_agent(
     # Generar ID para el nuevo agente
     agent_id = str(uuid.uuid4())
     
+    # Validar formato de ID
+    if not re.match(r"^agent_[a-z0-9]{8}$", agent_id):
+        raise InvalidAgentIdError(agent_id)
+    
     # Crear objeto de configuración del agente
     agent_data = {
         "agent_id": agent_id,
@@ -57,43 +62,65 @@ async def create_agent(
         "rag_config": request.rag_config.dict() if request.rag_config else {}
     }
     
-    # Guardar en Supabase
-    supabase = get_supabase_client()
-    result = await supabase.table(get_table_name("agent_configs")).insert(agent_data).execute()
+    try:
+        # Guardar en Supabase
+        supabase = get_supabase_client()
+        result = await supabase.table(get_table_name("agent_configs")).insert(agent_data).execute()
+        
+        if result.error:
+            logger.error(f"Error creando agente para tenant '{tenant_id}': {result.error}")
+            if "duplicate key" in str(result.error):
+                raise ServiceError(
+                    message="Agent ya existe",
+                    error_code=ErrorCode.AGENT_ALREADY_EXISTS,
+                    status_code=409
+                ) from result.error
+            raise ServiceError(
+                message="Error creando agente",
+                error_code=ErrorCode.AGENT_SETUP_ERROR
+            ) from result.error
+        
+        # Obtener el agente creado
+        created_agent = result.data[0] if result.data else agent_data
+        
+        # Crear respuesta
+        response = AgentResponse(
+            success=True,
+            message="Agente creado exitosamente",
+            agent_id=created_agent["agent_id"],
+            tenant_id=created_agent["tenant_id"],
+            name=created_agent["name"],
+            description=created_agent["description"],
+            agent_type=created_agent["agent_type"],
+            llm_model=created_agent["llm_model"],
+            tools=created_agent["tools"],
+            system_prompt=created_agent["system_prompt"],
+            memory_enabled=created_agent["memory_enabled"],
+            memory_window=created_agent["memory_window"],
+            is_active=created_agent.get("is_active", True),
+            is_public=created_agent.get("is_public", False),
+            metadata=created_agent.get("metadata", {}),
+            rag_config=created_agent.get("rag_config"),
+            created_at=created_agent.get("created_at"),
+            updated_at=created_agent.get("updated_at")
+        )
+        
+        # Invalidar caché de configuraciones para este tenant
+        invalidate_settings_cache(tenant_id)
+        
+        return response
     
-    if result.error:
-        logger.error(f"Error creando agente para tenant '{tenant_id}': {result.error}")
-        raise ServiceError(f"Error creating agent: {result.error}")
-    
-    # Obtener el agente creado
-    created_agent = result.data[0] if result.data else agent_data
-    
-    # Crear respuesta
-    response = AgentResponse(
-        success=True,
-        message="Agente creado exitosamente",
-        agent_id=created_agent["agent_id"],
-        tenant_id=created_agent["tenant_id"],
-        name=created_agent["name"],
-        description=created_agent["description"],
-        agent_type=created_agent["agent_type"],
-        llm_model=created_agent["llm_model"],
-        tools=created_agent["tools"],
-        system_prompt=created_agent["system_prompt"],
-        memory_enabled=created_agent["memory_enabled"],
-        memory_window=created_agent["memory_window"],
-        is_active=created_agent.get("is_active", True),
-        is_public=created_agent.get("is_public", False),
-        metadata=created_agent.get("metadata", {}),
-        rag_config=created_agent.get("rag_config"),
-        created_at=created_agent.get("created_at"),
-        updated_at=created_agent.get("updated_at")
-    )
-    
-    # Invalidar caché de configuraciones para este tenant
-    invalidate_settings_cache(tenant_id)
-    
-    return response
+    except Exception as e:
+        if "duplicate key" in str(e):
+            raise ServiceError(
+                message="Agent ya existe",
+                error_code=ErrorCode.AGENT_ALREADY_EXISTS,
+                status_code=409
+            ) from e
+        raise ServiceError(
+            message="Error creando agente",
+            error_code=ErrorCode.AGENT_SETUP_ERROR
+        ) from e
 
 @router.get("/{agent_id}", response_model=AgentResponse)
 @handle_service_error_simple
@@ -239,46 +266,53 @@ async def update_agent(
         "updated_at": "NOW()"
     }
     
-    # Actualizar el agente en la base de datos
-    result = await supabase.table(get_table_name("agent_configs")) \
-        .update(update_data) \
-        .eq("tenant_id", tenant_id) \
-        .eq("agent_id", agent_id) \
-        .execute()
+    try:
+        # Actualizar el agente en la base de datos
+        result = await supabase.table(get_table_name("agent_configs")) \
+            .update(update_data) \
+            .eq("tenant_id", tenant_id) \
+            .eq("agent_id", agent_id) \
+            .execute()
+        
+        if result.error:
+            logger.error(f"Error actualizando agente para tenant '{tenant_id}': {result.error}")
+            raise ServiceError(f"Error updating agent: {result.error}")
+        
+        # Preparar respuesta
+        updated_agent = result.data[0] if result.data else {**agent_check.data, **update_data}
+        
+        # Invalidar caché del agente
+        await invalidate_agent_cache(tenant_id, agent_id)
+        
+        # También invalidar caché de configuraciones para este tenant
+        invalidate_settings_cache(tenant_id)
+        
+        return AgentResponse(
+            success=True,
+            message="Agente actualizado exitosamente",
+            agent_id=updated_agent["agent_id"],
+            tenant_id=updated_agent["tenant_id"],
+            name=updated_agent["name"],
+            description=updated_agent.get("description"),
+            agent_type=updated_agent.get("agent_type", "conversational"),
+            llm_model=updated_agent.get("llm_model"),
+            tools=updated_agent.get("tools", []),
+            system_prompt=updated_agent.get("system_prompt"),
+            memory_enabled=updated_agent.get("memory_enabled", True),
+            memory_window=updated_agent.get("memory_window", 10),
+            is_active=updated_agent.get("is_active", True),
+            is_public=updated_agent.get("is_public", False),
+            metadata=updated_agent.get("metadata", {}),
+            rag_config=updated_agent.get("rag_config"),
+            created_at=updated_agent.get("created_at"),
+            updated_at=updated_agent.get("updated_at")
+        )
     
-    if result.error:
-        logger.error(f"Error actualizando agente para tenant '{tenant_id}': {result.error}")
-        raise ServiceError(f"Error updating agent: {result.error}")
-    
-    # Preparar respuesta
-    updated_agent = result.data[0] if result.data else {**agent_check.data, **update_data}
-    
-    # Invalidar caché del agente
-    await invalidate_agent_cache(tenant_id, agent_id)
-    
-    # También invalidar caché de configuraciones para este tenant
-    invalidate_settings_cache(tenant_id)
-    
-    return AgentResponse(
-        success=True,
-        message="Agente actualizado exitosamente",
-        agent_id=updated_agent["agent_id"],
-        tenant_id=updated_agent["tenant_id"],
-        name=updated_agent["name"],
-        description=updated_agent.get("description"),
-        agent_type=updated_agent.get("agent_type", "conversational"),
-        llm_model=updated_agent.get("llm_model"),
-        tools=updated_agent.get("tools", []),
-        system_prompt=updated_agent.get("system_prompt"),
-        memory_enabled=updated_agent.get("memory_enabled", True),
-        memory_window=updated_agent.get("memory_window", 10),
-        is_active=updated_agent.get("is_active", True),
-        is_public=updated_agent.get("is_public", False),
-        metadata=updated_agent.get("metadata", {}),
-        rag_config=updated_agent.get("rag_config"),
-        created_at=updated_agent.get("created_at"),
-        updated_at=updated_agent.get("updated_at")
-    )
+    except Exception as e:
+        raise ServiceError(
+            message="Error actualizando agente",
+            error_code=ErrorCode.AGENT_UPDATE_ERROR
+        ) from e
 
 @router.delete("/{agent_id}", response_model=DeleteAgentResponse)
 @handle_service_error_simple
