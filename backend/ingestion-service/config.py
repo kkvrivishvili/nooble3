@@ -52,3 +52,32 @@ def get_document_processor_config() -> Dict[str, Any]:
         "supported_file_types": settings.supported_file_types,
         "max_file_size_mb": settings.max_file_size_mb
     }
+
+def get_extraction_config_for_mimetype(mimetype: str) -> dict:
+    """
+    Obtiene la configuración de extracción específica para un tipo MIME.
+    
+    Args:
+        mimetype: Tipo MIME del archivo
+        
+    Returns:
+        dict: Configuración de extracción
+    """
+    extraction_configs = {
+        "application/pdf": {
+            "pdf_parser": "pdfminer",
+            "ocr_enabled": False
+        },
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": {
+            "extract_headers": True,
+            "extract_tables": True
+        },
+        # Otras configuraciones por tipo MIME
+    }
+    
+    # Buscar por prefijo de MIME
+    for mime_pattern, config in extraction_configs.items():
+        if mime_pattern in mimetype:
+            return config
+    
+    return {"default_parser": "text"}

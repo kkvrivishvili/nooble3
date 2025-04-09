@@ -179,27 +179,96 @@ async def queue_document_processing_job(
         )
 
 async def process_next_job() -> bool:
-    """
-    Procesa el siguiente trabajo en la cola.
-    
-    Returns:
-        bool: True si se procesó un trabajo, False si no había trabajos
-    """
+    """Procesa el siguiente trabajo en la cola."""
     redis = await get_redis_client()
     if not redis:
-        logger.error("Redis no disponible - no se pueden procesar trabajos")
         return False
     
-    # Obtener el siguiente trabajo
     job_id = await redis.rpop(INGESTION_QUEUE)
     if not job_id:
-        return False  # No hay trabajos pendientes
+        return False  # Cola vacía
     
-    # Obtener datos del trabajo
     job_data_str = await redis.get(f"{JOB_PREFIX}{job_id}:data")
     if not job_data_str:
-        logger.error(f"Datos del trabajo {job_id} no encontrados")
         return False
     
     try:
-        job_data
+        job_data = json.loads(job_data_str)
+        
+        # Extraer datos básicos
+        tenant_id = job_data.get("tenant_id")
+        document_id = job_data.get("document_id")
+        collection_id = job_data.get("collection_id")
+        
+        # Actualizar estado a "processing"
+        await update_processing_job(
+            job_id=job_id,
+            tenant_id=tenant_id,
+            status="processing",
+            progress=10.0
+        )
+        
+        # Actualizar estado del documento
+        await update_document_status(
+            document_id=document_id,
+            tenant_id=tenant_id,
+            status="processing"
+        )
+        
+        # Procesar contenido según su tipo
+        content = None
+        if job_data.get("has_file"):
+            file_content = await redis.get(f"{JOB_PREFIX}{job_id}:file")
+            content = await process_file(
+                file_content=file_content,
+                file_type=job_data.get("file_type"),
+                metadata={"document_id": document_id}
+            )
+        elif job_data.get("has_text"):
+            text_content = await redis.get(f"{JOB_PREFIX}{job_id}:text")
+            content = text_content.decode('utf-8')
+        elif job_data.get("has_url"):
+            content = await process_url(job_data.get("url"))
+            
+        # Dividir en fragmentos
+        chunks = await split_document_intelligently(
+            text=content,
+            document_id=document_id,
+            metadata={
+                "tenant_id": tenant_id,
+                "collection_id": collection_id
+            }
+        )
+        
+        # Procesar y almacenar fragmentos con embeddings
+        processing_stats = await process_and_store_chunks(
+            chunks=chunks,
+            tenant_id=tenant_id,
+            collection_id=collection_id,
+            document_id=document_id
+        )
+        
+        # Actualizar estado a completado
+        await update_processing_job(
+            job_id=job_id,
+            tenant_id=tenant_id,
+            status="completed",
+            progress=100.0,
+            processing_stats=processing_stats
+        )
+        
+        await update_document_status(
+            document_id=document_id,
+            tenant_id=tenant_id,
+            status="completed"
+        )
+        
+        # Limpiar recursos
+        await redis.delete(f"{JOB_PREFIX}{job_id}:file", f"{JOB_PREFIX}{job_id}:text")
+        
+        return True
+    
+    except Exception as e:
+        # Manejar error y actualizar estado
+        # [implementación detallada aquí]
+        return False
