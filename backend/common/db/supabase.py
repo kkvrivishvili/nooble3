@@ -15,7 +15,9 @@ from ..cache.manager import CacheManager
 from ..errors.exceptions import DatabaseError, ConfigurationError, ServiceError, ErrorCode
 from ..errors.handlers import handle_config_error
 from ..config.settings import get_settings
-# Importamos las funciones desde auth.tenant para mantener compatibilidad
+
+# IMPORTANTE: Estas funciones deben importarse directamente desde common.auth.tenant
+# Se importan aquí solo para uso interno del módulo
 from ..auth.tenant import is_tenant_active, is_tenant_active_sync
 
 logger = logging.getLogger(__name__)

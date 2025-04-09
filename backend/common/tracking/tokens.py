@@ -14,9 +14,7 @@ from ..cache.manager import CacheManager
 from ..cache.counters import increment_token_counter
 from ..config.settings import get_settings
 from ..context.vars import get_current_tenant_id
-
-# Eliminamos la importación circular y reemplazamos con la implementación unificada
-# from ..auth.quotas import track_token_usage as quotas_track_token_usage
+from ..errors.exceptions import ServiceError, ErrorCode
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +27,7 @@ async def _internal_track_token_usage(
 ) -> bool:
     """
     Implementación interna para registrar el uso de tokens para un tenant.
-    Esta función es utilizada tanto por auth.quotas como por tracking.tokens
+    Esta función es utilizada por todas las funciones de tracking de tokens
     para evitar duplicación de código.
     
     Args:
@@ -74,26 +72,32 @@ async def _internal_track_token_usage(
         
         return True
     except Exception as e:
-        logger.error(f"Error registrando uso de tokens: {str(e)}")
+        error_context = {"tenant_id": tenant_id, "model": model, "operation": operation}
+        logger.error(f"Error registrando uso de tokens: {str(e)}", extra=error_context)
         return False
 
 async def track_token_usage(
-    tenant_id: str, 
-    tokens: int, 
-    model: str = None, 
+    tenant_id: Optional[str] = None, 
+    tokens: int = 0, 
+    model: Optional[str] = None, 
     agent_id: Optional[str] = None,
     conversation_id: Optional[str] = None,
     token_type: str = "llm",
-    operation: str = "query"
+    operation: str = "query",
+    metadata: Optional[Dict[str, Any]] = None
 ) -> bool:
     """
-    Registra el uso de tokens para un tenant.
+    Función centralizada para registrar el uso de tokens para un tenant.
+    
+    Esta es la implementación principal que debe ser utilizada por todos los servicios
+    para el seguimiento de tokens. La versión en auth.quotas es simplemente un wrapper
+    para compatibilidad.
     
     En caso de conversaciones públicas con agentes, detecta automáticamente si los tokens
     deben contabilizarse al propietario del agente en lugar del usuario que interactúa.
     
     Args:
-        tenant_id: ID del tenant que realiza la solicitud (obtenido del JWT)
+        tenant_id: ID del tenant que realiza la solicitud (si es None, se obtiene del contexto)
         tokens: Número estimado de tokens
         model: Modelo usado (para ajustar el factor de costo)
         agent_id: ID del agente con el que se interactúa (opcional)
@@ -101,15 +105,30 @@ async def track_token_usage(
         conversation_id: ID de la conversación (opcional, para tracking)
         token_type: Tipo de tokens ('llm' o 'embedding')
         operation: Tipo de operación (query, embed, chat, etc)
+        metadata: Metadatos adicionales de la operación
         
     Returns:
         bool: True si se registró correctamente
+        
+    Raises:
+        ServiceError: Si ocurre un error grave durante el tracking
     """
+    # Si no hay tokens que registrar, salir inmediatamente
+    if tokens <= 0:
+        return True
+    
     # Verificar si el tracking está habilitado
     settings = get_settings()
     if not settings.enable_usage_tracking:
-        logger.debug(f"Tracking de uso deshabilitado, omitiendo registro de {tokens} tokens para {tenant_id}")
+        logger.debug(f"Tracking de uso deshabilitado, omitiendo registro de {tokens} tokens")
         return True
+    
+    # Obtener tenant_id del contexto si no se proporciona
+    if not tenant_id:
+        tenant_id = get_current_tenant_id()
+        if not tenant_id or tenant_id == "default":
+            logger.warning("No se pudo registrar uso de tokens: tenant_id no disponible")
+            return False
     
     try:
         # Usar el factor de costo del modelo o 1.0 por defecto
@@ -117,16 +136,15 @@ async def track_token_usage(
         adjusted_tokens = int(tokens * cost_factor)
         
         # Preparar metadatos
-        metadata = {
-            "token_type": token_type,
-            "cost_factor": cost_factor
-        }
+        combined_metadata = metadata or {}
+        combined_metadata["token_type"] = token_type
+        combined_metadata["cost_factor"] = cost_factor
         
         if agent_id:
-            metadata["agent_id"] = agent_id
+            combined_metadata["agent_id"] = agent_id
         
         if conversation_id:
-            metadata["conversation_id"] = conversation_id
+            combined_metadata["conversation_id"] = conversation_id
         
         # Usar implementación interna unificada
         await _internal_track_token_usage(
@@ -134,7 +152,7 @@ async def track_token_usage(
             model=model or "default",
             tokens=adjusted_tokens,
             operation=operation,
-            metadata=metadata
+            metadata=combined_metadata
         )
         
         # También registrar en Supabase a través de RPC para compatibilidad
@@ -149,7 +167,13 @@ async def track_token_usage(
         
         return True
     except Exception as e:
-        logger.error(f"Error tracking {token_type} token usage: {str(e)}")
+        error_context = {
+            "tenant_id": tenant_id,
+            "model": model,
+            "operation": operation,
+            "token_type": token_type
+        }
+        logger.error(f"Error tracking {token_type} token usage: {str(e)}", extra=error_context)
         return False
 
 async def estimate_prompt_tokens(text: str) -> int:

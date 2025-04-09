@@ -20,6 +20,7 @@ from services.extraction import process_file_from_storage
 from services.chunking import split_document_intelligently
 from services.embedding import process_and_store_chunks
 from services.storage import update_document_status, update_processing_job
+from common.context.vars import validate_tenant_context
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -28,6 +29,8 @@ settings = get_settings()
 INGESTION_QUEUE = "ingestion_queue"
 JOB_PREFIX = "job:"
 JOB_STATUS_PREFIX = "job_status:"
+JOB_LOCK_PREFIX = "job_lock:"  # Prefijo para los bloqueos de trabajos
+JOB_LOCK_EXPIRY = 600  # 10 minutos en segundos (tiempo máximo para procesar un trabajo)
 
 async def initialize_queue():
     """Inicializa el sistema de colas."""
@@ -113,15 +116,16 @@ async def check_stuck_jobs():
             tenant_id = job.get("tenant_id")
             document_id = job.get("document_id")
             
-            # Verificar si el trabajo está estancado
-            job_data = await CacheManager.get(
-                tenant_id=tenant_id,
-                data_type="job_status",
-                resource_id=str(job_id)
+            # NUEVO: Verificar si existe un bloqueo para este trabajo
+            lock_key = f"{JOB_LOCK_PREFIX}{job_id}"
+            lock_exists = await CacheManager.exists(
+                data_type="system",
+                resource_id=lock_key
             )
             
-            if not job_data:
-                # El trabajo no está en la cola, pero está en estado processing
+            # Si el bloqueo no existe o ha expirado, el trabajo probablemente está estancado
+            if not lock_exists:
+                # Verificar el tiempo desde la última actualización
                 if "updated_at" in job:
                     updated_time = job.get("updated_at")
                     # Convertir updated_at a timestamp si es string
@@ -133,6 +137,14 @@ async def check_stuck_jobs():
                             
                             if current_time - updated_timestamp > max_processing_time:
                                 # Trabajo estancado, marcarlo como fallido
+                                logger.warning(f"Detectado trabajo estancado {job_id} para tenant {tenant_id}. Última actualización hace {current_time - updated_timestamp} segundos.")
+                                
+                                # Liberar explícitamente cualquier bloqueo antiguo que pudiera existir
+                                await CacheManager.delete(
+                                    data_type="system",
+                                    resource_id=lock_key
+                                )
+                                
                                 await update_processing_job(
                                     job_id=job_id,
                                     tenant_id=tenant_id,
@@ -145,6 +157,61 @@ async def check_stuck_jobs():
                                     tenant_id=tenant_id,
                                     status="failed",
                                     metadata={"error": "Procesamiento interrumpido por timeout"}
+                                )
+                                
+                                # Limpiar recursos asociados
+                                await CacheManager.delete(
+                                    data_type="job",
+                                    resource_id=f"{job_id}:file",
+                                    tenant_id=tenant_id
+                                )
+                                await CacheManager.delete(
+                                    data_type="job",
+                                    resource_id=f"{job_id}:text",
+                                    tenant_id=tenant_id
+                                )
+                                await CacheManager.delete(
+                                    data_type="job",
+                                    resource_id=f"{job_id}:data",
+                                    tenant_id=tenant_id
+                                )
+                        except Exception as parse_err:
+                            logger.error(f"Error procesando timestamp: {str(parse_err)}")
+                    
+            else:
+                # El bloqueo existe, pero verificamos si el tiempo de procesamiento es excesivo
+                # Podríamos extender el bloqueo para jobs legítimamente complejos
+                if "updated_at" in job:
+                    updated_time = job.get("updated_at")
+                    # Convertir updated_at a timestamp si es string
+                    if isinstance(updated_time, str):
+                        from datetime import datetime
+                        try:
+                            dt = datetime.fromisoformat(updated_time.replace('Z', '+00:00'))
+                            updated_timestamp = dt.timestamp()
+                            
+                            # Para trabajos que han excedido por mucho el tiempo máximo, forzar limpieza
+                            if current_time - updated_timestamp > (max_processing_time * 2):
+                                logger.warning(f"Trabajo {job_id} excede el tiempo máximo por un margen excesivo. Forzando liberación.")
+                                
+                                # Forzar liberación del bloqueo
+                                await CacheManager.delete(
+                                    data_type="system",
+                                    resource_id=lock_key
+                                )
+                                
+                                await update_processing_job(
+                                    job_id=job_id,
+                                    tenant_id=tenant_id,
+                                    status="failed",
+                                    error="Trabajo interrumpido por exceder tiempo máximo de procesamiento"
+                                )
+                                
+                                await update_document_status(
+                                    document_id=document_id,
+                                    tenant_id=tenant_id,
+                                    status="failed",
+                                    metadata={"error": "Procesamiento interrumpido por exceder tiempo máximo"}
                                 )
                         except Exception:
                             pass
@@ -164,22 +231,48 @@ async def process_next_job_with_retry(max_retries: int = 3) -> bool:
     return False
 
 async def process_next_job() -> bool:
-    """Procesa el siguiente trabajo en la cola usando Supabase Storage"""
-    # Utilizamos CacheManager para operaciones de cola para mantener consistencia
+    """
+    Procesa el siguiente trabajo de la cola de ingesta.
     
+    Toma un trabajo de la cola, lo marca como en procesamiento, y
+    llama al método de procesamiento correspondiente según el tipo de trabajo.
+    
+    Returns:
+        bool: True si se procesó un trabajo, False si no había trabajos
+        
+    Raises:
+        ServiceError: Si no hay un tenant válido en el contexto
+    """
+    settings = get_settings()
+    job_lock_expire_seconds = settings.job_lock_expire_seconds
+    
+    # Tomar el siguiente trabajo de la cola
     job_data = await CacheManager.lpop(queue_name=INGESTION_QUEUE)
+    
     if not job_data:
-        return False
-
-    # Inicializar variables antes del bloque try para evitar referencias indefinidas en caso de excepción
-    job_id = None
-    tenant_id = None
-    document_id = None
+        return False  # No hay trabajos en la cola
     
     try:
+        # Parsear los datos del trabajo
         job = json.loads(job_data)
         job_id = job.get("job_id")
         tenant_id = job.get("tenant_id")
+        
+        # Validar que el tenant sea válido para procesar trabajos
+        tenant_id = validate_tenant_context(tenant_id)
+        
+        # Adquirir un lock para este trabajo
+        lock_key = f"{JOB_LOCK_PREFIX}:{job_id}"
+        lock_acquired = await CacheManager.set_nx(lock_key, "1", job_lock_expire_seconds)
+        
+        if not lock_acquired:
+            logger.warning(
+                f"Lock no adquirido para job_id={job_id}, otro worker podría estar procesándolo", 
+                extra={"job_id": job_id, "tenant_id": tenant_id}
+            )
+            return True  # Consideramos el trabajo como procesado y seguimos
+        
+        # Inicializar variables antes del bloque try para evitar referencias indefinidas en caso de excepción
         document_id = job.get("document_id")
         file_key = job.get("file_key")  # Nueva referencia a Supabase Storage
         collection_id = job.get("collection_id")
@@ -213,6 +306,13 @@ async def process_next_job() -> bool:
                     )
             
             return False
+            
+        # Actualizar el estado del trabajo a "processing" para indicar que está en progreso
+        await update_processing_job(
+            job_id=job_id,
+            tenant_id=tenant_id,
+            status="processing"
+        )
 
         # Procesar usando el nuevo servicio unificado
         processed_text = await process_file_from_storage(
@@ -266,6 +366,10 @@ async def process_next_job() -> bool:
             tenant_id=tenant_id
         )
 
+        # Liberar el bloqueo después de procesar el trabajo con éxito
+        lock_key = f"{JOB_LOCK_PREFIX}:{job_id}"
+        await CacheManager.delete(data_type="system", resource_id=lock_key)
+        
         return True
 
     except Exception as e:
@@ -305,5 +409,10 @@ async def process_next_job() -> bool:
             resource_id=f"{job_id}:data",
             tenant_id=tenant_id
         )
+        
+        # Liberar el bloqueo si lo habíamos adquirido
+        if job_id:
+            lock_key = f"{JOB_LOCK_PREFIX}:{job_id}"
+            await CacheManager.delete(data_type="system", resource_id=lock_key)
 
         return False

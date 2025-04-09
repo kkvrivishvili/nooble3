@@ -3,10 +3,12 @@ Funciones para acceso a tablas y estructuras de datos en Supabase.
 """
 
 import logging
-from typing import Dict, Any, List, Optional, Set
+from typing import Dict, Any, List, Optional, Set, Union
 
 from .supabase import get_supabase_client
-from ..context.vars import get_current_tenant_id
+from ..config.settings import get_settings
+from ..context.vars import get_current_tenant_id, validate_tenant_context
+from ..errors.exceptions import DatabaseError
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +91,6 @@ def get_table_description(table_base_name: str) -> str:
     
     return ""
 
-
 def get_tenant_vector_store(tenant_id: Optional[str] = None, collection_id: Optional[str] = None) -> Any:
     """
     Obtiene un vector store para un tenant específico.
@@ -104,10 +105,14 @@ def get_tenant_vector_store(tenant_id: Optional[str] = None, collection_id: Opti
         
     Returns:
         Any: Vector store para el tenant especificado
+        
+    Raises:
+        ServiceError: Si no hay un tenant válido en el contexto cuando se omite tenant_id
     """
-    # Si no se proporciona tenant_id, usar el del contexto actual
+    # Si no se proporciona tenant_id, obtener del contexto y validar
     if tenant_id is None:
         tenant_id = get_current_tenant_id()
+        tenant_id = validate_tenant_context(tenant_id)
         
     try:
         from llama_index.vector_stores.supabase import SupabaseVectorStore
@@ -137,7 +142,6 @@ def get_tenant_vector_store(tenant_id: Optional[str] = None, collection_id: Opti
     
     return vector_store
 
-
 def get_tenant_documents(
     tenant_id: Optional[str] = None, 
     collection_id: Optional[str] = None,
@@ -155,10 +159,14 @@ def get_tenant_documents(
         
     Returns:
         Dict[str, Any]: Documentos y metadatos de paginación
+        
+    Raises:
+        ServiceError: Si no hay un tenant válido en el contexto cuando se omite tenant_id
     """
-    # Si no se proporciona tenant_id, usar el del contexto actual
+    # Si no se proporciona tenant_id, obtener del contexto y validar
     if tenant_id is None:
         tenant_id = get_current_tenant_id()
+        tenant_id = validate_tenant_context(tenant_id)
     
     supabase = get_supabase_client()
     
@@ -212,7 +220,6 @@ def get_tenant_documents(
         "limit": limit,
         "offset": offset
     }
-
 
 def get_tenant_collections(tenant_id: str) -> List[Dict[str, Any]]:
     """

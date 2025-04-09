@@ -9,7 +9,7 @@ from common.errors import (
     EmbeddingGenerationError, EmbeddingModelError,
     TextTooLargeError, BatchTooLargeError, InvalidEmbeddingParamsError
 )
-from common.context.vars import get_current_tenant_id, get_current_agent_id, get_current_conversation_id
+from common.context.vars import get_current_tenant_id, get_current_agent_id, get_current_conversation_id, validate_tenant_context
 from common.cache.manager import CacheManager  # Usar la implementación unificada de caché
 
 logger = logging.getLogger(__name__)
@@ -24,7 +24,7 @@ class CachedEmbeddingProvider:
     def __init__(
         self,
         model_name: str = settings.default_embedding_model,
-        tenant_id: str = None, 
+        tenant_id: Optional[str] = None, 
         embed_batch_size: int = settings.embedding_batch_size,
         api_key: Optional[str] = None
     ):
@@ -50,21 +50,37 @@ class CachedEmbeddingProvider:
     
     @handle_service_error_simple
     async def get_embedding(self, text: str) -> List[float]:
-        """Obtiene un embedding con soporte de caché unificada."""
+        """
+        Obtiene un embedding con soporte de caché unificada.
+        
+        Args:
+            text: Texto para generar embedding
+            
+        Returns:
+            List[float]: Vector de embedding
+            
+        Raises:
+            EmbeddingGenerationError: Si hay errores al generar el embedding
+            ServiceError: Si no hay tenant válido disponible en el contexto y no se proporcionó uno
+        """
+        # Usar tenant_id proporcionado o el del contexto actual (validando que sea válido)
+        tenant_id = self.tenant_id
+        if tenant_id is None:
+            tenant_id = get_current_tenant_id()
+            tenant_id = validate_tenant_context(tenant_id)
+            if tenant_id is None:
+                raise ServiceError(ErrorCode.INVALID_TENANT_CONTEXT)
+        
         if not text.strip():
             # Vector de ceros para texto vacío
             return [0.0] * self.dimensions
-        
-        # Usar tenant_id del contexto si no se proporcionó
-        tenant_id = self.tenant_id or get_current_tenant_id()
-        agent_id = get_current_agent_id()
         
         # Verificar caché usando el sistema unificado
         cached_embedding = await CacheManager.get_embedding(
             text=text,
             model_name=self.model_name,
             tenant_id=tenant_id,
-            agent_id=agent_id
+            agent_id=get_current_agent_id()
         )
         
         if cached_embedding:
@@ -82,7 +98,7 @@ class CachedEmbeddingProvider:
             embedding=embedding,
             model_name=self.model_name,
             tenant_id=tenant_id,
-            agent_id=agent_id,
+            agent_id=get_current_agent_id(),
             ttl=86400  # 24 horas
         )
         
@@ -90,12 +106,29 @@ class CachedEmbeddingProvider:
     
     @handle_service_error_simple
     async def get_batch_embeddings(self, texts: List[str]) -> List[List[float]]:
-        """Obtiene embeddings para un lote de textos con soporte de caché."""
+        """
+        Obtiene embeddings para un lote de textos con soporte de caché.
+        
+        Args:
+            texts: Lista de textos para generar embeddings
+            
+        Returns:
+            List[List[float]]: Lista de vectores de embedding
+            
+        Raises:
+            EmbeddingGenerationError: Si hay errores al generar los embeddings
+            ServiceError: Si no hay tenant válido disponible en el contexto y no se proporcionó uno
+        """
+        # Validar tenant_id (usar el proporcionado o el del contexto)
+        tenant_id = self.tenant_id
+        if tenant_id is None:
+            tenant_id = get_current_tenant_id()
+            tenant_id = validate_tenant_context(tenant_id)
+            if tenant_id is None:
+                raise ServiceError(ErrorCode.INVALID_TENANT_CONTEXT)
+        
         if not texts:
             return []
-        
-        # Obtener tenant_id del contexto si no se proporcionó
-        tenant_id = self.tenant_id or get_current_tenant_id()
         
         # Preparar resultado con espacio para todos los textos
         result: List[Optional[List[float]]] = [None] * len(texts)

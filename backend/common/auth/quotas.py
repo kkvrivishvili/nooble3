@@ -138,8 +138,8 @@ async def track_token_usage(
     """
     Registra el uso de tokens para un tenant.
     
-    NOTA: Esta función es un wrapper para compatibilidad. La implementación principal
-    se encuentra en common.tracking.tokens.track_token_usage para evitar duplicación.
+    NOTA: Esta función es un wrapper para compatibilidad.
+    La implementación principal está en common.tracking.tokens.
     
     Args:
         tenant_id: ID del tenant (si es None, se obtiene del contexto actual)
@@ -151,9 +151,8 @@ async def track_token_usage(
     Returns:
         bool: True si se registró correctamente
     """
-    if tokens <= 0:
-        return True  # Nada que registrar
-        
+    from ..tracking.tokens import track_token_usage as tokens_track_token_usage
+    
     # Obtener tenant_id del contexto si no se proporciona
     if not tenant_id:
         tenant_id = get_current_tenant_id()
@@ -161,19 +160,14 @@ async def track_token_usage(
             logger.warning("No se pudo registrar uso de tokens: tenant_id no disponible")
             return False
     
-    try:
-        # Importamos aquí para evitar circular imports
-        from ..tracking.tokens import _internal_track_token_usage
-        return await _internal_track_token_usage(
-            tenant_id=tenant_id,
-            model=model,
-            tokens=tokens,
-            operation=operation,
-            metadata=metadata
-        )
-    except Exception as e:
-        logger.error(f"Error registrando uso de tokens: {str(e)}")
-        return False
+    # Delegar a la implementación centralizada
+    return await tokens_track_token_usage(
+        tenant_id=tenant_id,
+        model=model,
+        tokens=tokens,
+        operation=operation,
+        token_type="llm"  # Valor predeterminado para compatibilidad
+    )
 
 async def get_tenant_token_usage(
     tenant_id: str,

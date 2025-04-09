@@ -7,6 +7,7 @@ import logging
 
 from ..models.base import TenantInfo
 from ..config.tiers import get_tier_limits
+from ..errors import ServiceError, ErrorCode
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +32,7 @@ def get_allowed_models_for_tier(tier: str, model_type: str = "llm") -> list:
 
 async def validate_model_access(tenant_info: TenantInfo, model_id: str, model_type: str = "llm") -> str:
     """
-    Valida que un tenant pueda acceder a un modelo y devuelve el modelo autorizado.
-    Si el modelo solicitado no está permitido, devuelve el mejor modelo disponible para su tier.
+    Valida que un tenant pueda acceder a un modelo.
     
     Args:
         tenant_info: Información del tenant
@@ -41,6 +41,9 @@ async def validate_model_access(tenant_info: TenantInfo, model_id: str, model_ty
         
     Returns:
         str: ID del modelo autorizado
+        
+    Raises:
+        ServiceError: Si el modelo solicitado no está permitido para el tier del tenant
     """
     tier = tenant_info.subscription_tier
     allowed_models = get_allowed_models_for_tier(tier, model_type)
@@ -49,9 +52,24 @@ async def validate_model_access(tenant_info: TenantInfo, model_id: str, model_ty
     if model_id in allowed_models:
         return model_id
         
-    # Si no, devolvemos el mejor modelo disponible para su tier
-    logger.warning(f"Modelo {model_id} no permitido para tenant {tenant_info.tenant_id} en tier {tier}. " + 
-                   f"Usando modelo por defecto del tier.")
+    # Crear contexto para el error
+    error_context = {
+        "tenant_id": tenant_info.tenant_id,
+        "subscription_tier": tier,
+        "requested_model": model_id,
+        "model_type": model_type,
+        "allowed_models": allowed_models
+    }
     
-    # Devolver el primer modelo de la lista (asumiendo que están ordenados por calidad)
-    return allowed_models[0] if allowed_models else model_id
+    # Log de advertencia con contexto enriquecido
+    logger.warning(
+        f"Modelo {model_id} no permitido para tenant {tenant_info.tenant_id} en tier {tier}",
+        extra=error_context
+    )
+    
+    # Lanzar excepción con información detallada
+    raise ServiceError(
+        message=f"Modelo {model_id} no permitido para su plan de suscripción {tier}",
+        error_code=ErrorCode.ACCESS_DENIED.value,
+        context=error_context
+    )

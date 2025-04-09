@@ -11,7 +11,7 @@ from langchain.retrievers import RetrieverQueryEngine
 from llamaindex.callbacks import LlamaDebugHandler
 
 from common.config import get_settings
-from common.context import with_context, get_current_tenant_id, get_current_collection_id, get_current_agent_id
+from common.context import with_context, get_current_tenant_id, get_current_collection_id, get_current_agent_id, validate_tenant_context
 from common.errors import (
     ErrorCode, ServiceError, 
     QueryProcessingError, CollectionNotFoundError, 
@@ -51,7 +51,7 @@ async def process_query_with_sources(
 ) -> Dict[str, Any]:
     """Procesa una consulta y devuelve la respuesta con fuentes."""
     
-    tenant_id = get_current_tenant_id()
+    tenant_id = validate_tenant_context(get_current_tenant_id())
     collection_id = get_current_collection_id()
     agent_id = get_current_agent_id()
     

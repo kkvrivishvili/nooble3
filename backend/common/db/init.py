@@ -3,8 +3,7 @@ Módulo para acceso a bases de datos y almacenamiento.
 """
 
 from .supabase import (
-    get_supabase_client, get_supabase_client_with_token, init_supabase,
-    is_tenant_active
+    get_supabase_client, get_supabase_client_with_token, init_supabase
 )
 
 from .tables import (
@@ -20,7 +19,6 @@ from .rpc import (
 __all__ = [
     # Cliente Supabase
     'get_supabase_client', 'get_supabase_client_with_token', 'init_supabase',
-    'is_tenant_active',
     
     # Funciones de acceso a tablas
     'get_table_name', 'get_tenant_vector_store', 'get_tenant_documents',

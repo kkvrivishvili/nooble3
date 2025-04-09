@@ -11,17 +11,17 @@ Este documento define los estándares para el manejo de errores en todos los ser
 
 ## Clases de Errores
 
-Todas las excepciones personalizadas deben extender de `ServiceError` o `HTTPServiceError`:
+Todas las excepciones personalizadas deben extender de `ServiceError`:
 
 ```python
-from common.errors import ServiceError
+from common.errors.exceptions import ServiceError, ErrorCode
 
 # Ejemplo de excepción personalizada
 class MiExcepcionPersonalizada(ServiceError):
     def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
         super().__init__(
             message=message,
-            error_code="MI_ERROR_PERSONALIZADO",
+            error_code=ErrorCode.MI_ERROR_PERSONALIZADO,
             details=details
         )
 ```
@@ -134,4 +134,3 @@ def create_app():
     setup_error_handling(app)
     # ...
     return app
-```

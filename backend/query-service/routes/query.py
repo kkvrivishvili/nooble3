@@ -15,14 +15,16 @@ from common.errors import (
     QueryProcessingError, CollectionNotFoundError, 
     InvalidQueryParamsError, RetrievalError, GenerationError
 )
-from common.context import with_context, set_current_collection_id, get_current_tenant_id, get_current_collection_id
-from common.auth import verify_tenant, validate_model_access, RoleType
+from common.context import with_context, set_current_collection_id, get_current_tenant_id, get_current_collection_id, set_current_context_value
+from common.auth import verify_tenant, validate_model_access, RoleType, get_allowed_models_for_tier
 from common.tracking import track_query
+from common.config.settings import get_settings
 
 from services.query_engine import create_query_engine, process_query_with_sources
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 @router.post(
     "/collections/{collection_id}/query",
@@ -63,8 +65,16 @@ async def query_collection(
     
     # Validar acceso al modelo LLM
     if request.llm_model:
-        # Capturar el modelo validado y asignarlo
-        request.llm_model = await validate_model_access(tenant_info, request.llm_model, "llm")
+        try:
+            # Intentar validar el modelo solicitado
+            request.llm_model = await validate_model_access(tenant_info, request.llm_model, "llm")
+        except ServiceError as e:
+            # Si el modelo no está permitido, usar el modelo por defecto para su tier
+            logger.info(f"Cambiando al modelo por defecto: {e.message}", extra=e.context)
+            allowed_models = get_allowed_models_for_tier(tenant_info.subscription_tier, "llm")
+            request.llm_model = allowed_models[0] if allowed_models else settings.default_llm_model
+            # Informar al usuario sobre el cambio de modelo en los metadatos de respuesta
+            set_current_context_value("model_downgraded", True)
     
     # Obtener tiempo de inicio para medición de rendimiento
     start_time = time.time()

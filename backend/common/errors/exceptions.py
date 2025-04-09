@@ -5,6 +5,7 @@ Definiciones de excepciones para la plataforma.
 import logging
 from typing import Dict, Any, Optional
 from enum import Enum
+from fastapi import HTTPException, status
 
 from ..context.vars import get_full_context
 
@@ -47,6 +48,7 @@ class ErrorCode(Enum):
     SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE"
     EXTERNAL_API_ERROR = "EXTERNAL_API_ERROR"
     DATABASE_ERROR = "DATABASE_ERROR"
+    CACHE_ERROR = "CACHE_ERROR"  # Añadido para unificar excepciones
     
     # Errores específicos de LLM (5xxx)
     LLM_GENERATION_ERROR = "LLM_GENERATION_ERROR"
@@ -103,15 +105,16 @@ ERROR_CODES = {
     
     # Errores de límites y cuotas (3xxx)
     ErrorCode.QUOTA_EXCEEDED.value: {"code": 3000, "message": "Cuota excedida", "status": 429},
-    ErrorCode.RATE_LIMITED.value: {"code": 3001, "message": "Límite de tasa alcanzado", "status": 429},
+    ErrorCode.RATE_LIMITED.value: {"code": 3001, "message": "Demasiadas solicitudes", "status": 429},
     ErrorCode.RATE_LIMIT_EXCEEDED.value: {"code": 3002, "message": "Límite de tasa excedido", "status": 429},
-    ErrorCode.RATE_LIMIT_ERROR.value: {"code": 3003, "message": "Error en límite de tasa", "status": 500},
-    ErrorCode.TOKEN_LIMIT_EXCEEDED.value: {"code": 3010, "message": "Límite de tokens excedido", "status": 413},
+    ErrorCode.RATE_LIMIT_ERROR.value: {"code": 3003, "message": "Error de rate limit", "status": 500},
+    ErrorCode.TOKEN_LIMIT_EXCEEDED.value: {"code": 3004, "message": "Límite de tokens excedido", "status": 413},
     
     # Errores de servicios externos (4xxx)
     ErrorCode.SERVICE_UNAVAILABLE.value: {"code": 4000, "message": "Servicio no disponible", "status": 503},
     ErrorCode.EXTERNAL_API_ERROR.value: {"code": 4001, "message": "Error en API externa", "status": 502},
-    ErrorCode.DATABASE_ERROR.value: {"code": 4002, "message": "Error en base de datos", "status": 503},
+    ErrorCode.DATABASE_ERROR.value: {"code": 4002, "message": "Error de base de datos", "status": 503},
+    ErrorCode.CACHE_ERROR.value: {"code": 4003, "message": "Error de caché", "status": 503},
     
     # Errores específicos de LLM (5xxx)
     ErrorCode.LLM_GENERATION_ERROR.value: {"code": 5000, "message": "Error generando texto con LLM", "status": 500},
@@ -120,8 +123,8 @@ ERROR_CODES = {
     
     # Errores de gestión de datos (6xxx)
     ErrorCode.DOCUMENT_PROCESSING_ERROR.value: {"code": 6000, "message": "Error procesando documento", "status": 500},
-    ErrorCode.COLLECTION_ERROR.value: {"code": 6001, "message": "Error en colección", "status": 500},
-    ErrorCode.CONVERSATION_ERROR.value: {"code": 6002, "message": "Error en conversación", "status": 500},
+    ErrorCode.COLLECTION_ERROR.value: {"code": 6001, "message": "Error con la colección", "status": 500},
+    ErrorCode.CONVERSATION_ERROR.value: {"code": 6002, "message": "Error con la conversación", "status": 500},
     
     # Errores específicos de agentes (7xxx)
     ErrorCode.AGENT_NOT_FOUND.value: {"code": 7000, "message": "Agente no encontrado", "status": 404},
@@ -131,7 +134,7 @@ ERROR_CODES = {
     ErrorCode.AGENT_TOOL_ERROR.value: {"code": 7004, "message": "Error en herramienta de agente", "status": 500},
     ErrorCode.AGENT_LIMIT_EXCEEDED.value: {"code": 7005, "message": "Límite de agentes alcanzado", "status": 429},
     ErrorCode.INVALID_AGENT_ID.value: {"code": 7006, "message": "ID de agente inválido", "status": 400},
-    ErrorCode.AGENT_ALREADY_EXISTS.value: {"code": 7007, "message": "El agente ya existe", "status": 409},
+    ErrorCode.AGENT_ALREADY_EXISTS.value: {"code": 7007, "message": "Agente ya existente", "status": 409},
     ErrorCode.AGENT_QUOTA_EXCEEDED.value: {"code": 7008, "message": "Cuota de agentes alcanzada", "status": 429},
     
     # Errores específicos de consultas RAG (8xxx)
@@ -169,13 +172,13 @@ class ServiceError(Exception):
         context: Información de contexto (tenant_id, etc.)
     """
     def __init__(
-        self, 
-        message: str, 
-        error_code: ErrorCode = ErrorCode.GENERAL_ERROR,
-        status_code: Optional[int] = None, 
-        details: Optional[Dict[str, Any]] = None,
-        context: Optional[Dict[str, Any]] = None
-    ):
+            self, 
+            message: str, 
+            error_code: ErrorCode = ErrorCode.GENERAL_ERROR,
+            status_code: Optional[int] = None, 
+            details: Optional[Dict[str, Any]] = None,
+            context: Optional[Dict[str, Any]] = None
+        ):
         self.message = message
         # Si error_code es un Enum, extraer el valor
         self.error_code = error_code.value if isinstance(error_code, ErrorCode) else error_code
@@ -199,24 +202,36 @@ class ServiceError(Exception):
         Returns:
             Dict: Representación del error como diccionario
         """
-        error_dict = {
-            "success": False,
-            "error": self.error_code,
-            "error_number": self.error_number,
+        error_response = {
             "message": self.message,
+            "code": self.error_code,
+            "error_number": self.error_number,
+            "details": self.details
         }
         
-        # Añadir detalles si existen
-        if self.details:
-            error_dict["details"] = self.details
-            
-        # Añadir contexto si existe y tiene valores no nulos
-        if self.context:
-            context_dict = {k: v for k, v in self.context.items() if v is not None}
-            if context_dict:
-                error_dict["context"] = context_dict
-                
-        return error_dict
+        # Incluir cierta información de contexto que sea útil para debugging
+        # pero excluir información sensible
+        if self.context and isinstance(self.context, dict):
+            safe_context = {
+                k: v for k, v in self.context.items()
+                if k in ["tenant_id", "agent_id", "collection_id", "conversation_id", "request_id"]
+            }
+            if safe_context:
+                error_response["context"] = safe_context
+        
+        return error_response
+    
+    def to_http_exception(self) -> HTTPException:
+        """
+        Convierte esta excepción en una HTTPException de FastAPI.
+        
+        Returns:
+            HTTPException: Excepción HTTP para FastAPI
+        """
+        return HTTPException(
+            status_code=self.status_code,
+            detail=self.to_dict()
+        )
 
 # Clases de error específicas
 class AuthenticationError(ServiceError):
@@ -264,6 +279,17 @@ class RateLimitError(ServiceError):
             details=details
         )
 
+class RateLimitExceeded(ServiceError):
+    """Error cuando se excede el límite de tasa."""
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None, context: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            message=message,
+            error_code=ErrorCode.RATE_LIMIT_EXCEEDED,
+            status_code=429,
+            details=details,
+            context=context
+        )
+
 class QuotaExceededError(ServiceError):
     """Error de cuota excedida."""
     def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
@@ -297,6 +323,15 @@ class DatabaseError(ServiceError):
         super().__init__(
             message=message,
             error_code=ErrorCode.DATABASE_ERROR,
+            details=details
+        )
+
+class CacheError(ServiceError):
+    """Error de caché."""
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            message=message,
+            error_code=ErrorCode.CACHE_ERROR,
             details=details
         )
 
@@ -526,65 +561,14 @@ class InvalidEmbeddingParamsError(ServiceError):
         )
 
 class ConfigurationError(ServiceError):
-    """Error de configuración.
+    """
+    Error de configuración.
     
     Este error se utiliza cuando hay problemas relacionados con la configuración del sistema,
     como valores faltantes, inválidos o conflictivos en la configuración.
     """
     def __init__(self, message: str, error_code: str = ErrorCode.CONFIGURATION_ERROR.value, 
-                 status_code: int = 500, context: Optional[Dict[str, Any]] = None):
-        super().__init__(
-            message=message,
-            error_code=error_code,
-            status_code=status_code,
-            context=context
-        )
-
-class HTTPServiceError(HTTPException):
-    """Error base para servicios (versión HTTP)"""
-    def __init__(self, 
-                 message: str, 
-                 error_code: str, 
-                 status_code: int = 500,
-                 details: Optional[dict] = None):
-        super().__init__(
-            status_code=status_code,
-            detail={
-                "message": message,
-                "code": error_code,
-                "details": details or {}
-            }
-        )
-
-class CacheError(HTTPServiceError):
-    """Errores de caché"""
-    def __init__(self, message: str, details: Optional[dict] = None):
-        super().__init__(
-            message=message,
-            error_code="CACHE_ERROR",
-            status_code=503,
-            details=details
-        )
-
-class DatabaseError(HTTPServiceError):
-    """Errores de base de datos"""
-    def __init__(self, message: str, details: Optional[dict] = None):
-        super().__init__(
-            message=message,
-            error_code="DATABASE_ERROR",
-            status_code=503,
-            details=details
-        )
-
-class RateLimitExceeded(ServiceError):
-    """
-    Error cuando se ha excedido el límite de tasa (rate limit).
-    
-    Este error se utiliza específicamente cuando una solicitud excede
-    los límites de tasa configurados para un tenant o servicio.
-    """
-    def __init__(self, message: str, error_code: str = ErrorCode.RATE_LIMIT_EXCEEDED.value, 
-                 status_code: int = 429, context: Optional[Dict[str, Any]] = None):
+                     status_code: int = 500, context: Optional[Dict[str, Any]] = None):
         super().__init__(
             message=message,
             error_code=error_code,

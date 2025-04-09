@@ -18,7 +18,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from common.config.settings import get_settings
 from common.errors import setup_error_handling, DatabaseError, ServiceError
-from common.errors.exceptions import HTTPServiceError
 from common.utils.logging import init_logging
 from common.context import Context
 from common.context.vars import get_current_tenant_id
@@ -92,85 +91,6 @@ async def lifespan(app: FastAPI):
         await shutdown_queue()
         logger.info(f"Servicio {settings.service_name} detenido correctamente")
 
-async def process_batch(batch: list):
-    """
-    Procesa un lote de elementos.
-    
-    Args:
-        batch: Lista de elementos a procesar
-        
-    Returns:
-        dict: Resultado del procesamiento
-        
-    Raises:
-        ServiceError: Si hay un error durante el procesamiento
-        DatabaseError: Si hay un error de base de datos
-    """
-    if not batch:
-        # Validación de entrada
-        raise ServiceError(
-            message="Batch vacío",
-            error_code="EMPTY_BATCH",
-            status_code=400,
-            context={"batch_size": 0}
-        )
-    
-    try:
-        tenant_id = get_current_tenant_id()
-        if not tenant_id or tenant_id == "default":
-            raise ServiceError(
-                message="Se requiere un tenant válido",
-                error_code="TENANT_REQUIRED", 
-                status_code=400,
-                context={"tenant_id": tenant_id}
-            )
-            
-        from common.auth.tenant import is_tenant_active
-        if not await is_tenant_active(tenant_id):
-            raise ServiceError(
-                message="Tenant no activo",
-                error_code="TENANT_INACTIVE",
-                status_code=403,
-                context={"tenant_id": tenant_id}
-            )
-            
-        # Procesamiento del batch
-        try:
-            processed = await _process_items(batch)
-            return processed
-        except HTTPServiceError as http_err:
-            # Capturar errores de llamadas a otros servicios
-            logger.error(f"Error en servicio externo: {http_err.message}", extra=http_err.context)
-            raise ServiceError(
-                message=f"Error en servicio externo: {http_err.message}",
-                error_code=http_err.error_code,
-                status_code=http_err.status_code,
-                context={**http_err.context, "batch_size": len(batch)}
-            )
-            
-    except DatabaseError as db_err:
-        # Los errores de DB ya tienen formato correcto, propagarlos directamente
-        logger.error(f"Error de base de datos: {db_err.message}", extra=db_err.context)
-        raise
-    except ServiceError as svc_err:
-        # Los errores de servicio ya tienen formato correcto, propagarlos directamente
-        logger.error(f"Error de servicio: {svc_err.message}", extra=svc_err.context)
-        raise
-    except Exception as e:
-        # Capturar errores inesperados y convertirlos al formato estándar
-        error_context = {
-            "batch_size": len(batch),
-            "tenant_id": get_current_tenant_id(),
-            "error_type": type(e).__name__,
-            "traceback": traceback.format_exc()
-        }
-        logger.error(f"Error inesperado procesando lote: {str(e)}", extra=error_context, exc_info=True)
-        raise ServiceError(
-            message="Error procesando lote",
-            error_code="INGESTION_ERROR",
-            status_code=500,
-            context=error_context
-        )
 
 # Inicializar la aplicación FastAPI
 app = FastAPI(

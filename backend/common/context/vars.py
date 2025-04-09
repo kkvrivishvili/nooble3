@@ -57,11 +57,52 @@ def get_required_tenant_id() -> str:
         str: ID del tenant
         
     Raises:
-        ValueError: Si no hay un tenant_id válido en el contexto
+        ServiceError: Si no hay un tenant_id válido en el contexto
     """
     tenant_id = get_current_tenant_id()
+    
+    # Usar la función validate_tenant_context para verificar de manera consistente
+    return validate_tenant_context(tenant_id)
+
+def validate_tenant_context(tenant_id: str) -> str:
+    """
+    Valida que el tenant_id del contexto sea válido y no sea el valor por defecto.
+    
+    Args:
+        tenant_id: ID del tenant a validar
+        
+    Returns:
+        str: El tenant_id validado
+        
+    Raises:
+        ServiceError: Si el tenant_id no es válido o es el valor por defecto
+    """
     if not tenant_id or tenant_id == "default":
-        raise ValueError("No tenant_id disponible en el contexto actual")
+        # Crear un contexto de error enriquecido siguiendo los estándares
+        error_context = {
+            "tenant_id": tenant_id,
+            "context": get_full_context(),
+            "service": "unknown"
+        }
+        
+        # Intentar obtener el nombre del servicio para enriquecer el contexto
+        try:
+            from ..config.settings import get_settings
+            settings = get_settings()
+            error_context["service"] = getattr(settings, "service_name", "unknown")
+        except (ImportError, AttributeError):
+            pass
+            
+        logger.error("Intento de acceso con tenant_id inválido o default", extra=error_context)
+        
+        from ..errors.exceptions import ServiceError, ErrorCode
+        raise ServiceError(
+            message="Se requiere un tenant válido para esta operación",
+            error_code=ErrorCode.TENANT_REQUIRED.value,
+            status_code=403,
+            context=error_context
+        )
+        
     return tenant_id
 
 def get_current_agent_id() -> Optional[str]:

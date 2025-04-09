@@ -241,7 +241,7 @@ async def stream_llm_response(
     })
     
     # 8. Registrar uso de tokens
-    from ..tracking.tokens import track_token_usage
+    from ..tracking import track_token_usage
     
     # Estimación básica de tokens
     input_tokens = len(final_prompt.split())
