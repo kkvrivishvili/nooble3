@@ -96,21 +96,6 @@ class Context:
         """
         self.__exit__(exc_type, exc_val, exc_tb)
 
-# Aliases para compatibilidad con código existente
-class TenantContext(Context):
-    """Alias para Context con solo tenant_id."""
-    def __init__(self, tenant_id: str):
-        super().__init__(tenant_id=tenant_id)
-
-class AgentContext(Context):
-    """Alias para Context con tenant_id y agent_id."""
-    def __init__(self, tenant_id: str, agent_id: Optional[str] = None):
-        super().__init__(tenant_id=tenant_id, agent_id=agent_id)
-
-class FullContext(Context):
-    """Alias para Context completo (para compatibilidad)."""
-    pass
-
 # === DECORADORES PARA FUNCIONES ASÍNCRONAS ===
 
 def with_context(
@@ -118,7 +103,7 @@ def with_context(
     agent: bool = False,
     conversation: bool = False,
     collection: bool = False
-):
+) -> Callable[[AsyncFunc], AsyncFunc]:
     """
     Decorador configurable para propagar el contexto a funciones asíncronas.
     
@@ -143,46 +128,25 @@ def with_context(
         ```
     """
     def decorator(func: AsyncFunc) -> AsyncFunc:
-        async def wrapper(*args, **kwargs):
-            # Capturar contexto actual según configuración
-            context = {}
-            if tenant:
-                context["tenant_id"] = get_current_tenant_id()
-            if agent:
-                context["agent_id"] = get_current_agent_id()
-            if conversation:
-                context["conversation_id"] = get_current_conversation_id()
-            if collection:
-                context["collection_id"] = get_current_collection_id()
+        async def wrapper(*args, **kwargs) -> Any:
+            # Extrae parámetros de contexto a propagar
+            context_params = {}
             
-            # Ejecutar con el mismo contexto
-            from .propagation import run_public_context
-            return await run_public_context(func(*args, **kwargs), **context)
-        
-        # Preservar metadatos para FastAPI
-        wrapper.__name__ = func.__name__
-        
-        if hasattr(func, "__annotations__"):
-            wrapper.__annotations__ = func.__annotations__
-        
-        # Preservar otros atributos que puede usar FastAPI
-        for attr in ["response_model", "responses", "status_code", "tags", "summary", "description"]:
-            if hasattr(func, attr):
-                setattr(wrapper, attr, getattr(func, attr))
-        
+            if tenant:
+                context_params["tenant_id"] = get_current_tenant_id()
+            if agent:
+                context_params["agent_id"] = get_current_agent_id()
+            if conversation:
+                context_params["conversation_id"] = get_current_conversation_id()
+            if collection:
+                context_params["collection_id"] = get_current_collection_id()
+            
+            # Ejecuta la función con el contexto
+            ctx = Context(**context_params)
+            async with ctx:
+                return await func(*args, **kwargs)
         return wrapper
-    
     return decorator
 
-# Decoradores específicos para compatibilidad
-def with_tenant_context(func: AsyncFunc) -> AsyncFunc:
-    """Compatibilidad: Decorador que solo propaga tenant_id."""
-    return with_context(tenant=True)(func)
-
-def with_agent_context(func: AsyncFunc) -> AsyncFunc:
-    """Compatibilidad: Decorador que propaga tenant_id y agent_id."""
-    return with_context(tenant=True, agent=True)(func)
-
-def with_full_context(func: AsyncFunc) -> AsyncFunc:
-    """Compatibilidad: Decorador que propaga todo el contexto."""
-    return with_context(tenant=True, agent=True, conversation=True, collection=True)(func)
+# Nota: Los decoradores específicos (with_tenant_context, with_agent_context, with_full_context)
+# han sido eliminados. Usar with_context con los parámetros correspondientes.

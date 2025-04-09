@@ -46,39 +46,11 @@ async def run_public_context(
     with Context(tenant_id, agent_id, conversation_id, collection_id):
         return await coro
 
-# Funciones de compatibilidad para código existente
-async def run_with_tenant(tenant_id: str, coro: Awaitable[T]) -> T:
-    """Compatibilidad: Ejecuta con solo tenant_id en contexto."""
-    return await run_public_context(coro, tenant_id=tenant_id)
-
-async def run_with_agent_context(
-    tenant_id: str, 
-    agent_id: Optional[str], 
-    collection_id: Optional[str] = None, 
-    coro: Optional[Awaitable[T]] = None
-) -> T:
-    """
-    Compatibilidad: Ejecuta con tenant_id, agent_id y opcionalmente collection_id.
-    
-    Nota: Mantiene el mismo comportamiento confuso que la versión original
-    donde collection_id podría ser en realidad la corrutina si no se especifica coro.
-    """
-    # Mantener compatibilidad con la sobrecarga de parámetros original
-    if coro is None and collection_id is not None and asyncio.iscoroutine(collection_id):
-        coro = collection_id  # type: ignore
-        collection_id = None
-    
-    return await run_public_context(coro, tenant_id, agent_id, collection_id=collection_id)
-
-async def run_with_full_context(
-    tenant_id: str, 
-    agent_id: Optional[str], 
-    conversation_id: Optional[str], 
-    collection_id: Optional[str], 
-    coro: Awaitable[T]
-) -> T:
-    """Compatibilidad: Ejecuta con todos los niveles de contexto."""
-    return await run_public_context(coro, tenant_id, agent_id, conversation_id, collection_id)
+# Nota: Las siguientes funciones de compatibilidad han sido eliminadas:
+# - run_with_tenant
+# - run_with_agent_context
+# - run_with_full_context
+# Usar run_public_context con los parámetros correspondientes.
 
 # === UTILIDADES DE PROPAGACIÓN PARA HTTP HEADERS ===
 

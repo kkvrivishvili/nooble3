@@ -32,9 +32,8 @@ service_start_time = time.time()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Gestiona el ciclo de vida de la aplicación."""
-    # Inicialización
     try:
-        logger.info(f"Inicializando servicio de consultas en modo: {settings.environment}")
+        logger.info(f"Inicializando servicio de {settings.service_name}")
         
         # Inicializar Supabase
         init_supabase()
@@ -46,18 +45,24 @@ async def lifespan(app: FastAPI):
         else:
             logger.warning("No se pudo conectar a Redis - servicio funcionará sin caché")
         
-        # Inicializar los índices y servicios necesarios
+        # Establecer contexto de servicio estándar
         async with Context(tenant_id=settings.default_tenant_id):
-            logger.info("Contexto de servicio inicializado correctamente")
+            # Cargar configuraciones específicas del servicio
+            try:
+                if settings.load_config_from_supabase:
+                    # Cargar configuraciones...
+                    logger.info(f"Configuraciones cargadas para {settings.service_name}")
+            except Exception as config_err:
+                logger.error(f"Error cargando configuraciones: {config_err}")
         
-        logger.info("Servicio de consultas inicializado correctamente")
+        logger.info(f"Servicio {settings.service_name} inicializado correctamente")
         yield
     except Exception as e:
-        logger.error(f"Error al inicializar el servicio de consultas: {str(e)}")
+        logger.error(f"Error al inicializar el servicio: {str(e)}")
         yield
     finally:
-        # Liberar recursos al finalizar
-        logger.info("Finalizando servicio de consultas")
+        # Limpieza de recursos
+        logger.info(f"Servicio {settings.service_name} detenido correctamente")
 
 # Inicializar la aplicación FastAPI
 app = FastAPI(

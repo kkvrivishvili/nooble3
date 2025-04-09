@@ -59,7 +59,8 @@ async def query_collection(
     
     # Validar acceso al modelo LLM
     if request.llm_model:
-        request.llm_model = validate_model_access(tenant_info, request.llm_model, "llm")
+        # Capturar el modelo validado y asignarlo
+        request.llm_model = await validate_model_access(tenant_info, request.llm_model, "llm")
     
     # Obtener tiempo de inicio para medición de rendimiento
     start_time = time.time()

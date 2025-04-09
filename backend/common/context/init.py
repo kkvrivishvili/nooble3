@@ -13,13 +13,12 @@ from .vars import (
 )
 
 from .decorators import (
-    Context, ContextTokens, TenantContext, AgentContext, FullContext,
-    with_context, with_tenant_context, with_agent_context, with_full_context
+    Context, ContextTokens, with_context
 )
 
 from .propagation import (
     extract_context_from_headers, add_context_to_headers, setup_context_from_headers,
-    run_public_context, run_with_tenant, run_with_agent_context, run_with_full_context
+    run_public_context
 )
 
 from .memory import ContextManager
@@ -36,14 +35,14 @@ __all__ = [
     'set_current_conversation_id', 'set_current_collection_id', 'reset_context',
     
     # Clases y administradores de contexto
-    'Context', 'ContextTokens', 'TenantContext', 'AgentContext', 'FullContext',
+    'Context', 'ContextTokens',
     
     # Decoradores
-    'with_context', 'with_tenant_context', 'with_agent_context', 'with_full_context',
+    'with_context',
     
     # Propagación
     'extract_context_from_headers', 'add_context_to_headers', 'setup_context_from_headers',
-    'run_public_context', 'run_with_tenant', 'run_with_agent_context', 'run_with_full_context',
+    'run_public_context',
     
     # Gestión de memoria y contexto
     'ContextManager',

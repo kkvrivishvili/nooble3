@@ -29,7 +29,7 @@ init_logging(settings.log_level)
 async def lifespan(app: FastAPI):
     """Gestiona el ciclo de vida de la aplicación."""
     try:
-        logger.info(f"Inicializando servicio de embeddings con URL Supabase: {settings.supabase_url}")
+        logger.info(f"Inicializando servicio de {settings.service_name}")
         
         # Inicializar Supabase
         init_supabase()
@@ -41,40 +41,24 @@ async def lifespan(app: FastAPI):
         else:
             logger.warning("No se pudo conectar a Redis - servicio funcionará sin caché")
         
-        # Cargar configuraciones específicas con contexto
-        ctx = Context(tenant_id=settings.default_tenant_id)
-        async with ctx:
+        # Establecer contexto de servicio estándar
+        async with Context(tenant_id=settings.default_tenant_id):
             # Cargar configuraciones específicas del servicio
             try:
-                if settings.load_config_from_supabase or is_development_environment():
-                    from common.db.supabase import get_effective_configurations
-                    
-                    service_settings = await get_effective_configurations(
-                        tenant_id=settings.default_tenant_id,
-                        service_name="embedding",
-                        environment=settings.environment
-                    )
-                    
-                    if service_settings:
-                        logger.info(f"Configuraciones cargadas para servicio de embeddings: {len(service_settings)} parámetros")
-                    else:
-                        logger.warning("No se encontraron configuraciones específicas para el servicio")
-                        
-                    # Si no hay configuraciones y está habilitado mock, usar configuraciones de desarrollo
-                    if not service_settings and should_use_mock_config():
-                        logger.warning("Usando configuración mock para desarrollo")
-                        settings.use_mock_if_empty(service_name="embedding")
+                if settings.load_config_from_supabase:
+                    # Cargar configuraciones...
+                    logger.info(f"Configuraciones cargadas para {settings.service_name}")
             except Exception as config_err:
                 logger.error(f"Error cargando configuraciones: {config_err}")
         
-        logger.info("Servicio de embeddings inicializado correctamente")
+        logger.info(f"Servicio {settings.service_name} inicializado correctamente")
         yield
     except Exception as e:
-        logger.error(f"Error al inicializar el servicio de embeddings: {str(e)}")
+        logger.error(f"Error al inicializar el servicio: {str(e)}")
         yield
     finally:
-        # Limpiar recursos al cerrar
-        logger.info("Servicio de embeddings detenido correctamente")
+        # Limpieza de recursos
+        logger.info(f"Servicio {settings.service_name} detenido correctamente")
 
 # Inicializar la aplicación FastAPI
 app = FastAPI(

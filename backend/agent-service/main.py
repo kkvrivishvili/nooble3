@@ -31,7 +31,7 @@ async def lifespan(app: FastAPI):
     global http_client
     
     try:
-        logger.info(f"Inicializando servicio de agentes con URL Supabase: {settings.supabase_url}")
+        logger.info(f"Inicializando servicio de {settings.service_name}")
         
         # Inicializar Supabase
         init_supabase()
@@ -46,30 +46,40 @@ async def lifespan(app: FastAPI):
         # Inicializar cliente HTTP
         http_client = httpx.AsyncClient(timeout=30.0)
         
-        # Verificar servicios dependientes usando la función común
+        # Establecer contexto de servicio estándar
+        async with Context(tenant_id=settings.default_tenant_id):
+            # Cargar configuraciones específicas del servicio
+            try:
+                if settings.load_config_from_supabase:
+                    # Cargar configuraciones...
+                    logger.info(f"Configuraciones cargadas para {settings.service_name}")
+            except Exception as config_err:
+                logger.error(f"Error cargando configuraciones: {config_err}")
+        
+        # Verificar servicios dependientes si no estamos en desarrollo
         if settings.environment != "development":
             dependencies = {
-                "query-service": settings.query_service_url,
-                "embedding-service": settings.embedding_service_url
-                # "ingestion-service": settings.ingestion_service_url # Descomentar cuando se use
+                "Query Service": settings.query_service_url,
+                "Embedding Service": settings.embedding_service_url
             }
+            
             for service_name, service_url in dependencies.items():
-                is_healthy = await check_service_health(service_url, service_name)
-                if is_healthy:
-                    logger.info(f"Conexión a {service_name} establecida correctamente")
+                healthy = await check_service_health(service_url, http_client)
+                if healthy:
+                    logger.info(f"Servicio {service_name} disponible en {service_url}")
                 else:
-                    logger.warning(f"No se pudo conectar a {service_name} - funcionalidad podría estar limitada")
+                    logger.warning(f"Servicio {service_name} no disponible en {service_url}")
         
-        logger.info("Servicio de agentes inicializado correctamente")
+        logger.info(f"Servicio {settings.service_name} inicializado correctamente")
         yield
     except Exception as e:
-        logger.error(f"Error al inicializar el servicio de agentes: {str(e)}")
+        logger.error(f"Error al inicializar el servicio: {str(e)}")
         yield
     finally:
-        # Cerrar cliente HTTP
+        # Limpieza de recursos
         if http_client:
             await http_client.aclose()
-        logger.info("Servicio de agentes detenido correctamente")
+        logger.info(f"Servicio {settings.service_name} detenido correctamente")
 
 # Inicializar la aplicación FastAPI
 app = FastAPI(

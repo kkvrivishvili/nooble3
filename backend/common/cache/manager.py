@@ -13,6 +13,10 @@ logger = logging.getLogger(__name__)
 _memory_cache: Dict[str, Any] = {}
 _memory_expiry: Dict[str, float] = {}
 
+# Configuración de límites de caché en memoria
+MEMORY_CACHE_MAX_SIZE = 1000  # Número máximo de entradas
+MEMORY_CACHE_CLEANUP_PERCENT = 0.2  # Porcentaje de entradas a eliminar (20%)
+
 class CacheManager:
     """
     Sistema de caché unificado para la plataforma Linktree AI.
@@ -173,8 +177,7 @@ class CacheManager:
                     # Guardar en memoria para futuras consultas
                     if use_memory:
                         memory_key = search_keys[0]  # La clave más específica
-                        _memory_cache[memory_key] = result
-                        _memory_expiry[memory_key] = time.time() + 300  # 5 minutos
+                        CacheManager._add_to_memory_cache(memory_key, result)
                         
                     return result
             except Exception as e:
@@ -240,14 +243,37 @@ class CacheManager:
                 
             # Guardar en memoria para acceso rápido
             if use_memory:
-                _memory_cache[key] = value
-                _memory_expiry[key] = time.time() + min(300, ttl)  # 5 minutos o menos
+                CacheManager._add_to_memory_cache(key, value)
                 
             return True
         except Exception as e:
             logger.warning(f"Error al guardar en Redis con clave {key}: {e}")
             return False
             
+    @staticmethod
+    def _add_to_memory_cache(key: str, value: Any) -> None:
+        """
+        Agrega un valor a la caché en memoria, eliminando entradas antiguas si es necesario.
+        """
+        if key in _memory_cache:
+            del _memory_cache[key]
+        if key in _memory_expiry:
+            del _memory_expiry[key]
+        
+        _memory_cache[key] = value
+        _memory_expiry[key] = time.time() + min(300, 3600)  # 5 minutos o menos
+        
+        # Eliminar entradas antiguas si se supera el límite
+        if len(_memory_cache) > MEMORY_CACHE_MAX_SIZE:
+            num_to_delete = int(MEMORY_CACHE_CLEANUP_PERCENT * len(_memory_cache))
+            oldest_keys = sorted(_memory_expiry, key=_memory_expiry.get)[:num_to_delete]
+            
+            for key in oldest_keys:
+                if key in _memory_cache:
+                    del _memory_cache[key]
+                if key in _memory_expiry:
+                    del _memory_expiry[key]
+                    
     @staticmethod
     async def delete(
         data_type: str,
