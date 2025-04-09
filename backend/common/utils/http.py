@@ -1,19 +1,37 @@
 """
 Funciones para comunicación HTTP entre servicios.
+
+Este módulo proporciona funcionalidad estandarizada para la comunicación
+entre los diferentes microservicios del backend, garantizando:
+- Propagación de contexto (tenant, agent, conversation, collection)
+- Reintentos automáticos con backoff
+- Timeouts adaptados al tipo de operación
+- Formato de respuesta estandarizado
+- Integración opcional con el sistema de caché
 """
 
 import logging
 import asyncio
 import time
-from typing import Dict, Any, Optional
+import json
+from typing import Dict, Any, Optional, List, Union
 
 import httpx
 
-from ..context.vars import get_current_tenant_id, get_current_agent_id, get_current_conversation_id
+from ..context.vars import (
+    get_current_tenant_id, 
+    get_current_agent_id, 
+    get_current_conversation_id,
+    get_current_collection_id
+)
 from ..context.propagation import add_context_to_headers, Context
 from ..errors.exceptions import ServiceError
+from ..cache.manager import CacheManager
 
 logger = logging.getLogger(__name__)
+
+# Constantes para comunicación entre servicios
+SERVICE_RESPONSE_FIELDS = ["success", "message", "data", "metadata", "error"]
 
 def get_timeout_for_operation(operation_type: str) -> float:
     """
@@ -34,91 +52,77 @@ def get_timeout_for_operation(operation_type: str) -> float:
     }
     return timeouts.get(operation_type, timeouts["default"])
 
-async def prepare_service_request(
-    url: str, 
-    data: Dict[str, Any], 
-    tenant_id: Optional[str] = None,
-    agent_id: Optional[str] = None,
-    conversation_id: Optional[str] = None,
-    collection_id: Optional[str] = None,
-    operation_type: str = "default"
-) -> Dict[str, Any]:
+def standardize_response(response_data: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Prepara una solicitud HTTP entre servicios con el contexto completo.
+    Estandariza el formato de respuesta para asegurar consistencia.
     
     Args:
-        url: URL del servicio
-        data: Datos a enviar
-        tenant_id: ID del tenant (opcional, usa el contexto actual si no se especifica)
-        agent_id: ID del agente (opcional, usa el contexto actual si no se especifica)
-        conversation_id: ID de la conversación (opcional, usa el contexto actual si no se especifica)
-        collection_id: ID de la colección (opcional, usa el contexto actual si no se especifica)
-        operation_type: Tipo de operación para determinar el timeout
+        response_data: Datos de respuesta del servicio
         
     Returns:
-        Dict con los datos de la respuesta
+        Dict: Respuesta en formato estándar
     """
-    # Obtener valores del contexto actual si no se proporcionan explícitamente
-    tenant_id = tenant_id or get_current_tenant_id()
-    agent_id = agent_id or get_current_agent_id()
-    conversation_id = conversation_id or get_current_conversation_id()
+    # Si ya tiene el formato estándar, retornar sin cambios
+    if all(field in response_data for field in ["success", "message"]):
+        return response_data
     
-    # Asegurar que tenant_id esté incluido en los datos
-    if "tenant_id" not in data and tenant_id:
-        data["tenant_id"] = tenant_id
+    # Convertir a formato estándar
+    result = {
+        "success": True,  # Asumimos éxito si llegamos aquí
+        "message": "Operación completada correctamente",
+        "data": response_data,
+        "metadata": {}
+    }
     
-    # Añadir reintentos y timeout variable
-    max_retries = 3
-    base_timeout = get_timeout_for_operation(operation_type)
-    retry_count = 0
+    # Si la respuesta original ya tenía algunos campos estándar, preservarlos
+    for field in SERVICE_RESPONSE_FIELDS:
+        if field in response_data and field != "data":
+            result[field] = response_data[field]
+            if field == "data":
+                # Evitar anidamiento excesivo de 'data'
+                continue
     
-    # Crear headers con el contexto actual
-    headers = {}
-    headers = add_context_to_headers(headers)
-    
-    while retry_count < max_retries:
-        try:
-            timeout = base_timeout * (retry_count + 1)
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                logger.debug(f"Enviando solicitud a {url} con contexto: {headers}")
-                
-                response = await client.post(url, json=data, headers=headers)
-                
-                # Verificar respuesta
-                if response.status_code != 200:
-                    logger.error(f"Error en solicitud a {url}: {response.status_code} - {response.text}")
-                    retry_count += 1
-                    if retry_count >= max_retries:
-                        raise ServiceError(f"Error en solicitud: {response.status_code} - {response.text}")
-                    logger.warning(f"Reintentando solicitud ({retry_count}/{max_retries})...")
-                    await asyncio.sleep(1.0 * retry_count)  # Backoff lineal
-                    continue
-                    
-                return response.json()
-        except httpx.HTTPError as e:
-            logger.error(f"Error HTTP en solicitud a {url}: {str(e)}")
-            retry_count += 1
-            if retry_count >= max_retries:
-                raise ServiceError(f"Error de conexión: {str(e)}")
-            logger.warning(f"Reintentando solicitud ({retry_count}/{max_retries})...")
-            await asyncio.sleep(1.0 * retry_count)
-        except Exception as e:
-            logger.error(f"Error al enviar solicitud a {url}: {str(e)}")
-            raise ServiceError(f"Error en solicitud: {str(e)}")
+    return result
 
+def create_error_response(error_message: str, error_details: Any = None) -> Dict[str, Any]:
+    """
+    Crea una respuesta de error en formato estándar.
+    
+    Args:
+        error_message: Mensaje descriptivo del error
+        error_details: Detalles adicionales del error (opcional)
+        
+    Returns:
+        Dict: Respuesta de error en formato estándar
+    """
+    return {
+        "success": False,
+        "message": error_message,
+        "data": None,
+        "metadata": {},
+        "error": {
+            "message": error_message,
+            "details": error_details,
+            "timestamp": time.time()
+        }
+    }
 
-async def call_service_with_context(
+async def call_service(
     url: str,
     data: Dict[str, Any],
     tenant_id: Optional[str] = None,
     agent_id: Optional[str] = None,
     conversation_id: Optional[str] = None,
     collection_id: Optional[str] = None,
-    timeout: Optional[float] = None,
-    operation_type: str = "default"
+    operation_type: str = "default",
+    headers: Optional[Dict[str, str]] = None,
+    max_retries: int = 3,
+    custom_timeout: Optional[float] = None,
+    use_cache: bool = False,
+    cache_ttl: Optional[int] = None
 ) -> Dict[str, Any]:
     """
-    Llama a otro servicio preservando el contexto actual de ejecución.
+    Función unificada para la comunicación entre servicios.
     
     Args:
         url: URL del servicio a llamar
@@ -127,47 +131,109 @@ async def call_service_with_context(
         agent_id: ID del agente (opcional, usa el contexto actual si no se especifica)
         conversation_id: ID de la conversación (opcional, usa el contexto actual si no se especifica)
         collection_id: ID de la colección (opcional, usa el contexto actual si no se especifica)
-        timeout: Timeout personalizado (opcional)
-        operation_type: Tipo de operación para determinar timeout automático
+        operation_type: Tipo de operación para determinar timeout
+        headers: Headers HTTP adicionales
+        max_retries: Número máximo de reintentos
+        custom_timeout: Timeout personalizado (opcional)
+        use_cache: Si se debe utilizar caché para esta llamada
+        cache_ttl: Tiempo de vida en segundos para la caché (si use_cache=True)
         
     Returns:
-        Dict: Respuesta del servicio
+        Dict: Respuesta del servicio en formato estándar
     """
-    # Usar el contexto actual si no se proporcionan parámetros específicos
+    # Usar contexto actual si no se proporcionan parámetros específicos
     tenant_id = tenant_id or get_current_tenant_id()
     agent_id = agent_id or get_current_agent_id()
     conversation_id = conversation_id or get_current_conversation_id()
+    collection_id = collection_id or get_current_collection_id()
     
     # Determinar timeout adecuado
-    if timeout is None:
-        timeout = get_timeout_for_operation(operation_type)
+    timeout = custom_timeout or get_timeout_for_operation(operation_type)
     
-    # Crear el cliente HTTP con timeout adecuado
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        # Crear headers con el contexto completo
-        headers = {}
-        ctx = Context(tenant_id, agent_id, conversation_id, collection_id)
-        async with ctx:
-            headers = add_context_to_headers(headers)
+    # Crear headers con el contexto completo
+    request_headers = headers or {}
+    ctx = Context(tenant_id, agent_id, conversation_id, collection_id)
+    async with ctx:
+        request_headers = add_context_to_headers(request_headers)
+    
+    # Asegurar que tenant_id esté incluido en los datos
+    if "tenant_id" not in data and tenant_id:
+        data["tenant_id"] = tenant_id
+    
+    # Verificar caché si está habilitado
+    if use_cache and tenant_id:
+        cache_key = f"service_call:{url}:{json.dumps(data, sort_keys=True)}"
         
-        # Realizar la solicitud con reintentos
-        for attempt in range(3):
+        # Intentar obtener de caché
+        cached_result = await CacheManager.get(
+            data_type="service_call",
+            resource_id=cache_key,
+            tenant_id=tenant_id
+        )
+        
+        if cached_result:
+            logger.debug(f"Resultado obtenido de caché para llamada a {url}")
+            return cached_result
+    
+    # Realizar la solicitud con reintentos
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        for attempt in range(max_retries):
             try:
-                logger.debug(f"Llamando a servicio {url} con contexto: {headers}")
-                response = await client.post(url, json=data, headers=headers)
+                logger.debug(f"Llamando a servicio {url} (intento {attempt+1}/{max_retries})")
+                response = await client.post(url, json=data, headers=request_headers)
                 response.raise_for_status()
-                return response.json()
+                
+                # Convertir respuesta a formato estándar
+                result = standardize_response(response.json())
+                
+                # Guardar en caché si está habilitado
+                if use_cache and tenant_id and result["success"]:
+                    await CacheManager.set(
+                        data_type="service_call",
+                        resource_id=cache_key,
+                        value=result,
+                        tenant_id=tenant_id,
+                        ttl=cache_ttl or 300  # Default: 5 minutos
+                    )
+                
+                return result
+                
             except httpx.HTTPStatusError as e:
-                logger.warning(f"Error HTTP {e.response.status_code} llamando a {url} (intento {attempt+1}/3)")
-                if attempt == 2:  # Último intento
-                    raise ServiceError(f"Error llamando al servicio: {str(e)}")
+                logger.warning(f"Error HTTP {e.response.status_code} llamando a {url}")
+                
+                # Si tenemos una respuesta JSON, preservarla
+                error_details = None
+                try:
+                    error_details = e.response.json()
+                except:
+                    error_details = {"status_code": e.response.status_code, "text": e.response.text}
+                
+                if attempt == max_retries - 1:  # Último intento
+                    error_response = create_error_response(
+                        f"Error HTTP {e.response.status_code} llamando al servicio", 
+                        error_details
+                    )
+                    return error_response
+                
                 await asyncio.sleep(1 * (attempt + 1))  # Backoff lineal
+                
             except Exception as e:
                 logger.error(f"Error llamando a {url}: {str(e)}")
-                raise ServiceError(f"Error llamando al servicio: {str(e)}")
+                
+                if attempt == max_retries - 1:  # Último intento
+                    error_response = create_error_response(
+                        f"Error llamando al servicio: {str(e)}",
+                        {"error_type": e.__class__.__name__}
+                    )
+                    return error_response
+                
+                await asyncio.sleep(1 * (attempt + 1))  # Backoff lineal
 
-
-async def check_service_health(service_url: str, service_name: str, timeout: float = 5.0) -> bool:
+async def check_service_health(
+    service_url: str, 
+    service_name: str, 
+    timeout: float = 5.0
+) -> bool:
     """
     Verifica la disponibilidad de un servicio haciendo un GET a su endpoint /health.
     
@@ -180,19 +246,21 @@ async def check_service_health(service_url: str, service_name: str, timeout: flo
         bool: True si el servicio responde con 200 OK, False en caso contrario.
     """
     health_url = f"{service_url.rstrip('/')}/health"
+    
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.get(health_url)
-            is_healthy = response.status_code == 200
-            if not is_healthy:
-                logger.warning(f"Health check fallido para {service_name} en {health_url}: Status {response.status_code}")
-            return is_healthy
-    except httpx.TimeoutException:
-        logger.warning(f"Health check timeout para {service_name} en {health_url}")
-        return False
-    except httpx.RequestError as e:
-        logger.warning(f"Error de conexión en health check para {service_name} en {health_url}: {e.__class__.__name__}")
-        return False
+        async with httpx.AsyncClient() as client:
+            response = await client.get(health_url, timeout=timeout)
+            
+        if response.status_code == 200:
+            logger.info(f"Servicio {service_name} disponible en {health_url}")
+            return True
+        else:
+            logger.warning(
+                f"Servicio {service_name} respondió con status {response.status_code}"
+            )
+            return False
     except Exception as e:
-        logger.error(f"Error inesperado en health check para {service_name} en {health_url}: {str(e)}")
+        logger.error(f"Error verificando salud de {service_name}: {str(e)}")
         return False
+
+# Funciones heredadas eliminadas - todos los servicios deben usar call_service

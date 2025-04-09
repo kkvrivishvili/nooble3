@@ -93,14 +93,14 @@ async def stream_llm_response(
         # Este es un poco simplificado - debería llamar al servicio de query real
         # Aquí solo se muestra el concepto
         try:
-            from ..utils.http import call_service_with_context
+            from ..utils.http import call_service
             from ..config.settings import get_settings
             
             settings = get_settings()
             
             for collection_id in collection_ids:
                 # Llamar al servicio de Query para obtener datos relevantes
-                rag_data = await call_service_with_context(
+                response = await call_service(
                     url=f"{settings.query_service_url}/search",
                     data={
                         "tenant_id": tenant_id,
@@ -110,11 +110,17 @@ async def stream_llm_response(
                     },
                     tenant_id=tenant_id,
                     agent_id=agent_id,
-                    conversation_id=conversation_id
+                    conversation_id=conversation_id,
+                    collection_id=collection_id,
+                    operation_type="rag_query"
                 )
                 
-                if rag_data and "results" in rag_data:
-                    context_chunks.extend(rag_data["results"])
+                # Verificar éxito y extraer datos según el formato estandarizado
+                if response.get("success", False) and response.get("data", {}) is not None:
+                    # Extraer resultados del campo data de la respuesta estandarizada
+                    response_data = response.get("data", {})
+                    if "results" in response_data:
+                        context_chunks.extend(response_data["results"])
         except Exception as e:
             logger.error(f"Error consultando RAG: {str(e)}")
             # Continuar sin contexto si falla

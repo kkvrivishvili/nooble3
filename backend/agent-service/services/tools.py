@@ -3,61 +3,62 @@ Funciones para crear y gestionar herramientas para agentes LLM.
 """
 
 import logging
-import hashlib
-from typing import Dict, Any, List, Optional, Union
+from typing import Dict, Any, List, Optional, Callable
 
-from langchain.tools import Tool
+from fastapi import HTTPException
+from pydantic import BaseModel
 
-from common.config import get_settings
-from common.context import with_context, set_current_collection_id, get_current_conversation_id
-from common.utils.http import call_service_with_context
-from common.errors import ServiceError
-from common.cache.manager import CacheManager
+from common.settings import Settings
+from common.context import get_current_conversation_id
+from common.utils.http import call_service
 
+settings = Settings()
 logger = logging.getLogger(__name__)
-settings = get_settings()
 
-@with_context(tenant=True, agent=True, collection=True)
-async def create_rag_tool(tool_config: Dict[str, Any], tenant_id: str, agent_id: Optional[str] = None) -> Tool:
+async def create_rag_tool(tool_config: Dict[str, Any], tenant_id: str, agent_id: Optional[str] = None) -> Callable:
     """
     Crea una herramienta RAG que consulta una colección específica.
+    
+    Args:
+        tool_config: Configuración de la herramienta
+        tenant_id: ID del tenant
+        agent_id: ID del agente (opcional)
+        
+    Returns:
+        Callable: Función que puede ser usada como herramienta por un agente
     """
-    # Extraer configuración de la herramienta
-    tool_name = tool_config.get("name", "search_documents")
-    tool_description = tool_config.get("description", "Busca información en documentos para responder preguntas.")
-    metadata = tool_config.get("metadata", {})
+    collection_id = tool_config.get("collection_id")
+    collection_name = tool_config.get("collection_name", "Documentos")
+    description = tool_config.get("description", f"Busca información en {collection_name}")
+    similarity_top_k = tool_config.get("similarity_top_k", 4)
+    response_mode = tool_config.get("response_mode", "compact")
     
-    collection_id = metadata.get("collection_id")
-    collection_name = metadata.get("collection_name", "default")
-    similarity_top_k = metadata.get("similarity_top_k", 4)
-    response_mode = metadata.get("response_mode", "compact")
+    if not collection_id:
+        logger.error("No se puede crear herramienta RAG sin collection_id")
+        # Crear una función dummy que devuelve un mensaje de error
+        async def dummy_rag_tool(query: str) -> str:
+            return "Error: Herramienta mal configurada. Contacte al administrador."
+        return dummy_rag_tool
     
-    # Establecer ID de colección en el contexto si está disponible
-    if collection_id:
-        set_current_collection_id(str(collection_id))
+    logger.info(f"Creando herramienta RAG para collection_id={collection_id}")
     
-    async def query_tool(query: str) -> str:
-        """Herramienta para consultar documentos usando RAG."""
-        logger.info(f"RAG consulta: {query}")
+    # Definición de la función de herramienta
+    async def rag_query_tool(query: str) -> str:
+        """
+        Consulta documentos relevantes y genera una respuesta basada en ellos.
         
-        # Verificar caché para esta consulta específica
-        cached_result = await CacheManager.get_rag_result(
-            query=query,
-            tenant_id=tenant_id,
-            agent_id=agent_id,
-            collection_id=collection_id,
-            similarity_top_k=similarity_top_k,
-            response_mode=response_mode
-        )
-        
-        if cached_result:
-            logger.info(f"Resultado RAG obtenido de caché para consulta: {query[:30]}...")
-            return cached_result
+        Args:
+            query: Consulta del usuario
+            
+        Returns:
+            str: Respuesta basada en los documentos relevantes
+        """
+        logger.debug(f"Ejecutando consulta RAG: '{query}' en collection={collection_id}")
         
         try:
             # Usar el endpoint interno del Query Service
             # Usar timeout extendido para consultas RAG
-            response = await call_service_with_context(
+            response = await call_service(
                 url=f"{settings.query_service_url}/internal/query",
                 data={
                     "tenant_id": tenant_id,
@@ -76,65 +77,65 @@ async def create_rag_tool(tool_config: Dict[str, Any], tenant_id: str, agent_id:
                 operation_type="rag_query"  # Usar tipo de operación para timeout adaptado
             )
             
-            # Preparar respuesta
+            # Verificar éxito de la operación
             if not response.get("success", False):
                 error_msg = response.get("message", "Error desconocido en consulta RAG")
                 logger.error(f"Error en consulta RAG: {error_msg}")
                 return f"Error consultando documentos: {error_msg}"
             
-            rag_response = response.get("response", "")
-            sources = response.get("sources", [])
+            # Extraer datos de la respuesta estandarizada
+            response_data = response.get("data", {})
+            rag_response = response_data.get("response", "")
+            sources = response_data.get("sources", [])
             
             # Formatear fuentes si están disponibles
             if sources:
                 rag_response += "\n\nFuentes:"
                 for i, source in enumerate(sources, 1):
-                    source_text = source.get("text", "")
-                    source_metadata = source.get("metadata", {})
-                    source_name = source_metadata.get("source") or source_metadata.get("filename", f"Fuente {i}")
-                    rag_response += f"\n[{i}] {source_name}: {source_text[:200]}..."
-            
-            # Cachear el resultado formateado
-            await CacheManager.set_rag_result(
-                query=query,
-                result=rag_response,
-                tenant_id=tenant_id,
-                agent_id=agent_id,
-                collection_id=collection_id,
-                similarity_top_k=similarity_top_k,
-                response_mode=response_mode,
-                ttl=1800
-            )
+                    metadata = source.get("metadata", {})
+                    title = metadata.get("title", "Documento sin título")
+                    url = metadata.get("url", "")
+                    file_path = metadata.get("file_path", "")
+                    
+                    source_ref = f"\n{i}. {title}"
+                    if url:
+                        source_ref += f" - {url}"
+                    elif file_path:
+                        source_ref += f" - {file_path}"
+                    
+                    rag_response += source_ref
             
             return rag_response
-                
+            
         except Exception as e:
-            logger.error(f"Error ejecutando herramienta RAG: {str(e)}", exc_info=True)
+            logger.exception(f"Error ejecutando herramienta RAG: {str(e)}")
             return f"Error consultando documentos: {str(e)}"
     
-    # Crear herramienta LangChain con la función RAG
-    return Tool(
-        name=tool_name,
-        description=tool_description,
-        func=query_tool
-    )
+    # Añadir metadatos a la función
+    rag_query_tool.__name__ = f"search_{collection_id}"
+    rag_query_tool.__description__ = description
+    
+    return rag_query_tool
 
 # Solo implementamos las funciones para colecciones si Query Service está disponible
 async def get_available_collections(tenant_id: str) -> List[Dict[str, Any]]:
     """Obtiene las colecciones disponibles para un tenant."""
     try:
-        response = await call_service_with_context(
+        response = await call_service(
             url=f"{settings.query_service_url}/collections",
             data={},
             tenant_id=tenant_id,
             operation_type="health_check"  # Uso de timeout corto para consulta rápida
         )
         
+        # Verificar éxito de la operación
         if not response.get("success", False):
             logger.warning(f"Error obteniendo colecciones: {response.get('message')}")
             return []
         
-        return response.get("collections", [])
+        # Extraer datos de la respuesta estandarizada
+        response_data = response.get("data", {})
+        return response_data.get("collections", [])
     except Exception as e:
         logger.warning(f"Error obteniendo colecciones: {str(e)}")
         return []

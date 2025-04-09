@@ -255,28 +255,19 @@ class ContextManager:
             List[Dict[str, Any]]: Contexto encontrado
         """
         if not self._collections:
-            # Intentar cargar colecciones
-            await self.get_agent_config()
-            
-            memory = await self.memory
-            if memory:
-                collections = await memory.get_collections()
-                self._collections.update(collections)
-        
-        if not self._collections:
             return []
         
         results = []
         try:
-            from ..utils.http import call_service_with_context
+            from ..utils.http import call_service
             from ..config.settings import get_settings
             
             settings = get_settings()
             
             for collection_id in self._collections:
-                # Llamar al servicio de query
-                response = await call_service_with_context(
-                    url=f"{settings.query_service_url}/api/search",
+                # Llamar al servicio de query con la nueva función estandarizada
+                response = await call_service(
+                    url=f"{settings.query_service_url}/internal/search",
                     data={
                         "tenant_id": self.tenant_id,
                         "query": query,
@@ -285,11 +276,18 @@ class ContextManager:
                     },
                     tenant_id=self.tenant_id,
                     agent_id=self.agent_id,
-                    conversation_id=self.conversation_id
+                    conversation_id=self.conversation_id,
+                    collection_id=collection_id,
+                    operation_type="rag_search",
+                    use_cache=True,  # Aprovechar caché para consultas recientes
+                    cache_ttl=1800  # 30 minutos de TTL para resultados RAG
                 )
                 
-                if response and "results" in response:
-                    results.extend(response["results"])
+                # Verificar éxito y extraer datos según el formato estandarizado
+                if response.get("success", False) and response.get("data") is not None:
+                    response_data = response.get("data", {})
+                    if "results" in response_data:
+                        results.extend(response_data["results"])
         except Exception as e:
             logger.error(f"Error obteniendo contexto RAG: {str(e)}")
         

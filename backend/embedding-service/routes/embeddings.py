@@ -240,26 +240,61 @@ async def internal_embed(
     
     Este endpoint está optimizado para alta eficiencia y bajo overhead, generando
     embeddings para textos sin validaciones complejas de permisos de usuario.
+    
+    Returns:
+        Dict con formato estandarizado:
+        {
+            "success": bool,           # Éxito/fallo de la operación
+            "message": str,            # Mensaje descriptivo
+            "data": Any,               # Datos principales (embeddings)
+            "metadata": Dict[str, Any] # Metadatos adicionales
+            "error": Dict[str, Any]    # Presente solo en caso de error
+        }
     """
-    # Crear tenant_info mínimo para validación interna
-    tenant_info = TenantInfo(tenant_id=tenant_id, subscription_tier="business")
-    
-    # Validar el modelo solicitado - CORREGIDO: Usar el modelo validado
-    model_name = model or settings.default_embedding_model
-    validated_model = await validate_model_access(tenant_info, model_name, "embedding")
-    model_name = validated_model  # Asignar el modelo validado
-    
-    # Crear proveedor de embeddings
-    embedding_provider = CachedEmbeddingProvider(model_name=model_name, tenant_id=tenant_id)
-    
-    # Generar embeddings
-    embeddings = await embedding_provider.get_batch_embeddings(texts)
-    
-    # No hacemos tracking en llamadas internas para evitar doble conteo
-    # ya que el servicio que llama hará su propio tracking
-    
-    return {
-        "success": True,
-        "embeddings": embeddings,
-        "model": model_name
-    }
+    try:
+        # Crear tenant_info mínimo para validación interna
+        tenant_info = TenantInfo(tenant_id=tenant_id, subscription_tier="business")
+        
+        # Validar el modelo solicitado - CORREGIDO: Usar el modelo validado
+        model_name = model or settings.default_embedding_model
+        validated_model = await validate_model_access(tenant_info, model_name, "embedding")
+        model_name = validated_model  # Asignar el modelo validado
+        
+        # Crear proveedor de embeddings
+        embedding_provider = CachedEmbeddingProvider(model_name=model_name, tenant_id=tenant_id)
+        
+        # Generar embeddings
+        embeddings = await embedding_provider.get_batch_embeddings(texts)
+        
+        # No hacemos tracking en llamadas internas para evitar doble conteo
+        # ya que el servicio que llama hará su propio tracking
+        
+        return {
+            "success": True,
+            "message": "Embeddings generados correctamente",
+            "data": {
+                "embeddings": embeddings,
+                "model": model_name
+            },
+            "metadata": {
+                "count": len(texts),
+                "model_used": model_name,
+                "timestamp": time.time()
+            }
+        }
+    except Exception as e:
+        logger.exception(f"Error generando embeddings internos: {str(e)}")
+        return {
+            "success": False,
+            "message": f"Error al generar embeddings: {str(e)}",
+            "data": None,
+            "metadata": {},
+            "error": {
+                "message": str(e),
+                "details": {
+                    "error_type": e.__class__.__name__,
+                    "texts_count": len(texts) if texts else 0
+                },
+                "timestamp": time.time()
+            }
+        }

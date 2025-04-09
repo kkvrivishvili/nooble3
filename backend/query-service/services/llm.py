@@ -66,7 +66,7 @@ async def generate_embedding_via_service(text: str) -> Dict[str, Any]:
     """
     from common.context.vars import get_current_tenant_id, get_current_agent_id
     from common.context.vars import get_current_conversation_id
-    from common.utils.http import call_service_with_context
+    from common.utils.http import call_service
     
     settings = get_settings()
     tenant_id = get_current_tenant_id()
@@ -77,19 +77,39 @@ async def generate_embedding_via_service(text: str) -> Dict[str, Any]:
         # Preparar solicitud al servicio de embeddings
         payload = {
             "model": settings.default_embedding_model,
-            "texts": [text]
+            "texts": [text],
+            "tenant_id": tenant_id
         }
         
-        # Realizar solicitud con contexto propagado
-        result = await call_service_with_context(
-            url=f"{settings.embedding_service_url}/embed",
+        # Realizar solicitud con contexto propagado y formato estandarizado
+        response = await call_service(
+            url=f"{settings.embedding_service_url}/internal/embed",
             data=payload,
             tenant_id=tenant_id,
             agent_id=agent_id,
-            conversation_id=conversation_id
+            conversation_id=conversation_id,
+            operation_type="embedding",
+            use_cache=True  # Aprovechar caché para embeddings repetidos
         )
         
-        return result
+        # Verificar éxito y extraer datos según el formato estandarizado
+        if not response.get("success", False):
+            error_msg = response.get("message", "Error desconocido generando embedding")
+            logger.error(f"Error en servicio de embeddings: {error_msg}")
+            return {"error": error_msg}
+        
+        # Extraer datos de la respuesta estandarizada
+        response_data = response.get("data", {})
+        embeddings = response_data.get("embeddings", [])
+        
+        # Retornar el primer embedding (si existe)
+        if embeddings and len(embeddings) > 0:
+            return {
+                "embedding": embeddings[0],
+                "model": response_data.get("model", settings.default_embedding_model)
+            }
+        else:
+            return {"error": "No se generó ningún embedding"}
     except Exception as e:
         logger.error(f"Error generando embedding: {str(e)}")
         return {"error": str(e)}
