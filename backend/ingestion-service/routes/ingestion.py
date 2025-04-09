@@ -23,6 +23,7 @@ from common.db.tables import get_table_name
 from services.document_processor import validate_file
 from services.queue import queue_document_processing_job
 from config import get_settings
+from backend.common.db.storage import upload_to_storage
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -39,7 +40,6 @@ class DocumentUploadMetadata(BaseModel):
 
 @router.post(
     "/upload",
-    response_model=FileUploadResponse,
     summary="Cargar documento",
     description="Carga un documento para procesamiento y generación de embeddings"
 )
@@ -47,95 +47,30 @@ class DocumentUploadMetadata(BaseModel):
 @with_context(tenant=True, collection=True)
 async def upload_document(
     file: UploadFile = File(...),
-    collection_id: str = Form(...),
-    title: Optional[str] = Form(None),
-    description: Optional[str] = Form(None),
-    tags: Optional[str] = Form(None),
-    tenant_info: TenantInfo = Depends(verify_tenant)
+    tenant_info: TenantInfo = Depends(verify_tenant),
+    collection_id: str = Form(...)
 ):
-    """
-    Carga un documento para su procesamiento y generación de embeddings.
+    """Endpoint simplificado que solo sube a Storage y encola"""
+    # 1. Validar archivo
+    file_info = await validate_file(file)
     
-    Args:
-        file: Archivo a procesar
-        collection_id: ID de la colección donde se almacenará
-        title: Título descriptivo del documento (opcional)
-        description: Descripción del documento (opcional)
-        tags: Tags separados por comas (opcional)
-        tenant_info: Información del tenant
-        
-    Returns:
-        FileUploadResponse: Resultado de la operación de carga
-    """
-    tenant_id = tenant_info.tenant_id
+    # 2. Subir a Supabase Storage
+    file_key = await upload_to_storage(
+        tenant_id=tenant_info.id,
+        collection_id=collection_id,
+        file_content=await file.read(),
+        file_name=file.filename
+    )
     
-    # Verificar cuotas del tenant
-    await check_tenant_quotas(tenant_info)
+    # 3. Encolar procesamiento
+    job_id = await queue_document_processing_job(
+        tenant_id=tenant_info.id,
+        collection_id=collection_id,
+        document_id=str(uuid.uuid4()),
+        file_key=file_key  # Referencia al archivo en Storage
+    )
     
-    try:
-        # Validar archivo
-        file_info = await validate_file(file, settings.max_file_size_mb)
-        
-        # Generar ID único para el documento
-        document_id = str(uuid.uuid4())
-        
-        # Convertir tags de string a lista si existen
-        tag_list = None
-        if tags:
-            tag_list = [tag.strip() for tag in tags.split(",") if tag.strip()]
-        
-        # Crear metadatos para el documento
-        document_metadata = {
-            "document_id": document_id,
-            "tenant_id": tenant_id,
-            "collection_id": collection_id,
-            "title": title or file.filename,
-            "description": description,
-            "file_name": file.filename,
-            "file_size": file_info["size"],
-            "file_type": file_info["type"],
-            "tags": tag_list,
-            "status": "pending",
-            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ")
-        }
-        
-        # Guardar metadatos en Supabase
-        supabase = get_supabase_client()
-        result = await supabase.table(get_table_name("documents")).insert(document_metadata).execute()
-        
-        if result.error:
-            raise ServiceError(
-                message=f"Error guardando metadatos del documento: {result.error}",
-                error_code="DOCUMENT_METADATA_ERROR"
-            )
-        
-        # Encolamos el trabajo de procesamiento
-        job_id = await queue_document_processing_job(
-            tenant_id=tenant_id,
-            document_id=document_id,
-            collection_id=collection_id,
-            file_content=await file.read(),
-            file_info=file_info
-        )
-        
-        return FileUploadResponse(
-            success=True,
-            message="Documento subido correctamente y encolado para procesamiento",
-            document_id=document_id,
-            collection_id=collection_id,
-            file_name=file.filename,
-            job_id=job_id,
-            status="pending"
-        )
-        
-    except Exception as e:
-        logger.error(f"Error al cargar documento: {str(e)}")
-        if isinstance(e, ServiceError):
-            raise e
-        raise DocumentProcessingError(
-            message=f"Error al procesar documento: {str(e)}",
-            details={"file_name": file.filename}
-        )
+    return {"job_id": job_id, "status": "queued"}
 
 class UrlIngestionRequest(BaseModel):
     url: str
@@ -376,7 +311,7 @@ async def batch_process_urls(
         # Generar ID único para el trabajo por lotes
         batch_id = str(uuid.uuid4())
         
-        # Crear trabalos individuales para cada URL
+        # Crear trabajos individuales para cada URL
         job_ids = []
         for i, url in enumerate(urls):
             # Título generado automáticamente si no se proporciona

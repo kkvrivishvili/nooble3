@@ -12,7 +12,7 @@ from common.errors import (
 )
 from common.utils.http import call_service
 from common.config import get_settings
-from common.cache.manager import CacheManager
+from common.cache import CacheManager
 
 logger = logging.getLogger(__name__)
 settings = get_settings()

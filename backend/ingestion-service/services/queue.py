@@ -14,7 +14,7 @@ from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
 
 from config import get_settings
-from services.document_processor import process_file, process_url, process_text
+from services.document_processor import process_file, process_url, process_text, process_file_from_storage
 from services.chunking import split_document_intelligently
 from services.embedding import process_and_store_chunks
 from services.storage import update_document_status, update_processing_job
@@ -157,7 +157,7 @@ async def queue_document_processing_job(
         )
         
         # Encolar el trabajo
-        await redis.lpush(INGESTION_QUEUE, job_id)
+        await redis.lpush(INGESTION_QUEUE, json.dumps(queue_data))
         
         # Establecer estado inicial
         await redis.set(
@@ -178,97 +178,160 @@ async def queue_document_processing_job(
             error_code="QUEUE_ERROR"
         )
 
-async def process_next_job() -> bool:
-    """Procesa el siguiente trabajo en la cola."""
+async def check_stuck_jobs():
+    """Verifica trabajos estancados y los marca como fallidos."""
     redis = await get_redis_client()
     if not redis:
-        return False
+        return
     
-    job_id = await redis.rpop(INGESTION_QUEUE)
-    if not job_id:
-        return False  # Cola vacía
-    
-    job_data_str = await redis.get(f"{JOB_PREFIX}{job_id}:data")
-    if not job_data_str:
-        return False
-    
+    # Obtener todos los trabajos en estado "processing"
     try:
-        job_data = json.loads(job_data_str)
+        supabase = get_supabase_client()
+        result = await supabase.table(get_table_name("processing_jobs")) \
+            .select("*") \
+            .eq("status", "processing") \
+            .execute()
         
-        # Extraer datos básicos
-        tenant_id = job_data.get("tenant_id")
-        document_id = job_data.get("document_id")
-        collection_id = job_data.get("collection_id")
+        if not result.data:
+            return
         
-        # Actualizar estado a "processing"
+        current_time = time.time()
+        max_processing_time = 3600  # 1 hora máximo
+        
+        for job in result.data:
+            job_id = job.get("job_id")
+            tenant_id = job.get("tenant_id")
+            document_id = job.get("document_id")
+            
+            # Verificar si el trabajo está estancado
+            job_data_str = await redis.get(f"{JOB_STATUS_PREFIX}{job_id}")
+            if not job_data_str:
+                # El trabajo no está en la cola, pero está en estado processing
+                if "updated_at" in job:
+                    updated_time = job.get("updated_at")
+                    # Convertir updated_at a timestamp si es string
+                    if isinstance(updated_time, str):
+                        from datetime import datetime
+                        try:
+                            dt = datetime.fromisoformat(updated_time.replace('Z', '+00:00'))
+                            updated_timestamp = dt.timestamp()
+                            
+                            if current_time - updated_timestamp > max_processing_time:
+                                # Trabajo estancado, marcarlo como fallido
+                                await update_processing_job(
+                                    job_id=job_id,
+                                    tenant_id=tenant_id,
+                                    status="failed",
+                                    error="Trabajo estancado - timeout excedido"
+                                )
+                                
+                                await update_document_status(
+                                    document_id=document_id,
+                                    tenant_id=tenant_id,
+                                    status="failed",
+                                    metadata={"error": "Procesamiento interrumpido por timeout"}
+                                )
+                        except Exception:
+                            pass
+    except Exception as e:
+        logger.error(f"Error verificando trabajos estancados: {str(e)}", exc_info=True)
+
+async def process_next_job_with_retry(max_retries: int = 3) -> bool:
+    """Procesa el siguiente trabajo con sistema de reintentos."""
+    for attempt in range(max_retries):
+        try:
+            return await process_next_job()
+        except Exception as e:
+            if attempt == max_retries - 1:
+                raise
+            logger.warning(f"Intento {attempt + 1} fallido, reintentando...")
+            await asyncio.sleep(2 ** attempt)  # Backoff exponencial
+    return False
+
+async def process_next_job() -> bool:
+    """Procesa el siguiente trabajo en la cola usando Supabase Storage"""
+    redis = await get_redis_client()
+    if not redis:
+        logger.error("Redis no disponible")
+        return False
+
+    job_data = await redis.lpop(INGESTION_QUEUE)
+    if not job_data:
+        return False
+
+    try:
+        job = json.loads(job_data)
+        job_id = job.get("job_id")
+        tenant_id = job.get("tenant_id")
+        document_id = job.get("document_id")
+        file_key = job.get("file_key")  # Nueva referencia a Supabase Storage
+
+        # Procesar usando el nuevo servicio unificado
+        processed_text = await process_file_from_storage(
+            tenant_id=tenant_id,
+            collection_id=job.get("collection_id"),
+            file_key=file_key
+        )
+
+        # Dividir en chunks y generar embeddings
+        chunks = split_document_intelligently(processed_text)
+        await process_and_store_chunks(
+            chunks=chunks,
+            document_id=document_id,
+            tenant_id=tenant_id,
+            metadata=job
+        )
+
+        # Actualizar estados
         await update_processing_job(
             job_id=job_id,
             tenant_id=tenant_id,
-            status="processing",
-            progress=10.0
+            status="completed"
         )
-        
+
+        await update_document_status(
+            document_id=document_id,
+            tenant_id=tenant_id,
+            status="processed",
+            metadata={"chunks_count": len(chunks)}
+        )
+
+        # Limpiar recursos
+        await redis.delete(
+            f"{JOB_PREFIX}{job_id}:file", 
+            f"{JOB_PREFIX}{job_id}:text",
+            f"{JOB_PREFIX}{job_id}:data"
+        )
+
+        return True
+
+    except Exception as e:
+        logger.error(f"Error procesando trabajo {job_id}: {str(e)}", exc_info=True)
+
+        error_message = str(e)
+
+        # Actualizar estado del trabajo a fallido
+        await update_processing_job(
+            job_id=job_id,
+            tenant_id=tenant_id,
+            status="failed",
+            error=error_message
+        )
+
         # Actualizar estado del documento
         await update_document_status(
             document_id=document_id,
             tenant_id=tenant_id,
-            status="processing"
+            status="failed",
+            metadata={"error": error_message}
         )
-        
-        # Procesar contenido según su tipo
-        content = None
-        if job_data.get("has_file"):
-            file_content = await redis.get(f"{JOB_PREFIX}{job_id}:file")
-            content = await process_file(
-                file_content=file_content,
-                file_type=job_data.get("file_type"),
-                metadata={"document_id": document_id}
-            )
-        elif job_data.get("has_text"):
-            text_content = await redis.get(f"{JOB_PREFIX}{job_id}:text")
-            content = text_content.decode('utf-8')
-        elif job_data.get("has_url"):
-            content = await process_url(job_data.get("url"))
-            
-        # Dividir en fragmentos
-        chunks = await split_document_intelligently(
-            text=content,
-            document_id=document_id,
-            metadata={
-                "tenant_id": tenant_id,
-                "collection_id": collection_id
-            }
-        )
-        
-        # Procesar y almacenar fragmentos con embeddings
-        processing_stats = await process_and_store_chunks(
-            chunks=chunks,
-            tenant_id=tenant_id,
-            collection_id=collection_id,
-            document_id=document_id
-        )
-        
-        # Actualizar estado a completado
-        await update_processing_job(
-            job_id=job_id,
-            tenant_id=tenant_id,
-            status="completed",
-            progress=100.0,
-            processing_stats=processing_stats
-        )
-        
-        await update_document_status(
-            document_id=document_id,
-            tenant_id=tenant_id,
-            status="completed"
-        )
-        
+
         # Limpiar recursos
-        await redis.delete(f"{JOB_PREFIX}{job_id}:file", f"{JOB_PREFIX}{job_id}:text")
-        
-        return True
-    
-    except Exception as e:
-        # Manejar error y actualizar estado
-        # [implementación detallada aquí]
+        if redis:
+            await redis.delete(
+                f"{JOB_PREFIX}{job_id}:file", 
+                f"{JOB_PREFIX}{job_id}:text",
+                f"{JOB_PREFIX}{job_id}:data"
+            )
+
         return False

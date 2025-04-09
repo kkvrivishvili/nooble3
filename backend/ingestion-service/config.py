@@ -6,62 +6,59 @@ import os
 from typing import Dict, Any, Optional, List
 
 from common.config import get_settings as get_common_settings
-from common.context import get_current_tenant_id
+
+class IngestionConfig:
+    """
+    Configuración centralizada para el servicio de ingesta.
+    """
+    def __init__(self):
+        # Configuración base
+        self.service_name = "ingestion-service"
+        self.service_version = os.getenv("SERVICE_VERSION", "1.0.0")
+        
+        # Límites de archivos
+        self.max_file_size_mb = int(os.getenv("MAX_FILE_SIZE_MB", "50"))
+        self.supported_file_types = [
+            "pdf", "txt", "docx", "csv", "xlsx", "md", "html", "pptx"
+        ]
+        
+        # Procesamiento paralelo
+        self.max_workers = int(os.getenv("MAX_WORKERS", "3"))
+        self.job_timeout_seconds = int(os.getenv("JOB_TIMEOUT_SECONDS", "3600"))
+        
+        # Manejo de errores
+        self.max_retries = int(os.getenv("MAX_RETRIES", "3"))
+        self.retry_backoff_base = float(os.getenv("RETRY_BACKOFF_BASE", "2.0"))
+        
+        # Almacenamiento
+        self.storage_path = os.getenv("STORAGE_PATH", "documents")
+        
+        # Chunking
+        self.chunk_size = int(os.getenv("CHUNK_SIZE", "1000"))
+        self.chunk_overlap = int(os.getenv("CHUNK_OVERLAP", "200"))
+        
+        # Cola
+        self.queue_ttl = int(os.getenv("QUEUE_TTL", "3600"))  # 1 hora
+
+# Instancia global de configuración
+ingestion_config = IngestionConfig()
 
 def get_settings():
     """
-    Obtiene la configuración específica para el servicio de ingesta.
-    
-    Esta función extiende get_settings() de common con configuraciones
-    específicas del servicio de ingesta.
-    
-    Returns:
-        Settings: Configuración combinada
+    Obtiene configuración combinada (common + ingestion).
+    Mantenido por compatibilidad.
     """
-    # Obtener configuración base
     settings = get_common_settings()
     
-    # Agregar configuraciones específicas del servicio de ingesta
-    settings.service_name = "ingestion-service"
-    settings.service_version = os.getenv("SERVICE_VERSION", "1.0.0")
-    
-    # Configuración de procesamiento de documentos
-    settings.max_file_size_mb = int(os.getenv("MAX_FILE_SIZE_MB", "50"))
-    settings.chunk_size = int(os.getenv("CHUNK_SIZE", "1000"))
-    settings.chunk_overlap = int(os.getenv("CHUNK_OVERLAP", "200"))
-    settings.supported_file_types = [
-        "pdf", "txt", "docx", "csv", "xlsx", "md", "html", "pptx"
-    ]
-    settings.max_workers = int(os.getenv("MAX_WORKERS", "5"))
-    settings.queue_ttl = int(os.getenv("QUEUE_TTL", "3600"))  # 1 hora por defecto
+    # Merge con configuración de ingesta
+    for attr, value in vars(ingestion_config).items():
+        setattr(settings, attr, value)
     
     return settings
 
-def get_document_processor_config() -> Dict[str, Any]:
+def get_extraction_config_for_mimetype(mimetype: str) -> Dict[str, Any]:
     """
-    Obtiene configuración para el procesador de documentos.
-    
-    Returns:
-        Dict[str, Any]: Configuración para procesamiento de documentos
-    """
-    settings = get_settings()
-    
-    return {
-        "chunk_size": settings.chunk_size,
-        "chunk_overlap": settings.chunk_overlap,
-        "supported_file_types": settings.supported_file_types,
-        "max_file_size_mb": settings.max_file_size_mb
-    }
-
-def get_extraction_config_for_mimetype(mimetype: str) -> dict:
-    """
-    Obtiene la configuración de extracción específica para un tipo MIME.
-    
-    Args:
-        mimetype: Tipo MIME del archivo
-        
-    Returns:
-        dict: Configuración de extracción
+    Obtiene configuración específica para tipo MIME.
     """
     extraction_configs = {
         "application/pdf": {
@@ -81,3 +78,17 @@ def get_extraction_config_for_mimetype(mimetype: str) -> dict:
             return config
     
     return {"default_parser": "text"}
+
+def get_document_processor_config() -> Dict[str, Any]:
+    """
+    Obtiene configuración para el procesador de documentos.
+    
+    Returns:
+        Dict[str, Any]: Configuración para procesamiento de documentos
+    """
+    return {
+        "chunk_size": ingestion_config.chunk_size,
+        "chunk_overlap": ingestion_config.chunk_overlap,
+        "supported_file_types": ingestion_config.supported_file_types,
+        "max_file_size_mb": ingestion_config.max_file_size_mb
+    }

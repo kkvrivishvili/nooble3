@@ -20,6 +20,7 @@ from common.utils.rate_limiting import setup_rate_limiting
 from config import get_settings
 from routes import register_routes
 from services.queue import initialize_queue, shutdown_queue
+from services.worker import start_worker_pool, stop_worker_pool
 
 # Configuración
 settings = get_settings()
@@ -55,12 +56,18 @@ async def lifespan(app: FastAPI):
             except Exception as config_err:
                 logger.error(f"Error cargando configuraciones: {config_err}")
         
+        # Iniciar workers para procesamiento en segundo plano
+        await start_worker_pool(settings.max_workers)
+        
         logger.info(f"Servicio {settings.service_name} inicializado correctamente")
         yield
     except Exception as e:
-        logger.error(f"Error al inicializar el servicio: {str(e)}")
+        logger.error(f"Error al inicializar el servicio: {str(e)}", exc_info=True)
         yield
     finally:
+        # Detener workers
+        await stop_worker_pool()
+        
         # Limpieza de recursos
         await shutdown_queue()
         logger.info(f"Servicio {settings.service_name} detenido correctamente")

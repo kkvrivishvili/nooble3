@@ -300,3 +300,109 @@ async def cancel_job_endpoint(
             message=f"Error al cancelar trabajo: {str(e)}",
             error_code="JOB_CANCEL_ERROR"
         )
+
+"""
+Endpoints para monitoreo de trabajos de procesamiento.
+"""
+
+import logging
+from datetime import datetime, timedelta
+from typing import Dict
+
+from fastapi import APIRouter, Query, Depends
+
+from common.models import TenantInfo, JobsStatsResponse
+from common.errors import ServiceError, handle_service_error_simple
+from common.context import with_context
+from common.auth import verify_tenant
+from common.db.supabase import get_supabase_client
+from common.db.tables import get_table_name
+
+stats_router = APIRouter(tags=["stats"])
+logger = logging.getLogger(__name__)
+
+@stats_router.get(
+    "/stats",
+    response_model=JobsStatsResponse,
+    summary="Estadísticas de procesamiento",
+    description="Obtiene estadísticas de procesamiento de documentos"
+)
+@handle_service_error_simple
+@with_context(tenant=True)
+async def get_jobs_stats(
+    time_period: str = Query("day", description="Periodo de tiempo (hour, day, week, month)"),
+    tenant_info: TenantInfo = Depends(verify_tenant)
+):
+    """
+    Obtiene estadísticas de procesamiento de documentos.
+    
+    Args:
+        time_period: Periodo de tiempo para las estadísticas
+        tenant_info: Información del tenant
+        
+    Returns:
+        JobsStatsResponse: Estadísticas de procesamiento
+    """
+    tenant_id = tenant_info.tenant_id
+    
+    try:
+        supabase = get_supabase_client()
+        
+        # Determinar intervalo de fecha
+        now = datetime.now()
+        
+        if time_period == "hour":
+            start_date = now - timedelta(hours=1)
+            interval = "minute"
+        elif time_period == "day":
+            start_date = now - timedelta(days=1)
+            interval = "hour"
+        elif time_period == "week":
+            start_date = now - timedelta(weeks=1)
+            interval = "day"
+        else:  # month
+            start_date = now - timedelta(days=30)
+            interval = "day"
+        
+        start_date_str = start_date.isoformat()
+        
+        # Obtener estadísticas por estado
+        status_counts = {}
+        
+        for status in ["pending", "processing", "completed", "failed", "cancelled"]:
+            result = await supabase.table(get_table_name("processing_jobs")) \
+                .select("count", count="exact") \
+                .eq("tenant_id", tenant_id) \
+                .eq("status", status) \
+                .gte("created_at", start_date_str) \
+                .execute()
+                
+            status_counts[status] = result.count if hasattr(result, "count") else 0
+        
+        # Obtener procesamiento por tipo de archivo
+        file_type_stats = {}
+        
+        # Obtener tiempos de procesamiento promedio
+        avg_processing_time = 0
+        total_jobs = sum(status_counts.values())
+        
+        return JobsStatsResponse(
+            success=True,
+            message="Estadísticas obtenidas exitosamente",
+            time_period=time_period,
+            total_jobs=total_jobs,
+            status_counts=status_counts,
+            file_type_stats=file_type_stats,
+            avg_processing_time=avg_processing_time
+        )
+        
+    except Exception as e:
+        logger.error(f"Error obteniendo estadísticas: {str(e)}")
+        if isinstance(e, ServiceError):
+            raise e
+        raise ServiceError(
+            message=f"Error al obtener estadísticas: {str(e)}",
+            error_code="STATS_FETCH_ERROR"
+        )
+
+router.include_router(stats_router, prefix="/jobs")
