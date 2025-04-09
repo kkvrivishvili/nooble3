@@ -14,7 +14,7 @@ from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import ValidationError
 
-from .exceptions import ServiceError, ERROR_CODES
+from .exceptions import ServiceError, ConfigurationError, ErrorCode, ERROR_CODES
 from ..context.vars import get_full_context
 
 logger = logging.getLogger(__name__)
@@ -259,3 +259,51 @@ handle_service_error = handle_errors
 
 # Versión simplificada por mantener compatibilidad
 handle_service_error_simple = handle_errors
+
+def handle_config_error(func: Func) -> Func:
+    """
+    Decorador específico para manejar errores de configuración.
+    Captura excepciones y las convierte en ConfigurationError cuando corresponde.
+    
+    Args:
+        func: Función a decorar
+        
+    Returns:
+        Función decorada
+    """
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        try:
+            return await func(*args, **kwargs)
+        except ConfigurationError:
+            # Ya es un ConfigurationError, dejar pasar
+            raise
+        except KeyError as e:
+            # Error típico al intentar acceder a una configuración inexistente
+            context = get_full_context()
+            context.update({"missing_key": str(e)})
+            logger.error(f"Configuración faltante: {str(e)}", extra=context)
+            raise ConfigurationError(
+                message=f"Configuración faltante: {str(e)}",
+                error_code=ErrorCode.MISSING_CONFIGURATION.value,
+                context=context
+            )
+        except (ValueError, TypeError) as e:
+            # Error típico de configuración inválida
+            context = get_full_context()
+            logger.error(f"Configuración inválida: {str(e)}", extra=context)
+            raise ConfigurationError(
+                message=f"Configuración inválida: {str(e)}",
+                error_code=ErrorCode.INVALID_CONFIGURATION.value,
+                status_code=400,
+                context=context
+            )
+        except Exception as e:
+            # Otras excepciones se convierten en error genérico
+            context = get_full_context()
+            logger.error(f"Error de configuración: {str(e)}", extra=context, exc_info=True)
+            raise ConfigurationError(
+                message=f"Error de configuración: {str(e)}",
+                context=context
+            )
+    return wrapper

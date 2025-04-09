@@ -10,22 +10,25 @@ Este servicio se encarga de:
 """
 
 import logging
+import traceback
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from common.config import get_settings
+from common.config.settings import get_settings
 from common.errors import setup_error_handling, DatabaseError, ServiceError
+from common.errors.exceptions import HTTPServiceError
 from common.utils.logging import init_logging
 from common.context import Context
+from common.context.vars import get_current_tenant_id
 from common.db.supabase import init_supabase
 from common.cache.manager import CacheManager
 from common.swagger import configure_swagger_ui
 from common.cache.redis import get_redis_client
 from common.utils.rate_limiting import setup_rate_limiting
 
-from config import get_settings
+# Evitar importación duplicada
 from routes import register_routes
 from services.queue import initialize_queue, shutdown_queue
 from services.worker import start_worker_pool, stop_worker_pool
@@ -69,7 +72,8 @@ async def lifespan(app: FastAPI):
                     # Cargar configuraciones...
                     logger.info(f"Configuraciones cargadas para {settings.service_name}")
             except Exception as config_err:
-                logger.error(f"Error cargando configuraciones: {config_err}")
+                error_context = {"service": settings.service_name}
+                logger.error(f"Error cargando configuraciones: {config_err}", extra=error_context)
         
         # Iniciar workers para procesamiento en segundo plano
         await start_worker_pool(settings.max_workers)
@@ -77,7 +81,8 @@ async def lifespan(app: FastAPI):
         logger.info(f"Servicio {settings.service_name} inicializado correctamente")
         yield
     except Exception as e:
-        logger.error(f"Error al inicializar el servicio: {str(e)}", exc_info=True)
+        error_context = {"service": settings.service_name}
+        logger.error(f"Error al inicializar el servicio: {str(e)}", exc_info=True, extra=error_context)
         yield
     finally:
         # Detener workers
@@ -88,27 +93,83 @@ async def lifespan(app: FastAPI):
         logger.info(f"Servicio {settings.service_name} detenido correctamente")
 
 async def process_batch(batch: list):
+    """
+    Procesa un lote de elementos.
+    
+    Args:
+        batch: Lista de elementos a procesar
+        
+    Returns:
+        dict: Resultado del procesamiento
+        
+    Raises:
+        ServiceError: Si hay un error durante el procesamiento
+        DatabaseError: Si hay un error de base de datos
+    """
+    if not batch:
+        # Validación de entrada
+        raise ServiceError(
+            message="Batch vacío",
+            error_code="EMPTY_BATCH",
+            status_code=400,
+            context={"batch_size": 0}
+        )
+    
     try:
         tenant_id = get_current_tenant_id()
+        if not tenant_id or tenant_id == "default":
+            raise ServiceError(
+                message="Se requiere un tenant válido",
+                error_code="TENANT_REQUIRED", 
+                status_code=400,
+                context={"tenant_id": tenant_id}
+            )
+            
         from common.auth.tenant import is_tenant_active
         if not await is_tenant_active(tenant_id):
             raise ServiceError(
                 message="Tenant no activo",
                 error_code="TENANT_INACTIVE",
-                status_code=403
+                status_code=403,
+                context={"tenant_id": tenant_id}
             )
             
         # Procesamiento del batch
-        processed = await _process_items(batch)
-        return processed
-        
-    except DatabaseError as e:
+        try:
+            processed = await _process_items(batch)
+            return processed
+        except HTTPServiceError as http_err:
+            # Capturar errores de llamadas a otros servicios
+            logger.error(f"Error en servicio externo: {http_err.message}", extra=http_err.context)
+            raise ServiceError(
+                message=f"Error en servicio externo: {http_err.message}",
+                error_code=http_err.error_code,
+                status_code=http_err.status_code,
+                context={**http_err.context, "batch_size": len(batch)}
+            )
+            
+    except DatabaseError as db_err:
+        # Los errores de DB ya tienen formato correcto, propagarlos directamente
+        logger.error(f"Error de base de datos: {db_err.message}", extra=db_err.context)
+        raise
+    except ServiceError as svc_err:
+        # Los errores de servicio ya tienen formato correcto, propagarlos directamente
+        logger.error(f"Error de servicio: {svc_err.message}", extra=svc_err.context)
         raise
     except Exception as e:
+        # Capturar errores inesperados y convertirlos al formato estándar
+        error_context = {
+            "batch_size": len(batch),
+            "tenant_id": get_current_tenant_id(),
+            "error_type": type(e).__name__,
+            "traceback": traceback.format_exc()
+        }
+        logger.error(f"Error inesperado procesando lote: {str(e)}", extra=error_context, exc_info=True)
         raise ServiceError(
             message="Error procesando lote",
             error_code="INGESTION_ERROR",
-            details={"batch_size": len(batch)}
+            status_code=500,
+            context=error_context
         )
 
 # Inicializar la aplicación FastAPI

@@ -5,6 +5,7 @@ Endpoints para la ingesta de documentos.
 import logging
 import uuid
 import time
+import traceback
 from typing import List, Optional
 
 from fastapi import APIRouter, UploadFile, File, Form, Depends, Query, Body
@@ -16,13 +17,14 @@ from common.errors import (
     DocumentProcessingError, ValidationError
 )
 from common.context import with_context
+from common.context.vars import get_current_tenant_id, get_current_collection_id
 from common.auth import verify_tenant, check_tenant_quotas
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
+from common.config.settings import get_settings
 
 from services.extraction import validate_file
 from services.queue import queue_document_processing_job
-from config import get_settings
 from backend.common.db.storage import upload_to_storage
 
 router = APIRouter()
@@ -54,7 +56,33 @@ async def upload_document(
     description: Optional[str] = Form(None),
     tags: Optional[str] = Form(None)
 ):
-    """Endpoint simplificado que solo sube a Storage y encola"""
+    """
+    Endpoint simplificado que solo sube a Storage y encola.
+    
+    Args:
+        file: Archivo a procesar
+        tenant_info: Información del tenant (inyectada por verify_tenant)
+        collection_id: ID de la colección donde guardar el documento
+        title: Título opcional del documento
+        description: Descripción opcional del documento
+        tags: Lista de etiquetas separadas por comas
+        
+    Returns:
+        FileUploadResponse: Respuesta con información sobre el documento subido
+        
+    Raises:
+        DocumentProcessingError: Si hay un error en el procesamiento
+        ServiceError: Si hay otros errores de servicio
+    """
+    tenant_id = tenant_info.tenant_id
+    
+    # Incluir información para el contexto de error
+    error_context = {
+        "tenant_id": tenant_id,
+        "collection_id": collection_id,
+        "file_name": file.filename
+    }
+    
     try:
         # 1. Validar archivo
         file_info = await validate_file(file)
@@ -66,20 +94,38 @@ async def upload_document(
         document_id = str(uuid.uuid4())
         
         # 2. Subir a Supabase Storage
-        file_key = await upload_to_storage(
-            tenant_id=tenant_info.tenant_id,
-            collection_id=collection_id,
-            file_content=await file.read(),
-            file_name=file.filename
-        )
+        try:
+            file_key = await upload_to_storage(
+                tenant_id=tenant_id,
+                collection_id=collection_id,
+                file_content=await file.read(),
+                file_name=file.filename
+            )
+        except Exception as storage_err:
+            logger.error(f"Error al subir a Storage: {str(storage_err)}", extra=error_context)
+            raise ServiceError(
+                message="Error al almacenar el archivo",
+                error_code="STORAGE_ERROR",
+                status_code=500,
+                context={**error_context}
+            )
         
         # 3. Encolar procesamiento
-        job_id = await queue_document_processing_job(
-            tenant_id=tenant_info.tenant_id,
-            collection_id=collection_id,
-            document_id=document_id,
-            file_key=file_key  # Referencia al archivo en Storage
-        )
+        try:
+            job_id = await queue_document_processing_job(
+                tenant_id=tenant_id,
+                collection_id=collection_id,
+                document_id=document_id,
+                file_key=file_key  # Referencia al archivo en Storage
+            )
+        except Exception as queue_err:
+            logger.error(f"Error al encolar trabajo: {str(queue_err)}", extra=error_context)
+            raise ServiceError(
+                message="Error al encolar el procesamiento",
+                error_code="QUEUE_ERROR",
+                status_code=500,
+                context={**error_context, "document_id": document_id}
+            )
         
         return FileUploadResponse(
             success=True,
@@ -90,13 +136,29 @@ async def upload_document(
             job_id=job_id,
             status="pending"
         )
+    except ValidationError as val_err:
+        # Error de validación ya tiene el formato correcto
+        logger.warning(f"Error de validación: {val_err.message}", extra=error_context)
+        raise
+    except DocumentProcessingError as doc_err:
+        # Error de procesamiento ya tiene el formato correcto
+        logger.error(f"Error de procesamiento: {doc_err.message}", extra=doc_err.context)
+        raise
+    except ServiceError as svc_err:
+        # Error de servicio ya tiene el formato correcto
+        logger.error(f"Error de servicio: {svc_err.message}", extra=svc_err.context)
+        raise
     except Exception as e:
-        logger.error(f"Error al cargar documento: {str(e)}")
-        if isinstance(e, ServiceError):
-            raise e
+        # Capturar errores inesperados
+        error_context["error_type"] = type(e).__name__
+        error_context["traceback"] = traceback.format_exc()
+        logger.error(f"Error inesperado al cargar documento: {str(e)}", extra=error_context, exc_info=True)
+        
         raise DocumentProcessingError(
             message=f"Error al cargar documento: {str(e)}",
-            details={"file_name": file.filename}
+            error_code="DOCUMENT_UPLOAD_ERROR",
+            status_code=500,
+            context=error_context
         )
 
 class UrlIngestionRequest(BaseModel):

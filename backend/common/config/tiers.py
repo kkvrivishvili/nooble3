@@ -5,25 +5,105 @@ Definiciones de niveles, límites y configuraciones específicas por tier.
 from typing import Dict, Any, List, Optional
 import logging
 
+from ..context.vars import get_full_context
+from ..errors.exceptions import ServiceError, ErrorCode
+from ..errors.handlers import handle_errors
+from ..db.supabase import get_tenant_configurations
+
 logger = logging.getLogger(__name__)
 
-def get_tier_rate_limit(tier: str) -> int:
+@handle_errors()
+async def get_tier_rate_limit(tenant_id: str, tier: str, service_name: Optional[str] = None) -> int:
     """
-    Obtiene el límite de tasa para un nivel de suscripción específico.
+    Obtiene el límite de tasa para un tenant y tier específicos.
     
     Args:
+        tenant_id: ID del tenant
         tier: Nivel de suscripción ('free', 'pro', 'business')
+        service_name: Servicio específico (agent, query, chat, embedding, etc.)
         
     Returns:
         int: Número de solicitudes permitidas en el periodo
+        
+    Raises:
+        ServiceError: Si hay un error obteniendo el límite
     """
-    # Definimos los límites directamente para evitar la importación circular
-    limits = {
-        "free": 600,        # Valores predeterminados
-        "pro": 1200,
-        "business": 3000
+    error_context = {
+        "function": "get_tier_rate_limit",
+        "tenant_id": tenant_id,
+        "tier": tier,
+        "service_name": service_name
     }
-    return limits.get(tier, 600)  # Valor por defecto para free tier
+    error_context.update(get_full_context())
+    
+    try:
+        # Valores default por tier
+        default_limits = {
+            "free": 600,        # 10 req/segundo
+            "pro": 1200,        # 20 req/segundo
+            "business": 3000,   # 50 req/segundo
+            "enterprise": 6000  # 100 req/segundo
+        }
+        
+        # Multiplicadores por servicio (algunos servicios tienen límites distintos)
+        service_multipliers = {
+            "agent": 0.5,        # Más restrictivo para agentes
+            "chat": 0.5,         # Más restrictivo para chat
+            "embedding": 2.0,    # Menos restrictivo para embeddings
+            "query": 1.0,        # Normal para consultas
+            "ingestion": 0.3,    # Muy restrictivo para ingesta de documentos
+            "collection": 0.5    # Restrictivo para operaciones de colección
+        }
+        
+        # Intentar obtener configuración personalizada del tenant
+        try:
+            tenant_rate_limit_config = await get_tenant_configurations(
+                tenant_id=tenant_id,
+                scope="rate_limit",
+                scope_id=service_name or "default"
+            )
+            
+            # Si existe configuración específica para este tenant y servicio
+            if tenant_rate_limit_config and "max_requests" in tenant_rate_limit_config:
+                logger.debug(f"Usando límite personalizado para tenant {tenant_id}: "
+                            f"{tenant_rate_limit_config['max_requests']} req/min",
+                            extra=error_context)
+                return int(tenant_rate_limit_config["max_requests"])
+        except Exception as config_error:
+            # Si hay error obteniendo configuración, usar valores predeterminados
+            logger.warning(f"Error obteniendo configuración de rate limit para tenant {tenant_id}: {str(config_error)}",
+                         extra=error_context)
+            # Continuamos con valores predeterminados
+        
+        # Obtener límite base según el tier
+        base_limit = default_limits.get(tier.lower(), default_limits["free"])
+        error_context["base_limit"] = base_limit
+        
+        # Aplicar multiplicador si es un servicio específico
+        if service_name:
+            multiplier = service_multipliers.get(service_name, 1.0)
+            final_limit = int(base_limit * multiplier)
+            error_context["multiplier"] = multiplier
+            error_context["final_limit"] = final_limit
+            
+            logger.debug(f"Límite de tasa para tenant {tenant_id}, tier {tier}, "
+                        f"servicio {service_name}: {final_limit} req/min",
+                        extra=error_context)
+            return final_limit
+        
+        # Si no hay servicio específico, devolver límite base
+        logger.debug(f"Límite de tasa para tenant {tenant_id}, tier {tier}: {base_limit} req/min",
+                    extra=error_context)
+        return base_limit
+    
+    except Exception as e:
+        error_message = f"Error determinando límite de tasa para tenant {tenant_id}: {str(e)}"
+        logger.error(error_message, extra=error_context, exc_info=True)
+        raise ServiceError(
+            message=error_message,
+            error_code=ErrorCode.RATE_LIMIT_ERROR.value,
+            context=error_context
+        )
 
 
 def get_tier_limits(tier: str, settings: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:

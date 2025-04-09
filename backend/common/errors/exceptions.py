@@ -39,6 +39,8 @@ class ErrorCode(Enum):
     # Errores de límites y cuotas (3xxx)
     QUOTA_EXCEEDED = "QUOTA_EXCEEDED"
     RATE_LIMITED = "RATE_LIMITED"
+    RATE_LIMIT_EXCEEDED = "RATE_LIMIT_EXCEEDED"
+    RATE_LIMIT_ERROR = "RATE_LIMIT_ERROR"
     TOKEN_LIMIT_EXCEEDED = "TOKEN_LIMIT_EXCEEDED"
     
     # Errores de servicios externos (4xxx)
@@ -80,6 +82,11 @@ class ErrorCode(Enum):
     TEXT_TOO_LARGE = "TEXT_TOO_LARGE"
     BATCH_TOO_LARGE = "BATCH_TOO_LARGE"
     INVALID_EMBEDDING_PARAMS = "INVALID_EMBEDDING_PARAMS"
+    
+    # Errores de configuración
+    CONFIGURATION_ERROR = "CONFIGURATION_ERROR"
+    MISSING_CONFIGURATION = "MISSING_CONFIGURATION"
+    INVALID_CONFIGURATION = "INVALID_CONFIGURATION"
 
 # Estructura centralizada de códigos de error para toda la plataforma
 ERROR_CODES = {
@@ -95,34 +102,36 @@ ERROR_CODES = {
     ErrorCode.TENANT_ISOLATION_BREACH.value: {"code": 2003, "message": "Violación de aislamiento de tenant", "status": 403},
     
     # Errores de límites y cuotas (3xxx)
-    ErrorCode.QUOTA_EXCEEDED.value: {"code": 3000, "message": "Límite de cuota alcanzado", "status": 429},
+    ErrorCode.QUOTA_EXCEEDED.value: {"code": 3000, "message": "Cuota excedida", "status": 429},
     ErrorCode.RATE_LIMITED.value: {"code": 3001, "message": "Límite de tasa alcanzado", "status": 429},
-    ErrorCode.TOKEN_LIMIT_EXCEEDED.value: {"code": 3002, "message": "Límite de tokens alcanzado", "status": 429},
+    ErrorCode.RATE_LIMIT_EXCEEDED.value: {"code": 3002, "message": "Límite de tasa excedido", "status": 429},
+    ErrorCode.RATE_LIMIT_ERROR.value: {"code": 3003, "message": "Error en límite de tasa", "status": 500},
+    ErrorCode.TOKEN_LIMIT_EXCEEDED.value: {"code": 3010, "message": "Límite de tokens excedido", "status": 413},
     
     # Errores de servicios externos (4xxx)
     ErrorCode.SERVICE_UNAVAILABLE.value: {"code": 4000, "message": "Servicio no disponible", "status": 503},
     ErrorCode.EXTERNAL_API_ERROR.value: {"code": 4001, "message": "Error en API externa", "status": 502},
-    ErrorCode.DATABASE_ERROR.value: {"code": 4002, "message": "Error de base de datos", "status": 500},
+    ErrorCode.DATABASE_ERROR.value: {"code": 4002, "message": "Error en base de datos", "status": 503},
     
     # Errores específicos de LLM (5xxx)
-    ErrorCode.LLM_GENERATION_ERROR.value: {"code": 5000, "message": "Error en generación de texto", "status": 500},
-    ErrorCode.MODEL_NOT_AVAILABLE.value: {"code": 5001, "message": "Modelo no disponible", "status": 404},
+    ErrorCode.LLM_GENERATION_ERROR.value: {"code": 5000, "message": "Error generando texto con LLM", "status": 500},
+    ErrorCode.MODEL_NOT_AVAILABLE.value: {"code": 5001, "message": "Modelo no disponible", "status": 503},
     ErrorCode.EMBEDDING_ERROR.value: {"code": 5002, "message": "Error generando embeddings", "status": 500},
     
     # Errores de gestión de datos (6xxx)
     ErrorCode.DOCUMENT_PROCESSING_ERROR.value: {"code": 6000, "message": "Error procesando documento", "status": 500},
-    ErrorCode.COLLECTION_ERROR.value: {"code": 6001, "message": "Error con la colección", "status": 500},
-    ErrorCode.CONVERSATION_ERROR.value: {"code": 6002, "message": "Error con la conversación", "status": 500},
+    ErrorCode.COLLECTION_ERROR.value: {"code": 6001, "message": "Error en colección", "status": 500},
+    ErrorCode.CONVERSATION_ERROR.value: {"code": 6002, "message": "Error en conversación", "status": 500},
     
     # Errores específicos de agentes (7xxx)
     ErrorCode.AGENT_NOT_FOUND.value: {"code": 7000, "message": "Agente no encontrado", "status": 404},
-    ErrorCode.AGENT_INACTIVE.value: {"code": 7001, "message": "Agente inactivo", "status": 403},
+    ErrorCode.AGENT_INACTIVE.value: {"code": 7001, "message": "Agente inactivo", "status": 400},
     ErrorCode.AGENT_EXECUTION_ERROR.value: {"code": 7002, "message": "Error en ejecución de agente", "status": 500},
     ErrorCode.AGENT_SETUP_ERROR.value: {"code": 7003, "message": "Error en configuración de agente", "status": 500},
     ErrorCode.AGENT_TOOL_ERROR.value: {"code": 7004, "message": "Error en herramienta de agente", "status": 500},
     ErrorCode.AGENT_LIMIT_EXCEEDED.value: {"code": 7005, "message": "Límite de agentes alcanzado", "status": 429},
-    ErrorCode.INVALID_AGENT_ID.value: {"code": 7006, "message": "ID de agente inválido", "status": 422},
-    ErrorCode.AGENT_ALREADY_EXISTS.value: {"code": 7007, "message": "Agente ya existe", "status": 409},
+    ErrorCode.INVALID_AGENT_ID.value: {"code": 7006, "message": "ID de agente inválido", "status": 400},
+    ErrorCode.AGENT_ALREADY_EXISTS.value: {"code": 7007, "message": "El agente ya existe", "status": 409},
     ErrorCode.AGENT_QUOTA_EXCEEDED.value: {"code": 7008, "message": "Cuota de agentes alcanzada", "status": 429},
     
     # Errores específicos de consultas RAG (8xxx)
@@ -130,14 +139,19 @@ ERROR_CODES = {
     ErrorCode.COLLECTION_NOT_FOUND.value: {"code": 8001, "message": "Colección no encontrada", "status": 404},
     ErrorCode.RETRIEVAL_ERROR.value: {"code": 8002, "message": "Error en recuperación de datos", "status": 500},
     ErrorCode.GENERATION_ERROR.value: {"code": 8003, "message": "Error en generación de respuesta", "status": 500},
-    ErrorCode.INVALID_QUERY_PARAMS.value: {"code": 8004, "message": "Parámetros de consulta inválidos", "status": 422},
+    ErrorCode.INVALID_QUERY_PARAMS.value: {"code": 8004, "message": "Parámetros de consulta inválidos", "status": 400},
     
     # Errores específicos de embeddings (9xxx)
     ErrorCode.EMBEDDING_GENERATION_ERROR.value: {"code": 9000, "message": "Error generando embeddings", "status": 500},
     ErrorCode.EMBEDDING_MODEL_ERROR.value: {"code": 9001, "message": "Error en modelo de embeddings", "status": 500},
     ErrorCode.TEXT_TOO_LARGE.value: {"code": 9002, "message": "Texto demasiado grande", "status": 413},
     ErrorCode.BATCH_TOO_LARGE.value: {"code": 9003, "message": "Lote demasiado grande", "status": 413},
-    ErrorCode.INVALID_EMBEDDING_PARAMS.value: {"code": 9004, "message": "Parámetros de embeddings inválidos", "status": 422},
+    ErrorCode.INVALID_EMBEDDING_PARAMS.value: {"code": 9004, "message": "Parámetros de embeddings inválidos", "status": 400},
+    
+    # Errores de configuración
+    ErrorCode.CONFIGURATION_ERROR.value: {"code": 1010, "message": "Error de configuración", "status": 500},
+    ErrorCode.MISSING_CONFIGURATION.value: {"code": 1011, "message": "Configuración faltante", "status": 500},
+    ErrorCode.INVALID_CONFIGURATION.value: {"code": 1012, "message": "Configuración inválida", "status": 400},
 }
 
 class ServiceError(Exception):
@@ -511,6 +525,21 @@ class InvalidEmbeddingParamsError(ServiceError):
             details=details
         )
 
+class ConfigurationError(ServiceError):
+    """Error de configuración.
+    
+    Este error se utiliza cuando hay problemas relacionados con la configuración del sistema,
+    como valores faltantes, inválidos o conflictivos en la configuración.
+    """
+    def __init__(self, message: str, error_code: str = ErrorCode.CONFIGURATION_ERROR.value, 
+                 status_code: int = 500, context: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            message=message,
+            error_code=error_code,
+            status_code=status_code,
+            context=context
+        )
+
 class HTTPServiceError(HTTPException):
     """Error base para servicios (versión HTTP)"""
     def __init__(self, 
@@ -545,4 +574,20 @@ class DatabaseError(HTTPServiceError):
             error_code="DATABASE_ERROR",
             status_code=503,
             details=details
+        )
+
+class RateLimitExceeded(ServiceError):
+    """
+    Error cuando se ha excedido el límite de tasa (rate limit).
+    
+    Este error se utiliza específicamente cuando una solicitud excede
+    los límites de tasa configurados para un tenant o servicio.
+    """
+    def __init__(self, message: str, error_code: str = ErrorCode.RATE_LIMIT_EXCEEDED.value, 
+                 status_code: int = 429, context: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            message=message,
+            error_code=error_code,
+            status_code=status_code,
+            context=context
         )

@@ -10,6 +10,8 @@ from typing import Dict, Any, Optional, List, Union
 from functools import lru_cache
 from pydantic import Field, validator
 from pydantic_settings import BaseSettings
+from ..errors.handlers import handle_config_error
+from ..errors.exceptions import ConfigurationError, ErrorCode
 
 # Importaciones internas (minimizadas para evitar ciclos)
 from .schema import get_service_configurations, get_mock_configurations
@@ -249,7 +251,8 @@ class Settings(BaseSettings):
 
 
 @lru_cache(maxsize=100)  # Limitar tamaño del caché
-def get_settings() -> Settings:
+@handle_config_error
+async def get_settings() -> Settings:
     """
     Obtiene la configuración con caché para el servicio.
     
@@ -261,8 +264,14 @@ def get_settings() -> Settings:
     
     Returns:
         Settings: Objeto de configuración.
+        
+    Raises:
+        ConfigurationError: Si hay un problema al cargar configuraciones
     """
     global _force_settings_reload, _settings_last_refresh
+    
+    # Preparar contexto para errores
+    error_context = {"function": "get_settings"}
     
     # Determinar el tenant_id antes de todo
     tenant_id = "default"
@@ -271,9 +280,10 @@ def get_settings() -> Settings:
         context_tenant_id = get_current_tenant_id()
         if context_tenant_id and context_tenant_id != "default":
             tenant_id = context_tenant_id
-    except Exception:
+            error_context["tenant_id"] = tenant_id
+    except Exception as e:
         # Si falla la obtención del tenant_id del contexto, usar default
-        pass
+        logger.debug(f"No se pudo obtener tenant_id del contexto: {str(e)}")
     
     # Verificar si necesitamos recargar por TTL
     current_time = time.time()
@@ -290,6 +300,8 @@ def get_settings() -> Settings:
         logger.info("Recargando configuraciones desde cero")
     
     settings = Settings()
+    error_context["service"] = settings.service_name
+    error_context["environment"] = settings.environment
     
     # Determinar si debemos cargar configuraciones desde Supabase
     should_load_from_supabase = settings.load_config_from_supabase
@@ -310,15 +322,31 @@ def get_settings() -> Settings:
             except Exception as e:
                 logger.debug(f"No se pudo obtener tenant_id del contexto: {str(e)}")
             
+            error_context["tenant_id_to_use"] = tenant_id_to_use
+            
             # Cargar configuraciones específicas del tenant desde Supabase
-            settings = override_settings_from_supabase(
-                settings, 
-                tenant_id_to_use,
-                settings.environment
+            try:
+                settings = override_settings_from_supabase(
+                    settings, 
+                    tenant_id_to_use,
+                    settings.environment
+                )
+                logger.info(f"Configuración para tenant {tenant_id_to_use} cargada desde Supabase")
+            except Exception as supabase_err:
+                logger.error(f"Error al cargar configuraciones desde Supabase: {str(supabase_err)}", extra=error_context)
+                raise ConfigurationError(
+                    message=f"Error al cargar configuraciones desde Supabase: {str(supabase_err)}",
+                    error_code=ErrorCode.CONFIGURATION_ERROR.value,
+                    context=error_context
+                )
+        except ImportError as import_err:
+            error_context["missing_module"] = str(import_err).split(" ")[-1]
+            logger.error(f"Error al importar módulo para configuraciones: {str(import_err)}", extra=error_context)
+            raise ConfigurationError(
+                message=f"Error al importar módulo para configuraciones: {str(import_err)}", 
+                error_code=ErrorCode.MISSING_CONFIGURATION.value,
+                context=error_context
             )
-            logger.info(f"Configuración para tenant {tenant_id_to_use} cargada desde Supabase")
-        except Exception as e:
-            logger.error(f"Error al cargar configuraciones desde Supabase: {str(e)}")
     
     # Actualizar timestamp de última recarga
     _settings_last_refresh[tenant_id] = current_time
