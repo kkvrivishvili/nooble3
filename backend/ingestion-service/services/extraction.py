@@ -12,7 +12,7 @@ import asyncio
 
 from common.config import get_settings
 from common.db.storage import get_file_from_storage
-from common.errors import DocumentProcessingError, ValidationError
+from common.errors import DocumentProcessingError, ValidationError, ServiceError, ErrorCode
 
 import fitz  # PyMuPDF
 from bs4 import BeautifulSoup
@@ -151,7 +151,7 @@ async def extract_with_specific_method(file_path: str, mimetype: str) -> str:
                 return ""
     except Exception as e:
         logger.error(f"Error en extracción específica para {mimetype}: {str(e)}")
-        return ""
+        raise ServiceError(ErrorCode.INTERNAL_ERROR, f"Error en extracción específica para {mimetype}: {str(e)}")
 
 async def extract_text_from_pdf(file_path: str) -> str:
     """
@@ -195,7 +195,7 @@ async def extract_text_from_pdf(file_path: str) -> str:
                 return text
             except Exception as e3:
                 logger.error(f"Error extrayendo con PyPDF2: {str(e3)}")
-                return ""
+                raise ServiceError(ErrorCode.INTERNAL_ERROR, f"Error extrayendo con PyPDF2: {str(e3)}")
 
 async def extract_text_from_large_pdf(file_path: str) -> str:
     """
@@ -261,7 +261,7 @@ async def extract_text_from_docx(file_path: str) -> str:
         return "\n".join(full_text)
     except Exception as e:
         logger.error(f"Error extrayendo texto de Word: {str(e)}")
-        return ""
+        raise ServiceError(ErrorCode.INTERNAL_ERROR, f"Error extrayendo texto de Word: {str(e)}")
 
 async def extract_text_from_excel(file_path: str) -> str:
     """
@@ -294,7 +294,7 @@ async def extract_text_from_excel(file_path: str) -> str:
         return "\n".join(text_parts)
     except Exception as e:
         logger.error(f"Error extrayendo texto de Excel/CSV: {str(e)}")
-        return ""
+        raise ServiceError(ErrorCode.INTERNAL_ERROR, f"Error extrayendo texto de Excel/CSV: {str(e)}")
 
 async def extract_text_from_html(file_path: str) -> str:
     """
@@ -320,7 +320,7 @@ async def extract_text_from_html(file_path: str) -> str:
         return text
     except Exception as e:
         logger.error(f"Error extrayendo texto de HTML: {str(e)}")
-        return ""
+        raise ServiceError(ErrorCode.INTERNAL_ERROR, f"Error extrayendo texto de HTML: {str(e)}")
 
 async def detect_optimal_chunk_size(text: str) -> int:
     """
@@ -556,10 +556,7 @@ async def process_file_from_storage(
         logger.error(f"Error procesando archivo desde storage: {str(e)}")
         if isinstance(e, DocumentProcessingError):
             raise
-        raise DocumentProcessingError(
-            message=f"Error procesando archivo desde storage: {str(e)}",
-            details={"tenant_id": tenant_id, "file_key": file_key}
-        )
+        raise ServiceError(ErrorCode.INTERNAL_ERROR, f"Error procesando archivo desde storage: {str(e)}")
 
 async def validate_file(file: 'UploadFile') -> dict:
     """
@@ -644,7 +641,4 @@ async def validate_file(file: 'UploadFile') -> dict:
         if isinstance(e, ValidationError):
             raise
         logger.error(f"Error validando archivo: {str(e)}")
-        raise ValidationError(
-            message=f"Error validando archivo: {str(e)}",
-            details={"filename": getattr(file, "filename", "unknown")}
-        )
+        raise ServiceError(ErrorCode.INTERNAL_ERROR, f"Error validando archivo: {str(e)}")

@@ -50,34 +50,14 @@ def get_settings():
     """
     settings = get_common_settings()
     
-    # Merge con configuración de ingesta
-    for attr, value in vars(ingestion_config).items():
-        setattr(settings, attr, value)
+    # Se podrían combinar las propiedades principales de ingestion_config en settings
+    # para mantener un objeto de configuración único pero por ahora devolvemos el común
     
     return settings
 
-def get_extraction_config_for_mimetype(mimetype: str) -> Dict[str, Any]:
-    """
-    Obtiene configuración específica para tipo MIME.
-    """
-    extraction_configs = {
-        "application/pdf": {
-            "pdf_parser": "pdfminer",
-            "ocr_enabled": False
-        },
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": {
-            "extract_headers": True,
-            "extract_tables": True
-        },
-        # Otras configuraciones por tipo MIME
-    }
-    
-    # Buscar por prefijo de MIME
-    for mime_pattern, config in extraction_configs.items():
-        if mime_pattern in mimetype:
-            return config
-    
-    return {"default_parser": "text"}
+# Esta función se ha trasladado a services/extraction.py para evitar duplicación
+# y mantener la configuración de extracción centralizada
+from .services.extraction import get_extraction_config_for_mimetype
 
 def get_document_processor_config() -> Dict[str, Any]:
     """
@@ -89,6 +69,6 @@ def get_document_processor_config() -> Dict[str, Any]:
     return {
         "chunk_size": ingestion_config.chunk_size,
         "chunk_overlap": ingestion_config.chunk_overlap,
-        "supported_file_types": ingestion_config.supported_file_types,
-        "max_file_size_mb": ingestion_config.max_file_size_mb
+        "max_file_size_mb": ingestion_config.max_file_size_mb,
+        "supported_file_types": ingestion_config.supported_file_types
     }

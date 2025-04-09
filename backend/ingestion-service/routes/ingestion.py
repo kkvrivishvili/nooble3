@@ -40,6 +40,7 @@ class DocumentUploadMetadata(BaseModel):
 
 @router.post(
     "/upload",
+    response_model=FileUploadResponse,
     summary="Cargar documento",
     description="Carga un documento para procesamiento y generación de embeddings"
 )
@@ -48,29 +49,55 @@ class DocumentUploadMetadata(BaseModel):
 async def upload_document(
     file: UploadFile = File(...),
     tenant_info: TenantInfo = Depends(verify_tenant),
-    collection_id: str = Form(...)
+    collection_id: str = Form(...),
+    title: Optional[str] = Form(None),
+    description: Optional[str] = Form(None),
+    tags: Optional[str] = Form(None)
 ):
     """Endpoint simplificado que solo sube a Storage y encola"""
-    # 1. Validar archivo
-    file_info = await validate_file(file)
-    
-    # 2. Subir a Supabase Storage
-    file_key = await upload_to_storage(
-        tenant_id=tenant_info.tenant_id,
-        collection_id=collection_id,
-        file_content=await file.read(),
-        file_name=file.filename
-    )
-    
-    # 3. Encolar procesamiento
-    job_id = await queue_document_processing_job(
-        tenant_id=tenant_info.tenant_id,
-        collection_id=collection_id,
-        document_id=str(uuid.uuid4()),
-        file_key=file_key  # Referencia al archivo en Storage
-    )
-    
-    return {"job_id": job_id, "status": "queued"}
+    try:
+        # 1. Validar archivo
+        file_info = await validate_file(file)
+        
+        # Procesar tags si están presentes
+        tag_list = tags.split(",") if tags else []
+        
+        # Generar document_id único
+        document_id = str(uuid.uuid4())
+        
+        # 2. Subir a Supabase Storage
+        file_key = await upload_to_storage(
+            tenant_id=tenant_info.tenant_id,
+            collection_id=collection_id,
+            file_content=await file.read(),
+            file_name=file.filename
+        )
+        
+        # 3. Encolar procesamiento
+        job_id = await queue_document_processing_job(
+            tenant_id=tenant_info.tenant_id,
+            collection_id=collection_id,
+            document_id=document_id,
+            file_key=file_key  # Referencia al archivo en Storage
+        )
+        
+        return FileUploadResponse(
+            success=True,
+            message="Documento encolado para procesamiento",
+            document_id=document_id,
+            collection_id=collection_id,
+            file_name=file.filename,
+            job_id=job_id,
+            status="pending"
+        )
+    except Exception as e:
+        logger.error(f"Error al cargar documento: {str(e)}")
+        if isinstance(e, ServiceError):
+            raise e
+        raise DocumentProcessingError(
+            message=f"Error al cargar documento: {str(e)}",
+            details={"file_name": file.filename}
+        )
 
 class UrlIngestionRequest(BaseModel):
     url: str

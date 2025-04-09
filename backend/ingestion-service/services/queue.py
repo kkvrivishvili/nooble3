@@ -172,6 +172,36 @@ async def process_next_job() -> bool:
         document_id = job.get("document_id")
         file_key = job.get("file_key")  # Nueva referencia a Supabase Storage
         collection_id = job.get("collection_id")
+        
+        # Validar que todos los campos requeridos existan
+        required_fields = {"job_id": job_id, "tenant_id": tenant_id, "document_id": document_id, 
+                          "file_key": file_key, "collection_id": collection_id}
+        
+        missing_fields = [field for field, value in required_fields.items() if not value]
+        
+        if missing_fields:
+            error_msg = f"Campos requeridos faltantes en el trabajo: {', '.join(missing_fields)}"
+            logger.error(error_msg)
+            
+            # Si tenemos suficiente información, actualizar el estado del trabajo
+            if job_id and tenant_id:
+                await update_processing_job(
+                    job_id=job_id,
+                    tenant_id=tenant_id,
+                    status="failed",
+                    error=error_msg
+                )
+                
+                # Si también tenemos document_id, actualizar el estado del documento
+                if document_id:
+                    await update_document_status(
+                        document_id=document_id,
+                        tenant_id=tenant_id,
+                        status="failed",
+                        metadata={"error": error_msg}
+                    )
+            
+            return False
 
         # Procesar usando el nuevo servicio unificado
         processed_text = await process_file_from_storage(
