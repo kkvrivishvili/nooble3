@@ -14,7 +14,11 @@ from common.models import (
     CollectionCreationResponse, CollectionUpdateResponse, 
     CollectionStatsResponse, DeleteCollectionResponse
 )
-from common.errors import ServiceError, handle_service_error_simple
+from common.errors import (
+    ServiceError, handle_service_error_simple, ErrorCode,
+    CollectionNotFoundError, InvalidQueryParamsError, 
+    QueryProcessingError, RetrievalError
+)
 from common.context import with_context, set_current_collection_id
 from common.auth import verify_tenant
 from common.db.supabase import get_supabase_client, get_tenant_collections, get_table_name
@@ -68,9 +72,9 @@ async def list_collections(
         )
     except Exception as e:
         logger.error(f"Error listando colecciones: {str(e)}")
-        raise ServiceError(
+        raise QueryProcessingError(
             message=f"Error al listar colecciones: {str(e)}",
-            error_code="COLLECTION_LIST_ERROR"
+            details={"tenant_id": tenant_info.tenant_id}
         )
 
 @router.post(
@@ -182,10 +186,9 @@ async def update_collection(
             .execute()
         
         if not check_result.data:
-            raise ServiceError(
-                message=f"Colección no encontrada o no pertenece a este tenant",
-                error_code="COLLECTION_NOT_FOUND",
-                status_code=404
+            raise CollectionNotFoundError(
+                message=f"Collection with ID {collection_id} not found",
+                details={"collection_id": collection_id, "tenant_id": tenant_info.tenant_id}
             )
         
         # Preparar datos para actualización
@@ -269,10 +272,9 @@ async def delete_collection(
             .execute()
         
         if not collection_result.data:
-            raise ServiceError(
-                message=f"Colección no encontrada o no pertenece a este tenant",
-                error_code="COLLECTION_NOT_FOUND",
-                status_code=404
+            raise CollectionNotFoundError(
+                message=f"Collection with ID {collection_id} not found",
+                details={"collection_id": collection_id, "tenant_id": tenant_info.tenant_id}
             )
             
         collection_name = collection_result.data[0]["name"]
@@ -350,10 +352,9 @@ async def get_collection_stats(
             .execute()
         
         if not collection_result.data:
-            raise ServiceError(
-                message=f"Colección no encontrada o no pertenece a este tenant",
-                error_code="COLLECTION_NOT_FOUND",
-                status_code=404
+            raise CollectionNotFoundError(
+                message=f"Collection with ID {collection_id} not found",
+                details={"collection_id": collection_id, "tenant_id": tenant_info.tenant_id}
             )
         
         collection_data = collection_result.data[0]
@@ -395,9 +396,7 @@ async def get_collection_stats(
         )
     except Exception as e:
         logger.error(f"Error obteniendo estadísticas de colección: {str(e)}")
-        if isinstance(e, ServiceError):
-            raise e
-        raise ServiceError(
+        raise QueryProcessingError(
             message=f"Error al obtener estadísticas de colección: {str(e)}",
-            error_code="COLLECTION_STATS_ERROR"
+            details={"collection_id": collection_id, "tenant_id": tenant_info.tenant_id}
         )

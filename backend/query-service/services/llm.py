@@ -67,6 +67,10 @@ async def generate_embedding_via_service(text: str) -> Dict[str, Any]:
     from common.context.vars import get_current_tenant_id, get_current_agent_id
     from common.context.vars import get_current_conversation_id
     from common.utils.http import call_service
+    from common.errors import (
+        EmbeddingGenerationError, EmbeddingModelError, 
+        TextTooLargeError, ServiceError, ErrorCode
+    )
     
     settings = get_settings()
     tenant_id = get_current_tenant_id()
@@ -82,6 +86,7 @@ async def generate_embedding_via_service(text: str) -> Dict[str, Any]:
         }
         
         # Realizar solicitud con contexto propagado y formato estandarizado
+        # Utilizamos el cache_ttl recomendado para embeddings según el patrón establecido (24 horas)
         response = await call_service(
             url=f"{settings.embedding_service_url}/internal/embed",
             data=payload,
@@ -89,14 +94,42 @@ async def generate_embedding_via_service(text: str) -> Dict[str, Any]:
             agent_id=agent_id,
             conversation_id=conversation_id,
             operation_type="embedding",
-            use_cache=True  # Aprovechar caché para embeddings repetidos
+            use_cache=True,  # Aprovechar caché para embeddings repetidos
+            cache_ttl=86400  # 24 horas según recomendación para embeddings
         )
         
         # Verificar éxito y extraer datos según el formato estandarizado
         if not response.get("success", False):
+            error_info = response.get("error", {})
             error_msg = response.get("message", "Error desconocido generando embedding")
-            logger.error(f"Error en servicio de embeddings: {error_msg}")
-            return {"error": error_msg}
+            error_code = error_info.get("details", {}).get("error_code", ErrorCode.EMBEDDING_GENERATION_ERROR)
+            error_details = error_info.get("details", {})
+            
+            logger.error(f"Error en servicio de embeddings: {error_msg} (código: {error_code})")
+            
+            # Crear error específico según el código de error recibido
+            if error_code == ErrorCode.TEXT_TOO_LARGE:
+                raise TextTooLargeError(
+                    message=f"Texto demasiado grande para generar embedding: {error_msg}",
+                    details=error_details
+                )
+            elif error_code == ErrorCode.EMBEDDING_MODEL_ERROR:
+                raise EmbeddingModelError(
+                    message=f"Error con el modelo de embedding: {error_msg}",
+                    details=error_details
+                )
+            elif error_code == ErrorCode.EMBEDDING_GENERATION_ERROR:
+                raise EmbeddingGenerationError(
+                    message=f"Error generando embedding: {error_msg}",
+                    details=error_details
+                )
+            else:
+                # Si es un error no específico, usar el genérico
+                raise ServiceError(
+                    message=f"Error en servicio de embeddings: {error_msg}",
+                    error_code=error_code,
+                    details=error_details
+                )
         
         # Extraer datos de la respuesta estandarizada
         response_data = response.get("data", {})
@@ -109,7 +142,18 @@ async def generate_embedding_via_service(text: str) -> Dict[str, Any]:
                 "model": response_data.get("model", settings.default_embedding_model)
             }
         else:
-            return {"error": "No se generó ningún embedding"}
+            # Si no hay embeddings, lanzar un error específico
+            raise EmbeddingGenerationError(
+                message="No se generó ningún embedding",
+                details={"text_length": len(text) if text else 0}
+            )
+    except ServiceError:
+        # Reenviar errores específicos ya creados
+        raise
     except Exception as e:
         logger.error(f"Error generando embedding: {str(e)}")
-        return {"error": str(e)}
+        # Convertir otros errores en EmbeddingGenerationError
+        raise EmbeddingGenerationError(
+            message=f"Error inesperado generando embedding: {str(e)}",
+            details={"error_type": e.__class__.__name__}
+        )

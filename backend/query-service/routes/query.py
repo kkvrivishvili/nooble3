@@ -4,15 +4,19 @@ Endpoints públicos para consultas RAG.
 
 import time
 import logging
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import UUID4
+from pydantic import UUID4, BaseModel, Field
 
 from common.models import TenantInfo, QueryRequest, QueryResponse
-from common.errors import ServiceError, handle_service_error_simple
-from common.context import with_context, set_current_collection_id
-from common.auth import verify_tenant, validate_model_access
+from common.errors import (
+    ErrorCode, ServiceError, handle_service_error_simple,
+    QueryProcessingError, CollectionNotFoundError, 
+    InvalidQueryParamsError, RetrievalError, GenerationError
+)
+from common.context import with_context, set_current_collection_id, get_current_tenant_id, get_current_collection_id
+from common.auth import verify_tenant, validate_model_access, RoleType
 from common.tracking import track_query
 
 from services.query_engine import create_query_engine, process_query_with_sources
@@ -117,9 +121,13 @@ async def query_collection(
         logger.error(f"Error procesando consulta: {str(e)}")
         if isinstance(e, ServiceError):
             raise e
-        raise ServiceError(
+        raise QueryProcessingError(
             message=f"Error procesando consulta: {str(e)}",
-            error_code="QUERY_PROCESSING_ERROR"
+            details={
+                "query": request.query,
+                "collection_id": request.collection_id,
+                "response_mode": request.response_mode
+            }
         )
 
 @router.post(

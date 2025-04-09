@@ -1,6 +1,6 @@
 import logging
 import time
-from typing import Dict, List, Any, Optional, Union
+from typing import Dict, List, Any, Optional, Union, Tuple
 
 from langchain_core.retrievers import BaseRetriever
 from langchain_core.callbacks import CallbackManager
@@ -12,7 +12,12 @@ from llamaindex.callbacks import LlamaDebugHandler
 
 from common.config import get_settings
 from common.context import with_context, get_current_tenant_id, get_current_collection_id, get_current_agent_id
-from common.errors import ServiceError
+from common.errors import (
+    ErrorCode, ServiceError, 
+    QueryProcessingError, CollectionNotFoundError, 
+    RetrievalError, GenerationError, InvalidQueryParamsError,
+    EmbeddingGenerationError, EmbeddingModelError, TextTooLargeError
+)
 from common.tracking import track_token_usage
 from common.llm.token_counters import count_tokens
 from common.cache.manager import CacheManager
@@ -149,8 +154,145 @@ async def process_query_with_sources(
     
     except Exception as e:
         logger.error(f"Error procesando consulta: {str(e)}")
-        raise ServiceError(
+        raise QueryProcessingError(
             message=f"Error procesando consulta: {str(e)}",
-            error_code="QUERY_PROCESSING_ERROR",
-            status_code=500
+            details={
+                "query": query,
+                "filters": filters,
+                "similarity_top_k": similarity_top_k,
+                "response_mode": response_mode
+            }
+        )
+
+
+@with_context(tenant=True, collection=True)
+async def create_query_engine(
+    tenant_info: TenantInfo, 
+    collection_id: str,
+    llm_model: Optional[str] = None,
+    similarity_top_k: int = 4,
+    response_mode: str = "compact"
+) -> Tuple[RetrieverQueryEngine, LlamaDebugHandler]:
+    """
+    Crea un motor de consulta para una colección específica.
+    
+    Args:
+        tenant_info: Información del tenant
+        collection_id: ID de la colección a consultar
+        llm_model: Modelo de lenguaje a utilizar (opcional)
+        similarity_top_k: Número de documentos a recuperar
+        response_mode: Modo de respuesta (compact, verbose, etc.)
+        
+    Returns:
+        Tuple[RetrieverQueryEngine, LlamaDebugHandler]: Motor de consulta y handler de debug
+        
+    Raises:
+        CollectionNotFoundError: Si la colección no existe
+        EmbeddingGenerationError: Si hay problemas generando embeddings
+        RetrievalError: Si hay problemas recuperando documentos
+    """
+    from services.vector_store import get_vector_store_for_collection
+    from services.llm import get_llm_for_model
+    from common.llm.llamaindex import create_response_synthesizer
+    
+    tenant_id = tenant_info.tenant_id
+    settings = get_settings()
+    
+    try:
+        # Crear handler para debugging y tracking
+        debug_handler = LlamaDebugHandler()
+        callback_manager = CallbackManager([debug_handler])
+        
+        # Obtener vector store para la colección
+        vector_store = await get_vector_store_for_collection(
+            tenant_id=tenant_id,
+            collection_id=collection_id
+        )
+        
+        if not vector_store:
+            logger.error(f"Vector store no encontrado para colección {collection_id}")
+            raise CollectionNotFoundError(
+                message=f"Colección no encontrada: {collection_id}",
+                details={"tenant_id": tenant_id, "collection_id": collection_id}
+            )
+        
+        # Crear retriever a partir del vector store
+        try:
+            retriever = vector_store.as_retriever(
+                search_kwargs={"k": similarity_top_k}
+            )
+        except Exception as e:
+            logger.error(f"Error creando retriever: {str(e)}")
+            raise RetrievalError(
+                message=f"Error configurando sistema de recuperación: {str(e)}",
+                details={"collection_id": collection_id, "error_details": str(e)}
+            )
+        
+        # Configurar el LLM para generar respuestas
+        try:
+            # Si no se especifica modelo, usar el default
+            model_name = llm_model if llm_model else settings.default_llm_model
+            llm = get_llm_for_model(model_name)
+            
+            # Crear sintetizador de respuestas
+            response_synthesizer = create_response_synthesizer(
+                llm=llm,
+                response_mode=response_mode,
+                callback_manager=callback_manager
+            )
+            
+            # Crear motor de consulta
+            query_engine = RetrieverQueryEngine(
+                retriever=retriever,
+                response_synthesizer=response_synthesizer,
+                callback_manager=callback_manager
+            )
+            
+            return query_engine, debug_handler
+            
+        except EmbeddingGenerationError as e:
+            # Re-propagar errores específicos de embedding
+            logger.error(f"Error de embedding al crear motor de consulta: {e.message}")
+            raise
+        
+        except EmbeddingModelError as e:
+            # Re-propagar errores específicos del modelo de embedding
+            logger.error(f"Error de modelo de embedding al crear motor de consulta: {e.message}")
+            raise
+        
+        except TextTooLargeError as e:
+            # Re-propagar errores de texto demasiado grande
+            logger.error(f"Texto demasiado grande para embeddings: {e.message}")
+            raise
+        
+        except Exception as e:
+            # Convertir otros errores a tipo específico
+            if "llm" in str(e).lower() or "lenguaje" in str(e).lower():
+                logger.error(f"Error con modelo LLM: {str(e)}")
+                raise GenerationError(
+                    message=f"Error con modelo de lenguaje: {str(e)}",
+                    details={"model": model_name, "error_details": str(e)}
+                )
+            else:
+                logger.error(f"Error creando motor de consulta: {str(e)}")
+                raise QueryProcessingError(
+                    message=f"Error configurando motor de consulta: {str(e)}",
+                    details={
+                        "collection_id": collection_id,
+                        "model": model_name if 'model_name' in locals() else None,
+                        "similarity_top_k": similarity_top_k,
+                        "response_mode": response_mode
+                    }
+                )
+    
+    except (CollectionNotFoundError, RetrievalError, EmbeddingGenerationError, 
+            EmbeddingModelError, TextTooLargeError, GenerationError):
+        # Re-propagar errores específicos
+        raise
+    
+    except Exception as e:
+        logger.error(f"Error inesperado creando motor de consulta: {str(e)}")
+        raise QueryProcessingError(
+            message=f"Error inesperado configurando motor de consulta: {str(e)}",
+            details={"collection_id": collection_id}
         )

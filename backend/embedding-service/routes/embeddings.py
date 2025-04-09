@@ -6,14 +6,18 @@ import time
 import logging
 from typing import List, Dict, Any, Optional, Union
 
-from fastapi import APIRouter, Depends, Body
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from common.models import (
-    TenantInfo, EmbeddingRequest, EmbeddingResponse, 
-    BatchEmbeddingRequest, BatchEmbeddingResponse, BatchEmbeddingData, BatchEmbeddingError
+    TenantInfo, EmbeddingRequest, BatchEmbeddingRequest, 
+    EmbeddingResponse, BatchEmbeddingResponse, BatchEmbeddingData, BatchEmbeddingError
 )
-from common.errors import ServiceError, handle_service_error_simple
+from common.errors import (
+    ServiceError, handle_service_error_simple, ErrorCode,
+    EmbeddingGenerationError, EmbeddingModelError,
+    TextTooLargeError, BatchTooLargeError, InvalidEmbeddingParamsError
+)
 from common.context import with_context
 from common.auth import verify_tenant, check_tenant_quotas, validate_model_access
 from common.tracking import track_embedding_usage
@@ -47,10 +51,9 @@ async def generate_embeddings(
     # Obtener textos a procesar
     texts = request.texts
     if not texts:
-        raise ServiceError(
+        raise InvalidEmbeddingParamsError(
             message="No se proporcionaron textos para generar embeddings",
-            status_code=400,
-            error_code="missing_texts"
+            details={"tenant_id": tenant_id}
         )
     
     # Obtener parámetros de la solicitud
@@ -98,10 +101,13 @@ async def generate_embeddings(
         
     except Exception as e:
         logger.error(f"Error generando embeddings: {str(e)}", exc_info=True)
-        raise ServiceError(
+        raise EmbeddingGenerationError(
             message=f"Error generando embeddings: {str(e)}",
-            status_code=500,
-            error_code="embedding_generation_error"
+            details={
+                "model": model_name,
+                "tenant_id": tenant_id,
+                "texts_count": len(texts)
+            }
         )
 
 @router.post("/embeddings/batch", response_model=BatchEmbeddingResponse)
@@ -128,10 +134,9 @@ async def batch_generate_embeddings(
     
     # Verificar que hay items para procesar
     if not request.items:
-        raise ServiceError(
+        raise InvalidEmbeddingParamsError(
             message="No se proporcionaron items para generar embeddings",
-            status_code=400,
-            error_code="missing_items"
+            details={"tenant_id": tenant_id}
         )
     
     # Obtener parámetros de la solicitud
@@ -220,10 +225,13 @@ async def batch_generate_embeddings(
         
     except Exception as e:
         logger.error(f"Error generando embeddings batch: {str(e)}", exc_info=True)
-        raise ServiceError(
+        raise EmbeddingGenerationError(
             message=f"Error generando embeddings batch: {str(e)}",
-            status_code=500,
-            error_code="embedding_batch_generation_error"
+            details={
+                "model": model_name,
+                "tenant_id": tenant_id,
+                "texts_count": len(texts)
+            }
         )
 
 # Endpoint simplificado para uso interno por los servicios de query y agent
@@ -284,17 +292,51 @@ async def internal_embed(
         }
     except Exception as e:
         logger.exception(f"Error generando embeddings internos: {str(e)}")
-        return {
+        
+        # Si es un error genérico, convertirlo a un tipo específico según su naturaleza
+        if not isinstance(e, ServiceError):
+            if "too large" in str(e).lower() or "demasiado grande" in str(e).lower():
+                if len(texts) > 1:
+                    specific_error = BatchTooLargeError(
+                        message=f"Lote de textos demasiado grande para procesar: {len(texts)} elementos",
+                        details={"texts_count": len(texts)}
+                    )
+                else:
+                    specific_error = TextTooLargeError(
+                        message=f"Texto demasiado grande para procesar",
+                        details={"text_length": len(texts[0]) if texts and len(texts) > 0 else 0}
+                    )
+            elif "model" in str(e).lower() or "modelo" in str(e).lower():
+                specific_error = EmbeddingModelError(
+                    message=f"Error con el modelo de embedding: {str(e)}",
+                    details={"model_requested": model}
+                )
+            else:
+                specific_error = EmbeddingGenerationError(
+                    message=f"Error al generar embeddings: {str(e)}",
+                    details={"texts_count": len(texts) if texts else 0}
+                )
+        else:
+            specific_error = e
+        
+        # Construir respuesta de error estandarizada según el patrón de comunicación
+        error_response = {
             "success": False,
-            "message": f"Error al generar embeddings: {str(e)}",
+            "message": specific_error.message,
             "data": None,
-            "metadata": {},
+            "metadata": {
+                "texts_count": len(texts) if texts else 0,
+                "model_requested": model,
+                "timestamp": time.time()
+            },
             "error": {
-                "message": str(e),
+                "message": specific_error.message,
                 "details": {
-                    "error_type": e.__class__.__name__,
-                    "texts_count": len(texts) if texts else 0
+                    "error_type": specific_error.__class__.__name__,
+                    "error_code": specific_error.error_code
                 },
                 "timestamp": time.time()
             }
         }
+        
+        return error_response

@@ -4,7 +4,11 @@ import logging
 from typing import List, Dict, Any, Optional
 
 from common.config import get_settings
-from common.errors import ServiceError, handle_service_error_simple
+from common.errors import (
+    ServiceError, handle_service_error_simple, ErrorCode,
+    EmbeddingGenerationError, EmbeddingModelError,
+    TextTooLargeError, BatchTooLargeError, InvalidEmbeddingParamsError
+)
 from common.context.vars import get_current_tenant_id, get_current_agent_id, get_current_conversation_id
 from common.cache.manager import CacheManager  # Usar la implementación unificada de caché
 

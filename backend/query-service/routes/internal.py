@@ -10,7 +10,12 @@ from fastapi import APIRouter, Depends, Body
 from pydantic import BaseModel, Field
 
 from common.models import TenantInfo, QueryContextItem
-from common.errors import ServiceError, handle_service_error_simple
+from common.errors import (
+    ServiceError, handle_service_error_simple, ErrorCode,
+    QueryProcessingError, CollectionNotFoundError, 
+    RetrievalError, GenerationError, InvalidQueryParamsError,
+    EmbeddingGenerationError, EmbeddingModelError, TextTooLargeError
+)
 from common.context import with_context, get_current_tenant_id, set_current_collection_id
 from common.auth import verify_tenant, validate_model_access
 from common.tracking import track_query
@@ -149,10 +154,44 @@ async def internal_query(
     except Exception as e:
         logger.error(f"Error procesando consulta interna: {str(e)}")
         
-        # Construir respuesta de error estandarizada
+        # Si es un error genérico, convertirlo a un tipo específico
+        if not isinstance(e, ServiceError):
+            # Verificar primero si es un error relacionado con embeddings
+            if "embedding" in str(e).lower() or isinstance(e, (EmbeddingGenerationError, EmbeddingModelError, TextTooLargeError)):
+                # Manejar errores específicos del servicio de embeddings
+                if isinstance(e, EmbeddingGenerationError):
+                    specific_error = e  # Mantener el error original
+                elif isinstance(e, EmbeddingModelError):
+                    specific_error = e  # Mantener el error original
+                elif isinstance(e, TextTooLargeError):
+                    specific_error = e  # Mantener el error original
+                else:
+                    # Si es un error genérico relacionado con embeddings
+                    specific_error = EmbeddingGenerationError(
+                        message=f"Error generando embeddings para la consulta: {str(e)}",
+                        details={
+                            "query": request.query,
+                            "collection_id": request.collection_id,
+                            "query_length": len(request.query) if request.query else 0
+                        }
+                    )
+            else:
+                specific_error = QueryProcessingError(
+                    message=f"Error procesando consulta RAG: {str(e)}",
+                    details={
+                        "query": request.query,
+                        "collection_id": request.collection_id,
+                        "similarity_top_k": request.similarity_top_k,
+                        "response_mode": request.response_mode
+                    }
+                )
+        else:
+            specific_error = e
+        
+        # Construir respuesta de error estandarizada según el patrón de comunicación
         error_response = {
             "success": False,
-            "message": f"Error procesando consulta RAG: {str(e)}",
+            "message": specific_error.message,
             "data": None,
             "metadata": {
                 "query": request.query,
@@ -160,10 +199,10 @@ async def internal_query(
                 "timestamp": time.time()
             },
             "error": {
-                "message": str(e),
+                "message": specific_error.message,
                 "details": {
-                    "error_type": e.__class__.__name__,
-                    "error_code": getattr(e, "error_code", "INTERNAL_QUERY_ERROR") if isinstance(e, ServiceError) else "INTERNAL_QUERY_ERROR"
+                    "error_type": specific_error.__class__.__name__,
+                    "error_code": specific_error.error_code
                 },
                 "timestamp": time.time()
             }
@@ -244,17 +283,68 @@ async def internal_search(
             }
         }
     except Exception as e:
-        logger.error(f"Error en internal_search: {str(e)}")
-        return {
+        logger.error(f"Error procesando búsqueda interna: {str(e)}")
+        
+        # Si es un error genérico, convertirlo a un tipo específico
+        if not isinstance(e, ServiceError):
+            if "not found" in str(e).lower() or "no encontrada" in str(e).lower():
+                specific_error = CollectionNotFoundError(
+                    message=f"Colección no encontrada: {request.collection_id}",
+                    details={
+                        "query": request.query,
+                        "collection_id": request.collection_id,
+                        "tenant_id": tenant_id
+                    }
+                )
+            elif "embedding" in str(e).lower() or isinstance(e, (EmbeddingGenerationError, EmbeddingModelError, TextTooLargeError)):
+                # Manejar errores específicos del servicio de embeddings
+                if isinstance(e, EmbeddingGenerationError):
+                    specific_error = e  # Mantener el error original
+                elif isinstance(e, EmbeddingModelError):
+                    specific_error = e  # Mantener el error original
+                elif isinstance(e, TextTooLargeError):
+                    specific_error = e  # Mantener el error original
+                else:
+                    # Si es un error genérico relacionado con embeddings
+                    specific_error = EmbeddingGenerationError(
+                        message=f"Error generando embeddings para la búsqueda: {str(e)}",
+                        details={
+                            "query": request.query,
+                            "collection_id": request.collection_id,
+                            "query_length": len(request.query) if request.query else 0
+                        }
+                    )
+            else:
+                specific_error = RetrievalError(
+                    message=f"Error recuperando documentos: {str(e)}",
+                    details={
+                        "query": request.query,
+                        "collection_id": request.collection_id,
+                        "limit": request.limit
+                    }
+                )
+        else:
+            specific_error = e
+        
+        # Construir respuesta de error estandarizada según el patrón de comunicación
+        error_response = {
             "success": False,
-            "message": f"Error en búsqueda: {str(e)}",
-            "data": None,
+            "message": specific_error.message,
+            "data": [],
             "metadata": {
-                "processing_time": time.time() - start_time,
-                "error_type": type(e).__name__
+                "query": request.query,
+                "collection_id": request.collection_id,
+                "limit": request.limit,
+                "timestamp": time.time()
             },
             "error": {
-                "type": type(e).__name__,
-                "message": str(e)
+                "message": specific_error.message,
+                "details": {
+                    "error_type": specific_error.__class__.__name__,
+                    "error_code": specific_error.error_code
+                },
+                "timestamp": time.time()
             }
         }
+        
+        return error_response

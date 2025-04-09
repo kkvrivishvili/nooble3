@@ -11,6 +11,13 @@ from pydantic import BaseModel
 from common.settings import Settings
 from common.context import get_current_conversation_id
 from common.utils.http import call_service
+from common.errors import (
+    CollectionNotFoundError,
+    RetrievalError,
+    QueryProcessingError,
+    ServiceError,
+    ErrorCode
+)
 
 settings = Settings()
 logger = logging.getLogger(__name__)
@@ -79,9 +86,36 @@ async def create_rag_tool(tool_config: Dict[str, Any], tenant_id: str, agent_id:
             
             # Verificar éxito de la operación
             if not response.get("success", False):
+                error_info = response.get("error", {})
                 error_msg = response.get("message", "Error desconocido en consulta RAG")
-                logger.error(f"Error en consulta RAG: {error_msg}")
-                return f"Error consultando documentos: {error_msg}"
+                error_code = error_info.get("details", {}).get("error_code", ErrorCode.QUERY_PROCESSING_ERROR)
+                error_details = error_info.get("details", {})
+                
+                logger.error(f"Error en consulta RAG: {error_msg} (código: {error_code})")
+                
+                # Convertir a error específico basado en el código de error
+                if error_code == ErrorCode.COLLECTION_NOT_FOUND:
+                    raise CollectionNotFoundError(
+                        message=f"Colección no encontrada: {collection_id}",
+                        details=error_details
+                    )
+                elif error_code == ErrorCode.RETRIEVAL_ERROR:
+                    raise RetrievalError(
+                        message=f"Error recuperando documentos: {error_msg}",
+                        details=error_details
+                    )
+                elif error_code == ErrorCode.QUERY_PROCESSING_ERROR:
+                    raise QueryProcessingError(
+                        message=f"Error procesando consulta RAG: {error_msg}",
+                        details=error_details
+                    )
+                else:
+                    # Error genérico si no podemos mapear a uno específico
+                    raise ServiceError(
+                        message=f"Error en servicio de consultas: {error_msg}",
+                        error_code=error_code,
+                        details=error_details
+                    )
             
             # Extraer datos de la respuesta estandarizada
             response_data = response.get("data", {})
@@ -109,7 +143,18 @@ async def create_rag_tool(tool_config: Dict[str, Any], tenant_id: str, agent_id:
             
         except Exception as e:
             logger.exception(f"Error ejecutando herramienta RAG: {str(e)}")
-            return f"Error consultando documentos: {str(e)}"
+            
+            # Manejo más específico según el tipo de error
+            if isinstance(e, CollectionNotFoundError):
+                return f"No se encuentra la colección de documentos '{collection_id}'. Por favor, verifica que el ID de colección sea correcto."
+            elif isinstance(e, RetrievalError):
+                return f"Error recuperando documentos: {e.message}"
+            elif isinstance(e, QueryProcessingError):
+                return f"Error procesando tu consulta: {e.message}"
+            elif isinstance(e, ServiceError):
+                return f"Error en el servicio de consultas: {e.message}"
+            else:
+                return f"Error consultando documentos: {str(e)}"
     
     # Añadir metadatos a la función
     rag_query_tool.__name__ = f"search_{collection_id}"
@@ -130,7 +175,13 @@ async def get_available_collections(tenant_id: str) -> List[Dict[str, Any]]:
         
         # Verificar éxito de la operación
         if not response.get("success", False):
-            logger.warning(f"Error obteniendo colecciones: {response.get('message')}")
+            error_info = response.get("error", {})
+            error_msg = response.get("message", "Error desconocido obteniendo colecciones")
+            error_code = error_info.get("details", {}).get("error_code", ErrorCode.GENERAL_ERROR)
+            
+            logger.warning(f"Error obteniendo colecciones: {error_msg} (código: {error_code})")
+            
+            # Registrar el error pero continuar con lista vacía para no bloquear la operación
             return []
         
         # Extraer datos de la respuesta estandarizada
@@ -138,4 +189,7 @@ async def get_available_collections(tenant_id: str) -> List[Dict[str, Any]]:
         return response_data.get("collections", [])
     except Exception as e:
         logger.warning(f"Error obteniendo colecciones: {str(e)}")
+        
+        # En este caso específico, devolvemos lista vacía en vez de propagar el error
+        # para mantener la funcionalidad degradada pero operativa
         return []

@@ -13,7 +13,11 @@ from langchain.agents import AgentExecutor, create_tool_calling_agent
 
 from common.config import get_settings
 from common.context import ContextManager, with_context
-from common.errors import ServiceError, handle_service_error_simple
+from common.errors import (
+    ServiceError, handle_service_error_simple, ErrorCode,
+    AgentNotFoundError, AgentInactiveError, AgentExecutionError, 
+    AgentSetupError, AgentToolError
+)
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
 from common.llm.token_counters import count_tokens
@@ -52,10 +56,9 @@ async def get_agent_config(agent_id: str, tenant_id: str) -> Dict[str, Any]:
     
     if not result.data:
         logger.warning(f"Agente {agent_id} no encontrado para tenant {tenant_id}")
-        raise ServiceError(
+        raise AgentNotFoundError(
             message=f"Agent with ID {agent_id} not found",
-            status_code=404,
-            error_code="agent_not_found"
+            details={"agent_id": agent_id, "tenant_id": tenant_id}
         )
     
     # Verificar propiedad del agente explícitamente
@@ -64,7 +67,7 @@ async def get_agent_config(agent_id: str, tenant_id: str) -> Dict[str, Any]:
         raise ServiceError(
             message="Access denied: agent belongs to another tenant",
             status_code=403,
-            error_code="permission_denied"
+            error_code=ErrorCode.PERMISSION_DENIED
         )
     
     # Guardar en caché para futuros usos (TTL de 5 minutos)
@@ -132,11 +135,10 @@ async def execute_agent(
     agent_config = await get_agent_config(agent_id, tenant_id)
     
     # Verificar que el agente esté activo
-    if not agent_config.get("is_active", True):
-        raise ServiceError(
+    if not agent_config.get("is_active", False):
+        raise AgentInactiveError(
             message="This agent is not active",
-            status_code=400,
-            error_code="agent_inactive"
+            details={"agent_id": agent_id, "tenant_id": tenant_id}
         )
     
     # Seleccionar callback handler según modo
@@ -275,6 +277,34 @@ async def execute_agent(
                 conversation_id=conversation_id,
                 ttl=1800
             )
+    
+    except ServiceError as service_error:
+        # Manejo específico para errores de servicio estandarizados
+        logger.error(f"ServiceError en ejecución de agente: {service_error.message}")
+        processing_time = time.time() - start_time
+        agent_response = {
+            "error": service_error.message,
+            "error_code": service_error.error_code,
+            "processing_time": processing_time
+        }
+        return agent_response
+    except Exception as e:
+        # Convertir excepciones generales a AgentExecutionError
+        logger.error(f"Error en ejecución de agente: {str(e)}")
+        processing_time = time.time() - start_time
+        
+        # Usar la clase específica para errores de ejecución de agente
+        error = AgentExecutionError(
+            message=f"Error al ejecutar el agente: {str(e)}",
+            details={"agent_id": agent_id, "tenant_id": tenant_id}
+        )
+        
+        agent_response = {
+            "error": error.message,
+            "error_code": error.error_code,
+            "processing_time": processing_time
+        }
+        return agent_response
     
     logger.info(f"Ejecución de agente completada en {processing_time:.2f}s")
     return agent_response

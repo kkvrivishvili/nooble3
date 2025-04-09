@@ -25,7 +25,12 @@ from ..context.vars import (
     get_current_collection_id
 )
 from ..context.propagation import add_context_to_headers, Context
-from ..errors.exceptions import ServiceError
+from ..errors.exceptions import (
+    ServiceError, ErrorCode,
+    CommunicationError, ServiceUnavailableError, 
+    AuthenticationError, AuthorizationError,
+    TimeoutError, RateLimitError
+)
 from ..cache.manager import CacheManager
 
 logger = logging.getLogger(__name__)
@@ -95,6 +100,17 @@ def create_error_response(error_message: str, error_details: Any = None) -> Dict
     Returns:
         Dict: Respuesta de error en formato estándar
     """
+    # Si ya recibimos un error específico ServiceError, usarlo directamente
+    if isinstance(error_message, ServiceError):
+        specific_error = error_message
+        error_message = specific_error.message
+    # De lo contrario, convertir a CommunicationError genérico
+    else:
+        specific_error = CommunicationError(
+            message=error_message,
+            details=error_details
+        )
+    
     return {
         "success": False,
         "message": error_message,
@@ -102,7 +118,8 @@ def create_error_response(error_message: str, error_details: Any = None) -> Dict
         "metadata": {},
         "error": {
             "message": error_message,
-            "details": error_details,
+            "details": error_details or {},
+            "error_code": getattr(specific_error, "error_code", ErrorCode.COMMUNICATION_ERROR),
             "timestamp": time.time()
         }
     }
@@ -209,22 +226,64 @@ async def call_service(
                     error_details = {"status_code": e.response.status_code, "text": e.response.text}
                 
                 if attempt == max_retries - 1:  # Último intento
-                    error_response = create_error_response(
-                        f"Error HTTP {e.response.status_code} llamando al servicio", 
-                        error_details
-                    )
+                    # Determinar el tipo específico de error según el código de estado HTTP
+                    specific_error = None
+                    
+                    if e.response.status_code == 401:
+                        specific_error = AuthenticationError(
+                            message=f"Error de autenticación llamando al servicio: {url}",
+                            details=error_details
+                        )
+                    elif e.response.status_code == 403:
+                        specific_error = AuthorizationError(
+                            message=f"Error de autorización llamando al servicio: {url}",
+                            details=error_details
+                        )
+                    elif e.response.status_code == 429:
+                        specific_error = RateLimitError(
+                            message=f"Límite de tasa excedido llamando al servicio: {url}",
+                            details=error_details
+                        )
+                    elif e.response.status_code >= 500:
+                        specific_error = ServiceUnavailableError(
+                            message=f"Servicio no disponible: {url}",
+                            details=error_details
+                        )
+                    else:
+                        specific_error = CommunicationError(
+                            message=f"Error HTTP {e.response.status_code} llamando al servicio: {url}",
+                            details=error_details
+                        )
+                        
+                    error_response = create_error_response(specific_error, error_details)
                     return error_response
                 
+                await asyncio.sleep(1 * (attempt + 1))  # Backoff lineal
+                
+            except httpx.TimeoutException as e:
+                logger.error(f"Timeout llamando a {url}: {str(e)}")
+                
+                if attempt == max_retries - 1:  # Último intento
+                    specific_error = TimeoutError(
+                        message=f"Timeout al llamar al servicio: {url}",
+                        details={"operation_type": operation_type, "timeout": timeout}
+                    )
+                    error_response = create_error_response(specific_error, None)
+                    return error_response
+                
+                # Incrementar timeout para el siguiente intento
+                timeout = min(timeout * 1.5, 60.0)  # Máximo 60 segundos
                 await asyncio.sleep(1 * (attempt + 1))  # Backoff lineal
                 
             except Exception as e:
                 logger.error(f"Error llamando a {url}: {str(e)}")
                 
                 if attempt == max_retries - 1:  # Último intento
-                    error_response = create_error_response(
-                        f"Error llamando al servicio: {str(e)}",
-                        {"error_type": e.__class__.__name__}
+                    specific_error = CommunicationError(
+                        message=f"Error llamando al servicio: {url}",
+                        details={"error_type": e.__class__.__name__, "error_message": str(e)}
                     )
+                    error_response = create_error_response(specific_error, None)
                     return error_response
                 
                 await asyncio.sleep(1 * (attempt + 1))  # Backoff lineal
