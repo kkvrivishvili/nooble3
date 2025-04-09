@@ -20,7 +20,7 @@ from common.auth import verify_tenant, check_tenant_quotas
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
 
-from services.document_processor import validate_file
+from services.extraction import validate_file
 from services.queue import queue_document_processing_job
 from config import get_settings
 from backend.common.db.storage import upload_to_storage

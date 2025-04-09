@@ -10,12 +10,13 @@ import asyncio
 from typing import Dict, Any, Optional, List
 
 from common.cache.redis import get_redis_client
+from common.cache.manager import CacheManager
 from common.errors import ServiceError, DocumentProcessingError
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
 
 from config import get_settings
-from services.document_processor import process_file, process_url, process_text, process_file_from_storage
+from services.extraction import process_file_from_storage
 from services.chunking import split_document_intelligently
 from services.embedding import process_and_store_chunks
 from services.storage import update_document_status, update_processing_job
@@ -40,11 +41,7 @@ async def initialize_queue():
 
 async def shutdown_queue():
     """Limpia recursos del sistema de colas."""
-    redis = await get_redis_client()
-    if not redis:
-        return
-    
-    # Aquí se podrían realizar tareas de limpieza si es necesario
+    # No se requiere acción específica para cerrar CacheManager
     logger.info("Sistema de colas cerrado correctamente")
 
 async def queue_document_processing_job(
@@ -89,9 +86,7 @@ async def queue_document_processing_job(
 
 async def check_stuck_jobs():
     """Verifica trabajos estancados y los marca como fallidos."""
-    redis = await get_redis_client()
-    if not redis:
-        return
+    # Utilizamos CacheManager para operaciones de caché
     
     # Obtener todos los trabajos en estado "processing"
     try:
@@ -113,8 +108,13 @@ async def check_stuck_jobs():
             document_id = job.get("document_id")
             
             # Verificar si el trabajo está estancado
-            job_data_str = await redis.get(f"{JOB_STATUS_PREFIX}{job_id}")
-            if not job_data_str:
+            job_data = await CacheManager.get(
+                tenant_id=tenant_id,
+                data_type="job_status",
+                resource_id=str(job_id)
+            )
+            
+            if not job_data:
                 # El trabajo no está en la cola, pero está en estado processing
                 if "updated_at" in job:
                     updated_time = job.get("updated_at")
@@ -159,12 +159,9 @@ async def process_next_job_with_retry(max_retries: int = 3) -> bool:
 
 async def process_next_job() -> bool:
     """Procesa el siguiente trabajo en la cola usando Supabase Storage"""
-    redis = await get_redis_client()
-    if not redis:
-        logger.error("Redis no disponible")
-        return False
-
-    job_data = await redis.lpop(INGESTION_QUEUE)
+    # Utilizamos CacheManager para obtener el siguiente trabajo
+    
+    job_data = await CacheManager.lpop(INGESTION_QUEUE)
     if not job_data:
         return False
 
@@ -212,7 +209,7 @@ async def process_next_job() -> bool:
         )
 
         # Limpiar recursos
-        await redis.delete(
+        await CacheManager.delete(
             f"{JOB_PREFIX}{job_id}:file", 
             f"{JOB_PREFIX}{job_id}:text",
             f"{JOB_PREFIX}{job_id}:data"
@@ -242,11 +239,10 @@ async def process_next_job() -> bool:
         )
 
         # Limpiar recursos
-        if redis:
-            await redis.delete(
-                f"{JOB_PREFIX}{job_id}:file", 
-                f"{JOB_PREFIX}{job_id}:text",
-                f"{JOB_PREFIX}{job_id}:data"
-            )
+        await CacheManager.delete(
+            f"{JOB_PREFIX}{job_id}:file", 
+            f"{JOB_PREFIX}{job_id}:text",
+            f"{JOB_PREFIX}{job_id}:data"
+        )
 
         return False

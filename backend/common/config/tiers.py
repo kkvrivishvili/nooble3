@@ -5,8 +5,6 @@ Definiciones de niveles, límites y configuraciones específicas por tier.
 from typing import Dict, Any, List, Optional
 import logging
 
-from .settings import get_settings
-
 logger = logging.getLogger(__name__)
 
 def get_tier_rate_limit(tier: str) -> int:
@@ -19,6 +17,7 @@ def get_tier_rate_limit(tier: str) -> int:
     Returns:
         int: Número de solicitudes permitidas en el periodo
     """
+    from .settings import get_settings
     settings = get_settings()
     limits = {
         "free": settings.rate_limit_free_tier,
@@ -38,6 +37,7 @@ def get_tier_limits(tier: str) -> Dict[str, Any]:
     Returns:
         Dict[str, Any]: Límites del nivel de suscripción
     """
+    from .settings import get_settings
     tier_limits = {
         "free": {
             "max_docs": 20,
@@ -93,6 +93,7 @@ def get_available_llm_models(tier: str) -> List[str]:
     Returns:
         List[str]: Lista de modelos LLM disponibles
     """
+    from .settings import get_settings
     tier_limits = get_tier_limits(tier)
     settings = get_settings()
     
@@ -115,6 +116,7 @@ def get_available_embedding_models(tier: str) -> List[str]:
     Returns:
         List[str]: Lista de modelos de embedding disponibles
     """
+    from .settings import get_settings
     tier_limits = get_tier_limits(tier)
     settings = get_settings()
     
@@ -137,6 +139,7 @@ def get_service_port(service_name: str) -> int:
     Returns:
         int: Puerto configurado para el servicio
     """
+    from .settings import get_settings
     settings = get_settings()
     
     # Intentar obtener el puerto específico para cada servicio

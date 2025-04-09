@@ -12,7 +12,7 @@ import asyncio
 
 from common.config import get_settings
 from common.db.storage import get_file_from_storage
-from common.errors import DocumentProcessingError
+from common.errors import DocumentProcessingError, ValidationError
 
 import fitz  # PyMuPDF
 from bs4 import BeautifulSoup
@@ -559,4 +559,92 @@ async def process_file_from_storage(
         raise DocumentProcessingError(
             message=f"Error procesando archivo desde storage: {str(e)}",
             details={"tenant_id": tenant_id, "file_key": file_key}
+        )
+
+async def validate_file(file: 'UploadFile') -> dict:
+    """
+    Valida un archivo subido y devuelve información sobre él.
+    
+    Args:
+        file: Archivo subido a través de FastAPI
+        
+    Returns:
+        dict: Información del archivo (tipo, tamaño, etc.)
+        
+    Raises:
+        ValidationError: Si el archivo no es válido o supera el tamaño máximo
+    """
+    try:
+        # Validar nombre y extensión
+        filename = file.filename
+        if not filename:
+            raise ValidationError(
+                message="Nombre de archivo inválido",
+                details={"filename": filename}
+            )
+            
+        # Detectar tipo MIME
+        mime_type = detect_mimetype(filename)
+        
+        # Validar tipo de archivo
+        valid_mime_types = [
+            # PDF
+            "application/pdf",
+            # Word
+            "application/msword",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            # Excel
+            "application/vnd.ms-excel",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            # CSV y texto
+            "text/csv",
+            "text/plain",
+            "text/markdown",
+            # HTML
+            "text/html",
+            "application/xhtml+xml",
+            # JSON
+            "application/json"
+        ]
+        
+        if mime_type not in valid_mime_types:
+            raise ValidationError(
+                message=f"Tipo de archivo no soportado: {mime_type}",
+                details={"mime_type": mime_type, "filename": filename}
+            )
+            
+        # Validar tamaño (leer contenido para determinar el tamaño real)
+        # Se limita la lectura a MAX_FILE_SIZE para evitar cargar archivos grandes en memoria
+        MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
+        
+        # Verificamos posición actual
+        current_position = file.file.tell()
+        
+        # Movemos al inicio para obtener tamaño
+        file.file.seek(0, 2)  # Ir al final
+        file_size = file.file.tell()  # Obtener posición actual (tamaño)
+        
+        # Volver a la posición original
+        file.file.seek(current_position)
+        
+        if file_size > MAX_FILE_SIZE:
+            raise ValidationError(
+                message=f"El archivo excede el tamaño máximo permitido ({MAX_FILE_SIZE / (1024 * 1024):.1f} MB)",
+                details={"file_size": file_size, "max_size": MAX_FILE_SIZE}
+            )
+            
+        # Todo validado correctamente
+        return {
+            "filename": filename,
+            "mime_type": mime_type,
+            "size": file_size
+        }
+        
+    except Exception as e:
+        if isinstance(e, ValidationError):
+            raise
+        logger.error(f"Error validando archivo: {str(e)}")
+        raise ValidationError(
+            message=f"Error validando archivo: {str(e)}",
+            details={"filename": getattr(file, "filename", "unknown")}
         )

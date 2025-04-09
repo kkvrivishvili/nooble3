@@ -8,6 +8,7 @@ from typing import Dict, Any, Optional, List, Tuple
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
 from common.errors import ServiceError, DocumentProcessingError
+from common.cache.manager import CacheManager
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,19 @@ async def update_document_status(
         if result.error:
             logger.error(f"Error actualizando estado del documento: {result.error}")
             return False
+        
+        # Actualizar caché si se actualizó correctamente
+        cache_key = f"document:{tenant_id}:{document_id}"
+        try:
+            # Intentar actualizar en caché para futuras consultas
+            await CacheManager.invalidate(
+                tenant_id=tenant_id,
+                data_type="document",
+                resource_id=document_id
+            )
+        except Exception as cache_error:
+            # No fallar si hay error de caché, solo registrar
+            logger.warning(f"Error actualizando caché para documento {document_id}: {str(cache_error)}")
             
         return True
         
@@ -109,6 +123,28 @@ async def update_processing_job(
         if result.error:
             logger.error(f"Error actualizando estado del trabajo: {result.error}")
             return False
+        
+        # Actualizar caché para futura referencia rápida
+        try:
+            cache_key = f"job:{tenant_id}:{job_id}"
+            
+            # Guardar/actualizar el estado en caché para consultas rápidas
+            await CacheManager.set(
+                tenant_id=tenant_id,
+                data_type="job_status",
+                resource_id=str(job_id),
+                data={
+                    "status": status,
+                    "progress": progress,
+                    "error": error,
+                    "stats": processing_stats
+                },
+                ttl=86400  # 24 horas
+            )
+            
+        except Exception as cache_error:
+            # No fallar si hay error de caché, solo registrar
+            logger.warning(f"Error actualizando caché para trabajo {job_id}: {str(cache_error)}")
             
         return True
         
@@ -128,9 +164,7 @@ async def invalidate_vector_store_cache(tenant_id: str, collection_id: str) -> b
         bool: True si se invalidó correctamente
     """
     try:
-        from common.cache.manager import CacheManager
-        
-        # Invalidar caché para esta colección
+        # Usar CacheManager directamente para invalidar caché
         await CacheManager.invalidate(
             tenant_id=tenant_id,
             data_type="query_result",
@@ -149,4 +183,75 @@ async def invalidate_vector_store_cache(tenant_id: str, collection_id: str) -> b
         
     except Exception as e:
         logger.error(f"Error invalidando caché: {str(e)}")
+        # Intentar continuar a pesar del error de caché
         return False
+
+async def get_document_with_cache(document_id: str, tenant_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Obtiene un documento con caché para mejorar rendimiento.
+    
+    Args:
+        document_id: ID del documento
+        tenant_id: ID del tenant
+        
+    Returns:
+        Optional[Dict[str, Any]]: Datos del documento o None si no existe
+    """
+    try:
+        # Primero intentar obtener de la caché
+        cached_doc = await CacheManager.get(
+            tenant_id=tenant_id,
+            data_type="document",
+            resource_id=document_id
+        )
+        
+        if cached_doc:
+            logger.debug(f"Documento {document_id} obtenido de caché")
+            return cached_doc
+        
+        # Si no está en caché, obtener de Supabase
+        supabase = get_supabase_client()
+        result = await supabase.table(get_table_name("documents")) \
+            .select("*") \
+            .eq("document_id", document_id) \
+            .eq("tenant_id", tenant_id) \
+            .single() \
+            .execute()
+            
+        if result.error:
+            logger.error(f"Error obteniendo documento: {result.error}")
+            return None
+            
+        document = result.data
+        
+        if document:
+            # Guardar en caché para futuras consultas
+            await CacheManager.set(
+                tenant_id=tenant_id,
+                data_type="document",
+                resource_id=document_id,
+                data=document,
+                ttl=3600  # 1 hora
+            )
+            
+        return document
+        
+    except Exception as e:
+        logger.error(f"Error obteniendo documento con caché: {str(e)}")
+        
+        # Si hay error de caché, intentar obtener directamente de Supabase
+        try:
+            supabase = get_supabase_client()
+            result = await supabase.table(get_table_name("documents")) \
+                .select("*") \
+                .eq("document_id", document_id) \
+                .eq("tenant_id", tenant_id) \
+                .single() \
+                .execute()
+                
+            if result.error:
+                return None
+                
+            return result.data
+        except:
+            return None

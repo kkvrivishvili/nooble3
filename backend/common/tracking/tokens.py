@@ -3,11 +3,18 @@ Seguimiento de uso de tokens para facturación y cuotas.
 """
 
 import logging
-from typing import Dict, Any, Optional
+import time
+import asyncio
+import json
+from typing import Dict, Any, Optional, List, Union
 
+from ..db.supabase import get_supabase_client, get_table_name
 from ..db.rpc import increment_token_usage as rpc_increment_token_usage
+from ..cache.manager import CacheManager
 from ..cache.counters import increment_token_counter
 from ..config.settings import get_settings
+from ..context.vars import get_current_tenant_id
+from ..auth.quotas import track_token_usage as quotas_track_token_usage
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +24,8 @@ async def track_token_usage(
     model: str = None, 
     agent_id: Optional[str] = None,
     conversation_id: Optional[str] = None,
-    token_type: str = "llm"
+    token_type: str = "llm",
+    operation: str = "query"
 ) -> bool:
     """
     Registra el uso de tokens para un tenant.
@@ -33,6 +41,7 @@ async def track_token_usage(
                   Si se proporciona, se verifica si los tokens deben contabilizarse al propietario.
         conversation_id: ID de la conversación (opcional, para tracking)
         token_type: Tipo de tokens ('llm' o 'embedding')
+        operation: Tipo de operación (query, embed, chat, etc)
         
     Returns:
         bool: True si se registró correctamente
@@ -44,15 +53,34 @@ async def track_token_usage(
         return True
     
     try:
-        # Obtener factores de costo desde la configuración centralizada
-        settings = get_settings()
-        
         # Usar el factor de costo del modelo o 1.0 por defecto
         cost_factor = settings.model_cost_factors.get(model, 1.0) if model else 1.0
         adjusted_tokens = int(tokens * cost_factor)
         
-        # Usar la función helper centralizada para incrementar los tokens en Supabase
-        success = await rpc_increment_token_usage(
+        # Preparar metadatos
+        metadata = {
+            "token_type": token_type,
+            "cost_factor": cost_factor
+        }
+        
+        if agent_id:
+            metadata["agent_id"] = agent_id
+        
+        if conversation_id:
+            metadata["conversation_id"] = conversation_id
+        
+        # Usar el nuevo sistema centralizado de tracking de tokens
+        await quotas_track_token_usage(
+            tenant_id=tenant_id,
+            model=model or "default",
+            tokens=adjusted_tokens,
+            operation=operation,
+            metadata=metadata
+        )
+        
+        # También registrar en Supabase a través de RPC para compatibilidad
+        # con el sistema anterior (eventualmente este se puede deprecar)
+        await rpc_increment_token_usage(
             tenant_id=tenant_id,
             tokens=adjusted_tokens,
             agent_id=agent_id,
@@ -60,11 +88,122 @@ async def track_token_usage(
             token_type=token_type
         )
         
-        if not success:
-            logger.warning(f"No se pudo incrementar el contador de tokens para {token_type} del tenant {tenant_id}")
-            return False
-        
         return True
     except Exception as e:
         logger.error(f"Error tracking {token_type} token usage: {str(e)}")
         return False
+
+
+async def estimate_prompt_tokens(text: str) -> int:
+    """
+    Estima la cantidad de tokens en un texto.
+    Utiliza una aproximación simple basada en palabras.
+    
+    Args:
+        text: Texto a estimar
+        
+    Returns:
+        int: Estimación de tokens
+    """
+    if not text:
+        return 0
+    
+    # Aproximación simple: 4 caracteres ≈ 1 token
+    # Esta es una estimación muy básica, pero es rápida
+    return max(1, len(text) // 4)
+
+
+async def process_token_usage_queue_worker():
+    """
+    Worker para procesar la cola de registro de uso de tokens.
+    
+    Extrae elementos de la cola de tokens y los guarda en Supabase.
+    Se debe ejecutar como un servicio independiente o un worker.
+    """
+    logger.info("Iniciando worker de procesamiento de cola de tokens")
+    
+    supabase = get_supabase_client()
+    batch_size = 50  # Procesar en lotes para mayor eficiencia
+    retry_delay = 5  # Segundos entre reintentos en caso de error
+    
+    while True:
+        try:
+            # Extraer batch_size elementos de la cola
+            batch = []
+            for _ in range(batch_size):
+                # Intentar obtener un elemento de la cola
+                item = await CacheManager.lpop("token_usage_queue")
+                if not item:
+                    break
+                
+                try:
+                    # Convertir de JSON a dict si es necesario
+                    if isinstance(item, str):
+                        item = json.loads(item)
+                    batch.append(item)
+                except (json.JSONDecodeError, TypeError):
+                    logger.error(f"Error decodificando elemento de la cola: {item}")
+                    continue
+            
+            # Si no hay elementos, esperar antes de volver a intentar
+            if not batch:
+                await asyncio.sleep(retry_delay)
+                continue
+            
+            # Registrar lote en Supabase
+            if batch:
+                logger.debug(f"Procesando lote de {len(batch)} registros de uso de tokens")
+                
+                # Preparar datos para inserción en Supabase
+                records = []
+                for usage in batch:
+                    tenant_id = usage.get("tenant_id")
+                    tokens = usage.get("tokens", 0)
+                    model = usage.get("model", "default")
+                    operation = usage.get("operation", "query")
+                    timestamp = usage.get("timestamp", time.time())
+                    metadata = usage.get("metadata", {})
+                    
+                    if not tenant_id or tokens <= 0:
+                        continue
+                    
+                    record = {
+                        "tenant_id": tenant_id,
+                        "tokens": tokens,
+                        "model": model,
+                        "operation": operation,
+                        "created_at": timestamp,
+                        "metadata": metadata
+                    }
+                    records.append(record)
+                
+                if records:
+                    # Insertar registros en Supabase
+                    try:
+                        result = await supabase.table(get_table_name("token_usage")).insert(records).execute()
+                        if hasattr(result, "error") and result.error:
+                            logger.error(f"Error insertando registros en Supabase: {result.error}")
+                        else:
+                            logger.debug(f"Registrados {len(records)} usos de tokens en Supabase")
+                    except Exception as e:
+                        logger.error(f"Error al insertar lote en Supabase: {str(e)}")
+                        
+                        # En caso de error, intentar insertar uno por uno para no perder datos
+                        for record in records:
+                            try:
+                                await supabase.table(get_table_name("token_usage")).insert(record).execute()
+                            except Exception as inner_e:
+                                logger.error(f"Error al insertar registro individual: {str(inner_e)}")
+        
+        except Exception as e:
+            logger.exception(f"Error procesando cola de tokens: {str(e)}")
+            await asyncio.sleep(retry_delay)
+
+
+def start_token_usage_worker():
+    """
+    Inicia el worker de procesamiento de tokens como una tarea en segundo plano.
+    """
+    loop = asyncio.get_event_loop()
+    worker_task = loop.create_task(process_token_usage_queue_worker())
+    return worker_task

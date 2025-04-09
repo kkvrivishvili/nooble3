@@ -4,12 +4,13 @@ Funciones para rate limiting centralizado.
 
 import time
 import logging
-from typing import Optional
+from typing import Optional, Dict, Any, Tuple
 from fastapi import Request, HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from ..models.base import TenantInfo
 from ..cache.redis import get_redis_client
+from ..cache.manager import CacheManager
 from ..config.settings import get_tier_rate_limit, get_tenant_rate_limit
 
 logger = logging.getLogger(__name__)
@@ -29,11 +30,6 @@ async def apply_rate_limit(tenant_id: str, tier: str, limit_key: str = "api") ->
     Raises:
         HTTPException: Si se excede el límite de tasa
     """
-    redis_client = await get_redis_client()
-    if not redis_client:
-        # Sin Redis, no se puede aplicar rate limiting
-        return True
-    
     # Determinar el servicio para obtener configuraciones específicas
     service_name = None
     if limit_key in ["agent", "query", "embedding"]:
@@ -46,37 +42,66 @@ async def apply_rate_limit(tenant_id: str, tier: str, limit_key: str = "api") ->
     limit_period = 60  # 1 minuto por defecto
     redis_key = f"rate_limit:{tenant_id}:{limit_key}"
     
-    # Obtener contador actual
-    current = await redis_client.get(redis_key)
-    current_count = int(current) if current else 0
-    
-    # Verificar si excede el límite
-    if current_count >= rate_limit:
-        logger.warning(f"Rate limit excedido para tenant {tenant_id}: {current_count}/{rate_limit}")
-        raise HTTPException(
-            status_code=429,
-            detail={
-                "message": "Has excedido el límite de solicitudes por minuto",
-                "code": "RATE_LIMIT_EXCEEDED",
-                "current": current_count,
-                "limit": rate_limit,
-                "reset_in_seconds": await redis_client.ttl(redis_key),
-                "service": service_name or "general"
-            }
+    try:
+        # Obtener contador actual usando CacheManager
+        current_count = await CacheManager.get(
+            tenant_id=tenant_id,
+            data_type="rate_limit",
+            resource_id=f"{limit_key}:count"
         )
-    
-    # Actualizar contador en Redis
-    pipe = redis_client.pipeline()
-    if current_count == 0:
-        # Si es la primera solicitud, establecer contador y TTL
-        await pipe.set(redis_key, 1)
-        await pipe.expire(redis_key, limit_period)
-    else:
-        # Si ya existe, incrementar
-        await pipe.incr(redis_key)
-    await pipe.execute()
-    
-    return True
+        
+        current_count = int(current_count) if current_count is not None else 0
+        
+        # Verificar si excede el límite
+        if current_count >= rate_limit:
+            # Obtener tiempo restante para reset
+            ttl = await CacheManager.ttl(
+                tenant_id=tenant_id,
+                data_type="rate_limit",
+                resource_id=f"{limit_key}:count"
+            )
+            
+            logger.warning(f"Rate limit excedido para tenant {tenant_id}: {current_count}/{rate_limit}")
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "message": "Has excedido el límite de solicitudes por minuto",
+                    "code": "RATE_LIMIT_EXCEEDED",
+                    "current": current_count,
+                    "limit": rate_limit,
+                    "reset_in_seconds": ttl if ttl > 0 else limit_period,
+                    "service": service_name or "general"
+                }
+            )
+        
+        # Actualizar contador
+        if current_count == 0:
+            # Primera solicitud en este periodo
+            await CacheManager.set(
+                tenant_id=tenant_id,
+                data_type="rate_limit",
+                resource_id=f"{limit_key}:count",
+                data=1,
+                ttl=limit_period
+            )
+        else:
+            # Incrementar contador existente
+            await CacheManager.increment(
+                tenant_id=tenant_id,
+                data_type="rate_limit",
+                resource_id=f"{limit_key}:count",
+                amount=1
+            )
+        
+        return True
+        
+    except HTTPException:
+        # Re-lanzar excepción HTTP
+        raise
+    except Exception as e:
+        logger.error(f"Error en rate limiting: {str(e)}")
+        # Si hay error, permitir la solicitud para no bloquear el servicio
+        return True
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -91,18 +116,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if not tenant_info or not isinstance(tenant_info, TenantInfo):
             return await call_next(request)
         
-        # Omitir rate limiting para health checks
-        if request.url.path.endswith("/health"):
-            return await call_next(request)
+        # Omitir rate limiting para health checks y rutas de monitoreo
+        excluded_paths = ["/health", "/metrics", "/status"]
+        for path in excluded_paths:
+            if request.url.path.endswith(path):
+                return await call_next(request)
         
         # Determinar clave del limitador según el endpoint
-        service_key = "api"
-        if "agent" in request.url.path:
-            service_key = "agent"
-        elif "query" in request.url.path:
-            service_key = "query"
-        elif "embedding" in request.url.path:
-            service_key = "embedding"
+        service_key = self._determine_service_key(request.url.path)
         
         try:
             # Aplicar limitación de tasa usando servicio específico para el tenant
@@ -112,14 +133,74 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 limit_key=service_key
             )
             
-            return await call_next(request)
+            # Procesar la solicitud normalmente
+            response = await call_next(request)
+            
+            # Añadir headers de rate limit a la respuesta si es posible
+            if hasattr(response, "headers"):
+                await self._add_rate_limit_headers(
+                    response=response,
+                    tenant_id=tenant_info.tenant_id,
+                    tier=tenant_info.subscription_tier,
+                    limit_key=service_key
+                )
+                
+            return response
+            
         except HTTPException as e:
             # Re-lanzar excepción desde apply_rate_limit
             raise e
         except Exception as e:
-            logger.error(f"Error en rate limiting: {str(e)}")
+            logger.error(f"Error en rate limiting middleware: {str(e)}")
             # Continuar con la solicitud en caso de error
             return await call_next(request)
+    
+    def _determine_service_key(self, path: str) -> str:
+        """Determina la clave de servicio basada en la ruta de la solicitud"""
+        if "/agent" in path:
+            return "agent"
+        elif "/query" in path or "/search" in path:
+            return "query"
+        elif "/embedding" in path or "/embed" in path:
+            return "embedding"
+        elif "/chat" in path:
+            return "chat"
+        else:
+            return "api"  # Valor por defecto
+    
+    async def _add_rate_limit_headers(
+        self, 
+        response,
+        tenant_id: str,
+        tier: str,
+        limit_key: str
+    ) -> None:
+        """Añade headers de rate limit a la respuesta"""
+        try:
+            # Obtener límite y uso actual
+            rate_limit = get_tenant_rate_limit(tenant_id, tier, limit_key)
+            current_count = await CacheManager.get(
+                tenant_id=tenant_id,
+                data_type="rate_limit",
+                resource_id=f"{limit_key}:count"
+            )
+            
+            current_count = int(current_count) if current_count is not None else 0
+            
+            # Obtener TTL
+            ttl = await CacheManager.ttl(
+                tenant_id=tenant_id,
+                data_type="rate_limit",
+                resource_id=f"{limit_key}:count"
+            )
+            
+            # Añadir headers estándar de rate limit
+            response.headers["X-RateLimit-Limit"] = str(rate_limit)
+            response.headers["X-RateLimit-Remaining"] = str(max(0, rate_limit - current_count))
+            response.headers["X-RateLimit-Reset"] = str(ttl if ttl > 0 else 60)
+            
+        except Exception as e:
+            logger.warning(f"Error añadiendo headers de rate limit: {str(e)}")
 
 
 # Función para registrar el middleware
@@ -131,3 +212,4 @@ def setup_rate_limiting(app):
         app: Aplicación FastAPI
     """
     app.add_middleware(RateLimitMiddleware)
+    logger.info("Rate limiting middleware configurado")
