@@ -510,3 +510,38 @@ class InvalidEmbeddingParamsError(ServiceError):
             error_code=ErrorCode.INVALID_EMBEDDING_PARAMS,
             details=details
         )
+
+class ServiceError(HTTPException):
+    """Error base para servicios"""
+    def __init__(self, 
+                 message: str, 
+                 error_code: str, 
+                 status_code: int = 500,
+                 details: Optional[dict] = None):
+        super().__init__(
+            status_code=status_code,
+            detail={
+                "message": message,
+                "code": error_code,
+                "details": details or {}
+            }
+        )
+class CacheError(ServiceError):
+    """Errores de caché"""
+    def __init__(self, message: str, details: Optional[dict] = None):
+        super().__init__(
+            message=message,
+            error_code="CACHE_ERROR",
+            status_code=503,
+            details=details
+        )
+
+class DatabaseError(ServiceError):
+    """Errores de base de datos"""
+    def __init__(self, message: str, details: Optional[dict] = None):
+        super().__init__(
+            message=message,
+            error_code="DATABASE_ERROR",
+            status_code=503,
+            details=details
+        )

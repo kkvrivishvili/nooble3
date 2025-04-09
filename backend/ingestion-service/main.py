@@ -16,7 +16,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from common.config import get_settings
-from common.errors import setup_error_handling
+from common.errors import setup_error_handling, DatabaseError, ServiceError
 from common.utils.logging import init_logging
 from common.context import Context
 from common.db.supabase import init_supabase
@@ -42,7 +42,7 @@ async def lifespan(app: FastAPI):
         logger.info(f"Inicializando servicio de {settings.service_name}")
         
         # Inicializar Supabase
-        init_supabase()
+        await init_supabase()
         
         # Verificar conexión a Redis para caché y colas mediante CacheManager
         cache_available = True
@@ -86,6 +86,29 @@ async def lifespan(app: FastAPI):
         # Limpieza de recursos
         await shutdown_queue()
         logger.info(f"Servicio {settings.service_name} detenido correctamente")
+
+async def process_batch(batch: list):
+    try:
+        tenant_id = get_current_tenant_id()
+        if not await is_tenant_active(tenant_id):
+            raise ServiceError(
+                message="Tenant no activo",
+                error_code="TENANT_INACTIVE",
+                status_code=403
+            )
+            
+        # Procesamiento del batch
+        processed = await _process_items(batch)
+        return processed
+        
+    except DatabaseError as e:
+        raise
+    except Exception as e:
+        raise ServiceError(
+            message="Error procesando lote",
+            error_code="INGESTION_ERROR",
+            details={"batch_size": len(batch)}
+        )
 
 # Inicializar la aplicación FastAPI
 app = FastAPI(

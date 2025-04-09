@@ -119,6 +119,15 @@ async def _update_quota_check_cache(
     except Exception as e:
         logger.warning(f"Error actualizando caché de cuotas: {str(e)}")
 
+async def check_quota_async(tenant_id: str, resource: str) -> bool:
+    """Versión async del quota check"""
+    try:
+        quota = await get_tenant_configurations(tenant_id, scope='quota', scope_id=resource)
+        usage = await CacheManager.get(f"quota_usage:{tenant_id}:{resource}")
+        return int(usage or 0) < quota.get('limit', 1000)
+    except Exception:
+        return True  # Fallback permitido
+
 async def track_token_usage(
     tenant_id: Optional[str] = None,
     model: str = "default",

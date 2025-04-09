@@ -26,131 +26,97 @@ def get_tier_rate_limit(tier: str) -> int:
     return limits.get(tier, 600)  # Valor por defecto para free tier
 
 
-def get_tier_limits(tier: str) -> Dict[str, Any]:
+def get_tier_limits(tier: str, settings: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
     Obtiene los límites para un nivel de suscripción específico.
     
     Args:
         tier: Nivel de suscripción ('free', 'pro', 'business')
+        settings: Configuraciones opcionales (evita importación circular)
         
     Returns:
         Dict[str, Any]: Límites del nivel de suscripción
     """
-    from .settings import get_settings
-    tier_limits = {
-        "free": {
-            "max_docs": 20,
-            "max_knowledge_bases": 1,
-            "has_advanced_rag": False,
-            "max_tokens_per_month": 100000,
-            "similarity_top_k": 4,
-            "allowed_llm_models": ["gpt-3.5-turbo"],
-            "allowed_embedding_models": ["text-embedding-3-small"],
-            "query_rate_limit_per_day": 100,
-            "max_agents": 1,
-            "max_tools_per_agent": 2,
-            "max_public_agents": 1
-        },
-        "pro": {
-            "max_docs": 100,
-            "max_knowledge_bases": 5,
-            "has_advanced_rag": True,
-            "max_tokens_per_month": 1000000,
-            "similarity_top_k": 8,
-            "allowed_llm_models": ["gpt-3.5-turbo", "gpt-4-turbo"],
-            "allowed_embedding_models": ["text-embedding-3-small", "text-embedding-3-large"],
-            "query_rate_limit_per_day": 1000,
-            "max_agents": 5,
-            "max_tools_per_agent": 5,
-            "max_public_agents": 2
-        },
-        "business": {
-            "max_docs": 500,
-            "max_knowledge_bases": 20,
-            "has_advanced_rag": True,
-            "max_tokens_per_month": None,  # Ilimitado
-            "similarity_top_k": 16,
-            "allowed_llm_models": ["gpt-3.5-turbo", "gpt-4-turbo", "gpt-4-turbo-vision", "claude-3-5-sonnet"],
-            "allowed_embedding_models": ["text-embedding-3-small", "text-embedding-3-large"],
-            "query_rate_limit_per_day": 10000,
-            "max_agents": 20,
-            "max_tools_per_agent": 10,
-            "max_public_agents": 5
-        }
-    }
+    # Usamos los límites predeterminados si no se proporcionan settings
+    if settings is None:
+        from .settings import default_tier_limits
+        return default_tier_limits.get(tier, default_tier_limits["free"])
     
-    return tier_limits.get(tier, tier_limits["free"])
+    # Combinamos con configuraciones personalizadas si existen
+    tier_limits = default_tier_limits.get(tier, default_tier_limits["free"]).copy()
+    
+    # Sobreescribimos con configuraciones personalizadas si existen
+    custom_limits = settings.get("tier_limits", {}).get(tier, {})
+    tier_limits.update(custom_limits)
+    
+    return tier_limits
 
 
-def get_available_llm_models(tier: str) -> List[str]:
+def get_available_llm_models(tier: str, settings: Optional[Dict[str, Any]] = None) -> List[str]:
     """
     Obtiene los modelos LLM disponibles para un nivel de suscripción específico.
     
     Args:
         tier: Nivel de suscripción ('free', 'pro', 'business')
+        settings: Configuraciones opcionales (evita importación circular)
         
     Returns:
         List[str]: Lista de modelos LLM disponibles
     """
-    from .settings import get_settings
-    tier_limits = get_tier_limits(tier)
-    settings = get_settings()
+    tier_limits = get_tier_limits(tier, settings)
     
     # Añadir modelos de Ollama si está configurado para usarlos
     available_models = list(tier_limits.get("allowed_llm_models", []))
-    if settings.use_ollama:
-        default_ollama_model = getattr(settings, "default_ollama_llm_model", "llama3")
+    if settings and settings.get("use_ollama"):
+        default_ollama_model = settings.get("default_ollama_llm_model", "llama3")
         available_models.append(default_ollama_model)
     
     return available_models
 
 
-def get_available_embedding_models(tier: str) -> List[str]:
+def get_available_embedding_models(tier: str, settings: Optional[Dict[str, Any]] = None) -> List[str]:
     """
     Obtiene los modelos de embedding disponibles para un nivel de suscripción específico.
     
     Args:
         tier: Nivel de suscripción ('free', 'pro', 'business')
+        settings: Configuraciones opcionales (evita importación circular)
         
     Returns:
         List[str]: Lista de modelos de embedding disponibles
     """
-    from .settings import get_settings
-    tier_limits = get_tier_limits(tier)
-    settings = get_settings()
+    tier_limits = get_tier_limits(tier, settings)
     
     # Añadir modelos de Ollama si está configurado para usarlos
     available_models = list(tier_limits.get("allowed_embedding_models", []))
-    if settings.use_ollama:
-        default_ollama_model = getattr(settings, "default_ollama_embedding_model", "nomic-embed-text")
+    if settings and settings.get("use_ollama"):
+        default_ollama_model = settings.get("default_ollama_embedding_model", "nomic-embed-text")
         available_models.append(default_ollama_model)
     
     return available_models
 
 
-def get_service_port(service_name: str) -> int:
+def get_service_port(service_name: str, settings: Optional[Dict[str, Any]] = None) -> int:
     """
     Obtiene el puerto configurado para un servicio específico.
     
     Args:
         service_name: Nombre del servicio ('embedding', 'ingestion', 'query', 'agent')
+        settings: Configuraciones opcionales (evita importación circular)
         
     Returns:
         int: Puerto configurado para el servicio
     """
-    from .settings import get_settings
-    settings = get_settings()
-    
     # Intentar obtener el puerto específico para cada servicio
     try:
         if service_name == "embedding":
-            return getattr(settings, "embedding_service_port", 8001)
+            return settings.get("embedding_service_port", 8001)
         elif service_name == "ingestion":
-            return getattr(settings, "ingestion_service_port", 8000)
+            return settings.get("ingestion_service_port", 8000)
         elif service_name == "query":
-            return getattr(settings, "query_service_port", 8002)
+            return settings.get("query_service_port", 8002)
         elif service_name == "agent":
-            return getattr(settings, "agent_service_port", 8003)
+            return settings.get("agent_service_port", 8003)
         else:
             return 8004  # Puerto por defecto
     except AttributeError:

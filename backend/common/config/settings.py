@@ -13,8 +13,6 @@ from pydantic_settings import BaseSettings
 
 # Importaciones internas (minimizadas para evitar ciclos)
 from .schema import get_service_configurations, get_mock_configurations
-# Eliminamos la importación circular
-# from .tiers import get_tier_rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +20,46 @@ logger = logging.getLogger(__name__)
 _force_settings_reload = False
 _settings_last_refresh = {}  # {tenant_id: timestamp}
 _settings_ttl = 3600  # 1 hora por defecto
+
+# Constantes para límites de tiers
+default_tier_limits = {
+    "free": {
+        "max_docs": 20,
+        "max_knowledge_bases": 1,
+        "has_advanced_rag": False,
+        "max_tokens_per_month": 100000,
+        "similarity_top_k": 4,
+        "allowed_llm_models": ["gpt-3.5-turbo"],
+        "allowed_embedding_models": ["text-embedding-3-small"],
+        "query_rate_limit_per_day": 100,
+        "max_agents": 1,
+        "max_tools_per_agent": 2,
+    },
+    "pro": {
+        "max_docs": 100,
+        "max_knowledge_bases": 5,
+        "has_advanced_rag": True,
+        "max_tokens_per_month": 500000,
+        "similarity_top_k": 8,
+        "allowed_llm_models": ["gpt-3.5-turbo", "gpt-4"],
+        "allowed_embedding_models": ["text-embedding-3-small", "text-embedding-3-large"],
+        "query_rate_limit_per_day": 500,
+        "max_agents": 5,
+        "max_tools_per_agent": 5,
+    },
+    "business": {
+        "max_docs": 1000,
+        "max_knowledge_bases": 20,
+        "has_advanced_rag": True,
+        "max_tokens_per_month": 2000000,
+        "similarity_top_k": 12,
+        "allowed_llm_models": ["gpt-3.5-turbo", "gpt-4", "claude-2"],
+        "allowed_embedding_models": ["text-embedding-3-small", "text-embedding-3-large"],
+        "query_rate_limit_per_day": 2000,
+        "max_agents": 20,
+        "max_tools_per_agent": 10,
+    }
+}
 
 def invalidate_settings_cache(tenant_id: Optional[str] = None):
     """
@@ -180,6 +218,29 @@ class Settings(BaseSettings):
             return values.get('default_ollama_embedding_model', "nomic-embed-text")
         return values.get('default_openai_embedding_model', v)
     
+    def get_tenant_rate_limit(self, tenant_id: str, tier: str, service_name: Optional[str] = None) -> int:
+        """
+        Obtiene el límite de tasa específico para un tenant, considerando las configuraciones personalizadas.
+        
+        Args:
+            tenant_id: ID del tenant
+            tier: Nivel de suscripción ('free', 'pro', 'business')
+            service_name: Nombre del servicio (opcional)
+            
+        Returns:
+            int: Límite de solicitudes personalizado para el tenant
+        """
+        from .tiers import get_tier_rate_limit
+        
+        base_limit = get_tier_rate_limit(tier)
+        
+        # Aplicar ajustes específicos por tenant si existen
+        tenant_settings = self.get_tenant_settings(tenant_id)
+        if tenant_settings and "rate_limit_multiplier" in tenant_settings:
+            return int(base_limit * tenant_settings["rate_limit_multiplier"])
+        
+        return base_limit
+    
     class Config:
         env_file = ".env"
         env_prefix = ""
@@ -263,63 +324,3 @@ def get_settings() -> Settings:
     _settings_last_refresh[tenant_id] = current_time
     
     return settings
-
-
-def get_tenant_rate_limit(tenant_id: str, tier: str, service_name: Optional[str] = None) -> int:
-    """
-    Obtiene el límite de tasa específico para un tenant, considerando las configuraciones personalizadas.
-    
-    Esta función extiende get_tier_rate_limit para incluir configuraciones 
-    específicas por tenant definidas en el sistema multi-tenant.
-    
-    Args:
-        tenant_id: ID del tenant
-        tier: Nivel de suscripción ('free', 'pro', 'business')
-        service_name: Nombre del servicio (opcional)
-        
-    Returns:
-        int: Límite de solicitudes personalizado para el tenant
-    """
-    # Obtener límite base según tier
-    default_limits = {
-        'free': 600,
-        'pro': 1200,
-        'business': 3000
-    }
-    default_limit = default_limits.get(tier, 600)
-    
-    try:
-        # Obtener configuraciones específicas del tenant
-        tenant_configs = {}
-        if service_name:
-            # Si hay servicio especificado, cargar con ese ámbito
-            from ..db.supabase import get_effective_configurations
-            tenant_configs = get_effective_configurations(
-                tenant_id=tenant_id,
-                service_name=service_name,
-                environment=get_settings().environment
-            )
-        else:
-            # Cargar configuraciones generales de tenant
-            from ..db.supabase import get_tenant_configurations
-            tenant_configs = get_tenant_configurations(
-                tenant_id=tenant_id,
-                environment=get_settings().environment
-            )
-        
-        # Comprobar si existe configuración específica para rate limiting
-        rate_limit_key = f"rate_limit_{tier}_tier"
-        if rate_limit_key in tenant_configs:
-            try:
-                # Convertir a entero y devolver
-                return int(tenant_configs[rate_limit_key])
-            except (ValueError, TypeError):
-                # Si hay error en conversión, usar valor por defecto
-                logger.warning(f"Valor inválido para {rate_limit_key} en tenant {tenant_id}: {tenant_configs[rate_limit_key]}")
-    
-    except Exception as e:
-        # Si hay cualquier error, usar valor predeterminado
-        logger.warning(f"Error obteniendo configuración de rate limit para tenant {tenant_id}: {str(e)}")
-    
-    # Si no se encontró configuración o hubo error, retornar valor por defecto
-    return default_limit

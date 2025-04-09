@@ -4,6 +4,7 @@ Funciones para rate limiting centralizado.
 
 import time
 import logging
+import asyncio
 from typing import Optional, Dict, Any, Tuple
 from fastapi import Request, HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -16,6 +17,16 @@ from ..config.tiers import get_tier_rate_limit
 from ..config.settings import get_tenant_rate_limit
 
 logger = logging.getLogger(__name__)
+
+async def check_rate_limit_async(bucket: str) -> bool:
+    """Versión async del rate limiter"""
+    current = await CacheManager.get(f"rate_limit:{bucket}")
+    limit = await get_tenant_configurations(
+        tenant_id=get_current_tenant_id(), 
+        scope='rate_limit', 
+        scope_id=bucket
+    )
+    return int(current or 0) < limit.get('max_requests', 100)
 
 async def apply_rate_limit(tenant_id: str, tier: str, limit_key: str = "api") -> bool:
     """
