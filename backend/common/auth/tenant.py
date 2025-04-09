@@ -7,7 +7,7 @@ from fastapi import HTTPException
 import logging
 
 from ..models.base import TenantInfo
-from ..db.supabase import get_supabase_client, get_table_name, is_tenant_active
+from ..db.supabase import get_supabase_client, get_table_name
 
 logger = logging.getLogger(__name__)
 
@@ -53,3 +53,29 @@ async def verify_tenant(tenant_id: str) -> TenantInfo:
         tenant_id=tenant_id,
         subscription_tier=subscription["subscription_tier"]
     )
+
+
+async def is_tenant_active(tenant_id: str) -> bool:
+    """
+    Verifica si un tenant está activo, devolviendo un booleano en lugar de lanzar excepciones.
+    
+    Args:
+        tenant_id: ID del tenant a verificar
+        
+    Returns:
+        bool: True si el tenant existe y tiene una suscripción activa, False en caso contrario
+    """
+    try:
+        await verify_tenant(tenant_id)
+        return True
+    except HTTPException:
+        return False
+    except Exception as e:
+        logger.error(f"Error verificando tenant {tenant_id}: {e}")
+        return False
+
+
+def is_tenant_active_sync(tenant_id: str) -> bool:
+    """Wrapper síncrono para compatibilidad"""
+    import asyncio
+    return asyncio.run(is_tenant_active(tenant_id))

@@ -90,6 +90,7 @@ async def lifespan(app: FastAPI):
 async def process_batch(batch: list):
     try:
         tenant_id = get_current_tenant_id()
+        from common.auth.tenant import is_tenant_active
         if not await is_tenant_active(tenant_id):
             raise ServiceError(
                 message="Tenant no activo",

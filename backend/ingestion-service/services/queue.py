@@ -165,12 +165,22 @@ async def process_next_job_with_retry(max_retries: int = 3) -> bool:
 
 async def process_next_job() -> bool:
     """Procesa el siguiente trabajo en la cola usando Supabase Storage"""
-    # Utilizamos CacheManager para obtener el siguiente trabajo
+    # Utilizamos Redis directamente para operaciones de cola
     
-    job_data = await CacheManager.lpop(INGESTION_QUEUE)
+    redis_client = await get_redis_client()
+    if not redis_client:
+        logger.warning("Redis no disponible - no se pueden procesar trabajos")
+        return False
+        
+    job_data = await redis_client.lpop(INGESTION_QUEUE)
     if not job_data:
         return False
 
+    # Inicializar variables antes del bloque try para evitar referencias indefinidas en caso de excepción
+    job_id = None
+    tenant_id = None
+    document_id = None
+    
     try:
         job = json.loads(job_data)
         job_id = job.get("job_id")

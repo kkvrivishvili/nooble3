@@ -133,7 +133,7 @@ async def update_processing_job(
                 tenant_id=tenant_id,
                 data_type="job_status",
                 resource_id=str(job_id),
-                data={
+                value={
                     "status": status,
                     "progress": progress,
                     "error": error,
@@ -230,7 +230,7 @@ async def get_document_with_cache(document_id: str, tenant_id: str) -> Optional[
                 tenant_id=tenant_id,
                 data_type="document",
                 resource_id=document_id,
-                data=document,
+                value=document,
                 ttl=3600  # 1 hora
             )
             

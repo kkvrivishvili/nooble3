@@ -11,6 +11,8 @@ from supabase import create_client, Client
 
 from ..context.vars import get_current_tenant_id
 from ..cache.manager import CacheManager
+# Importamos las funciones desde auth.tenant para mantener compatibilidad
+from ..auth.tenant import is_tenant_active, is_tenant_active_sync
 
 logger = logging.getLogger(__name__)
 
@@ -79,26 +81,6 @@ async def init_supabase() -> None:
     except Exception as e:
         logger.error(f"Error initializing Supabase: {e}")
         raise
-
-
-async def is_tenant_active(tenant_id: str) -> bool:
-    """Versión optimizada async"""
-    try:
-        client = get_supabase_client()
-        result = client.table(get_table_name("tenants"))\
-            .select("is_active")\
-            .eq("tenant_id", tenant_id)\
-            .execute()
-        return bool(result.data and result.data[0].get("is_active", False))
-    except Exception as e:
-        logger.error(f"Error verificando tenant {tenant_id}: {e}")
-        return False
-
-
-def is_tenant_active_sync(tenant_id: str) -> bool:
-    """Wrapper síncrono para compatibilidad"""
-    import asyncio
-    return asyncio.run(is_tenant_active(tenant_id))
 
 
 async def get_tenant_configurations(
