@@ -13,8 +13,6 @@ import asyncio
 from common.config import get_settings
 from common.db.storage import get_file_from_storage
 from common.errors import DocumentProcessingError
-from services.embedding import generate_embeddings
-from services.storage import store_document_chunks
 
 import fitz  # PyMuPDF
 from bs4 import BeautifulSoup
@@ -30,25 +28,6 @@ settings = get_settings()
 """
 Servicio para extracción de texto de diferentes formatos de archivo.
 """
-
-import logging
-import os
-import tempfile
-import mimetypes
-from datetime import datetime
-from typing import Dict, Any, Optional
-
-from common.config import get_settings
-from common.db.storage import get_file_from_storage
-from common.errors import DocumentProcessingError
-
-import fitz  # PyMuPDF
-from bs4 import BeautifulSoup
-from docx import Document
-import pandas as pd
-
-logger = logging.getLogger(__name__)
-settings = get_settings()
 
 def detect_mimetype(file_path: str) -> str:
     """
@@ -425,6 +404,44 @@ async def extract_document_metadata(file_path: str, mimetype: str) -> Dict[str, 
         
     return metadata
 
+def get_extraction_config_for_mimetype(mimetype: str) -> Dict[str, Any]:
+    """
+    Obtiene la configuración de extracción específica para un tipo MIME.
+    
+    Args:
+        mimetype: Tipo MIME del documento
+        
+    Returns:
+        Dict[str, Any]: Configuración de extracción
+    """
+    # Configuración predeterminada
+    default_config = {
+        "pdf_parser": "pdfminer",
+        "chunk_size": settings.chunk_size,
+        "chunk_overlap": settings.chunk_overlap,
+        "max_file_size_mb": 50
+    }
+    
+    # Configuraciones específicas por tipo MIME
+    mime_configs = {
+        "application/pdf": {
+            "pdf_parser": "pymupdf",
+            "max_file_size_mb": 100,
+            "large_file_threshold_mb": 25
+        },
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": {
+            "max_file_size_mb": 30
+        },
+        "text/plain": {
+            "max_file_size_mb": 20
+        },
+        "text/html": {
+            "max_file_size_mb": 15
+        }
+    }
+    
+    return mime_configs.get(mimetype, default_config)
+
 # --------------------------
 # Funciones Consolidadas de Procesamiento
 # --------------------------
@@ -488,3 +505,58 @@ async def process_text(
         'optimal_chunk_size': chunk_size,
         'chunks': [text_content[i:i+chunk_size] for i in range(0, len(text_content), chunk_size)]
     }
+
+async def process_file_from_storage(
+    tenant_id: str,
+    collection_id: str,
+    file_key: str
+) -> str:
+    """
+    Procesa un archivo directamente desde Supabase Storage.
+    
+    Args:
+        tenant_id: ID del tenant
+        collection_id: ID de la colección
+        file_key: Clave del archivo en storage
+        
+    Returns:
+        str: Texto extraído del documento
+    """
+    try:
+        logger.info(f"Procesando archivo desde storage: {file_key}")
+        
+        # Obtener archivo desde Supabase Storage
+        file_data = await get_file_from_storage(file_key, tenant_id)
+        if not file_data:
+            raise DocumentProcessingError(
+                message=f"No se pudo obtener el archivo desde storage: {file_key}",
+                details={"tenant_id": tenant_id, "file_key": file_key}
+            )
+        
+        # Determinar tipo MIME
+        file_type = detect_mimetype(file_key)
+        
+        # Procesar archivo
+        with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+            tmp_file.write(file_data)
+            tmp_path = tmp_file.name
+            
+        try:
+            # Extraer contenido utilizando las funciones existentes
+            text = await extract_text_from_file(tmp_path, file_type)
+            return text
+        finally:
+            # Limpiar archivo temporal
+            try:
+                os.unlink(tmp_path)
+            except:
+                pass
+                
+    except Exception as e:
+        logger.error(f"Error procesando archivo desde storage: {str(e)}")
+        if isinstance(e, DocumentProcessingError):
+            raise
+        raise DocumentProcessingError(
+            message=f"Error procesando archivo desde storage: {str(e)}",
+            details={"tenant_id": tenant_id, "file_key": file_key}
+        )

@@ -174,21 +174,27 @@ async def process_next_job() -> bool:
         tenant_id = job.get("tenant_id")
         document_id = job.get("document_id")
         file_key = job.get("file_key")  # Nueva referencia a Supabase Storage
+        collection_id = job.get("collection_id")
 
         # Procesar usando el nuevo servicio unificado
         processed_text = await process_file_from_storage(
             tenant_id=tenant_id,
-            collection_id=job.get("collection_id"),
+            collection_id=collection_id,
             file_key=file_key
         )
 
         # Dividir en chunks y generar embeddings
-        chunks = split_document_intelligently(processed_text)
+        chunks = await split_document_intelligently(
+            text=processed_text,
+            document_id=document_id,
+            metadata={"tenant_id": tenant_id, "collection_id": collection_id}
+        )
+        
         await process_and_store_chunks(
             chunks=chunks,
             document_id=document_id,
             tenant_id=tenant_id,
-            metadata=job
+            collection_id=collection_id
         )
 
         # Actualizar estados
