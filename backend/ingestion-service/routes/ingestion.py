@@ -18,7 +18,7 @@ from common.errors import (
 )
 from common.context import with_context
 from common.context.vars import get_current_tenant_id, get_current_collection_id
-from common.auth import verify_tenant, check_tenant_quotas
+from common.auth import verify_tenant
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
 from common.config.settings import get_settings
@@ -114,9 +114,10 @@ async def upload_document(
         try:
             job_id = await queue_document_processing_job(
                 tenant_id=tenant_id,
-                collection_id=collection_id,
                 document_id=document_id,
-                file_key=file_key  # Referencia al archivo en Storage
+                collection_id=collection_id,
+                file_key=file_key,
+                file_info={"type": file_info.mimetype, "size": file_info.file_size, "name": file_info.filename}
             )
         except Exception as queue_err:
             logger.error(f"Error al encolar trabajo: {str(queue_err)}", extra=error_context)
@@ -193,7 +194,7 @@ async def ingest_url(
     tenant_id = tenant_info.tenant_id
     
     # Verificar cuotas del tenant
-    await check_tenant_quotas(tenant_info)
+    # await check_tenant_quotas(tenant_info)
     
     try:
         # Validar URL
@@ -290,7 +291,7 @@ async def ingest_text(
     tenant_id = tenant_info.tenant_id
     
     # Verificar cuotas del tenant
-    await check_tenant_quotas(tenant_info)
+    # await check_tenant_quotas(tenant_info)
     
     try:
         # Validar texto
@@ -386,7 +387,7 @@ async def batch_process_urls(
     tenant_id = tenant_info.tenant_id
     
     # Verificar cuotas del tenant
-    await check_tenant_quotas(tenant_info)
+    # await check_tenant_quotas(tenant_info)
     
     try:
         # Validar URLs

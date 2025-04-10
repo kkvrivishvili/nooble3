@@ -22,11 +22,11 @@ except ImportError:
     TIKTOKEN_AVAILABLE = False
     logger.warning("tiktoken no está disponible, se usarán estimaciones aproximadas para el conteo de tokens")
 
-# Cargar factores de conversión y límites desde configuración si es posible
+# Cargar factores de conversión desde configuración centralizada
 try:
     settings = get_settings()
     TOKEN_ESTIMATION_FACTORS = getattr(settings, "token_estimation_factors", {})
-    MODEL_TOKEN_LIMITS = getattr(settings, "model_token_limits", {})
+    # No definimos MODEL_TOKEN_LIMITS aquí, usamos la función helper para obtenerlo
     # Si no hay configuración disponible, usar valores predeterminados
     if not TOKEN_ESTIMATION_FACTORS:
         TOKEN_ESTIMATION_FACTORS = {
@@ -49,26 +49,6 @@ try:
             # Default para modelos desconocidos
             "default": 1.3
         }
-    if not MODEL_TOKEN_LIMITS:
-        MODEL_TOKEN_LIMITS = {
-            "gpt-3.5-turbo": 4096,
-            "gpt-4": 8192,
-            "gpt-4-turbo": 16384,
-            "llama3:7b": 8192,
-            "llama3:8b": 8192,
-            "llama3:70b": 8192,
-            "llama3.1:8b": 8192,
-            "llama3.1:70b": 8192,
-            "claude-3-opus": 32768,
-            "claude-3-sonnet": 16384,
-            "claude-3-haiku": 8192,
-            "mistral-7b": 8192,
-            "mistral-8x7b": 32768,
-            "gemma:2b": 8192,
-            "gemma:7b": 8192,
-            "gemma3:1b": 4096,
-            "default": 4096  # Valor conservador por defecto
-        }
 except Exception as e:
     # Si no podemos cargar desde configuración, usar valores predeterminados
     logger.warning(f"No se pudieron cargar factores de token desde configuración: {str(e)}")
@@ -86,22 +66,6 @@ except Exception as e:
         "llama3": 1.4,
         "mistral": 1.4,
         "default": 1.3
-    }
-    
-    # Límites de tokens para diferentes modelos
-    MODEL_TOKEN_LIMITS = {
-        "gpt-3.5-turbo": 4096,
-        "gpt-4": 8192,
-        "gpt-4-turbo": 16384,
-        "llama3:7b": 8192,
-        "llama3:8b": 8192,
-        "llama3:70b": 8192,
-        "claude-3-opus": 32768,
-        "claude-3-sonnet": 16384,
-        "claude-3-haiku": 8192,
-        "mistral-7b": 8192,
-        "mistral-8x7b": 32768,
-        "default": 4096  # Valor conservador por defecto
     }
 
 def estimate_max_tokens_for_model(model_name: str) -> int:
@@ -127,6 +91,8 @@ def estimate_max_tokens_for_model(model_name: str) -> int:
         model_name_lower = model_name.lower() if model_name else "default"
         
         # Búsqueda exacta primero
+        settings = get_settings()
+        MODEL_TOKEN_LIMITS = getattr(settings, "model_token_limits", {})
         if model_name_lower in MODEL_TOKEN_LIMITS:
             return MODEL_TOKEN_LIMITS[model_name_lower]
         
@@ -138,12 +104,12 @@ def estimate_max_tokens_for_model(model_name: str) -> int:
         # Si no se encuentra coincidencia, devolver el valor predeterminado
         logger.debug(f"No se encontró límite específico para modelo {model_name}, usando predeterminado", 
                     extra=error_context)
-        return MODEL_TOKEN_LIMITS["default"]
+        return MODEL_TOKEN_LIMITS.get("default", 4096)
     except Exception as e:
         error_message = f"Error al estimar tokens máximos para modelo {model_name}: {str(e)}"
         logger.error(error_message, extra=error_context, exc_info=True)
         # Devolvemos un valor predeterminado conservador en caso de error
-        return MODEL_TOKEN_LIMITS.get("default", 4096)
+        return 4096
 
 def count_tokens(text: str, model_name: str = "gpt-3.5-turbo") -> int:
     """

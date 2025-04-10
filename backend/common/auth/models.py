@@ -6,7 +6,7 @@ from typing import List, Optional
 import logging
 
 from ..models.base import TenantInfo
-from ..config.tiers import get_tier_limits
+from ..config.tiers import get_tier_limits, get_available_llm_models, get_available_embedding_models
 from ..errors import ServiceError, ErrorCode
 
 logger = logging.getLogger(__name__)
@@ -22,12 +22,14 @@ def get_allowed_models_for_tier(tier: str, model_type: str = "llm") -> list:
     Returns:
         list: Lista de IDs de modelos permitidos
     """
-    tier_limits = get_tier_limits(tier)
-    
+    # Usamos las funciones de tiers.py que ya no dependen de settings
     if model_type == "llm":
-        return tier_limits.get("allowed_llm_models", ["gpt-3.5-turbo"])
-    else:  # embedding
-        return tier_limits.get("allowed_embedding_models", ["text-embedding-3-small"])
+        return get_available_llm_models(tier)
+    elif model_type == "embedding":
+        return get_available_embedding_models(tier)
+    else:
+        logger.warning(f"Tipo de modelo desconocido: {model_type}, usando LLM por defecto")
+        return get_available_llm_models(tier)
 
 
 async def validate_model_access(tenant_info: TenantInfo, model_id: str, model_type: str = "llm") -> str:

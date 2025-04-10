@@ -12,6 +12,77 @@ from ..db.supabase import get_tenant_configurations
 
 logger = logging.getLogger(__name__)
 
+# Centralización de límites de tiers en un único lugar
+# Estos son los valores por defecto para cada tier
+default_tier_limits = {
+    "free": {
+        "max_docs": 20,
+        "max_knowledge_bases": 1,
+        "has_advanced_rag": False,
+        "max_tokens_per_month": 100000,
+        "similarity_top_k": 4,
+        "allowed_llm_models": ["gpt-3.5-turbo"],
+        "allowed_embedding_models": ["text-embedding-3-small"],
+        "query_rate_limit_per_day": 100,
+        "max_agents": 1,
+        "max_tools_per_agent": 2,
+    },
+    "pro": {
+        "max_docs": 100,
+        "max_knowledge_bases": 5,
+        "has_advanced_rag": True,
+        "max_tokens_per_month": 500000,
+        "similarity_top_k": 8,
+        "allowed_llm_models": ["gpt-3.5-turbo", "gpt-4"],
+        "allowed_embedding_models": ["text-embedding-3-small", "text-embedding-3-large"],
+        "query_rate_limit_per_day": 500,
+        "max_agents": 5,
+        "max_tools_per_agent": 5,
+    },
+    "business": {
+        "max_docs": 500,
+        "max_knowledge_bases": 20,
+        "has_advanced_rag": True,
+        "max_tokens_per_month": 2000000,
+        "similarity_top_k": 12,
+        "allowed_llm_models": ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo"],
+        "allowed_embedding_models": ["text-embedding-3-small", "text-embedding-3-large"],
+        "query_rate_limit_per_day": 2000,
+        "max_agents": 20,
+        "max_tools_per_agent": 10,
+    },
+    "enterprise": {
+        "max_docs": -1,  # Sin límite
+        "max_knowledge_bases": -1,  # Sin límite
+        "has_advanced_rag": True,
+        "max_tokens_per_month": -1,  # Sin límite
+        "similarity_top_k": 16,
+        "allowed_llm_models": ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo", "gpt-4-32k"],
+        "allowed_embedding_models": ["text-embedding-3-small", "text-embedding-3-large"],
+        "query_rate_limit_per_day": -1,  # Sin límite
+        "max_agents": -1,  # Sin límite
+        "max_tools_per_agent": -1,  # Sin límite
+    }
+}
+
+# Valores predeterminados para límites de tasa
+default_rate_limits = {
+    "free": 600,        # 10 req/segundo
+    "pro": 1200,        # 20 req/segundo
+    "business": 3000,   # 50 req/segundo
+    "enterprise": 6000  # 100 req/segundo
+}
+
+# Multiplicadores por servicio para límites de tasa
+service_multipliers = {
+    "agent": 0.5,        # Más restrictivo para agentes
+    "chat": 0.5,         # Más restrictivo para chat
+    "embedding": 2.0,    # Menos restrictivo para embeddings
+    "query": 1.0,        # Normal para consultas
+    "ingestion": 0.3,    # Muy restrictivo para ingesta de documentos
+    "collection": 0.5    # Restrictivo para operaciones de colección
+}
+
 @handle_errors()
 async def get_tier_rate_limit(tenant_id: str, tier: str, service_name: Optional[str] = None) -> int:
     """
@@ -37,24 +108,6 @@ async def get_tier_rate_limit(tenant_id: str, tier: str, service_name: Optional[
     error_context.update(get_full_context())
     
     try:
-        # Valores default por tier
-        default_limits = {
-            "free": 600,        # 10 req/segundo
-            "pro": 1200,        # 20 req/segundo
-            "business": 3000,   # 50 req/segundo
-            "enterprise": 6000  # 100 req/segundo
-        }
-        
-        # Multiplicadores por servicio (algunos servicios tienen límites distintos)
-        service_multipliers = {
-            "agent": 0.5,        # Más restrictivo para agentes
-            "chat": 0.5,         # Más restrictivo para chat
-            "embedding": 2.0,    # Menos restrictivo para embeddings
-            "query": 1.0,        # Normal para consultas
-            "ingestion": 0.3,    # Muy restrictivo para ingesta de documentos
-            "collection": 0.5    # Restrictivo para operaciones de colección
-        }
-        
         # Intentar obtener configuración personalizada del tenant
         try:
             tenant_rate_limit_config = await get_tenant_configurations(
@@ -76,7 +129,7 @@ async def get_tier_rate_limit(tenant_id: str, tier: str, service_name: Optional[
             # Continuamos con valores predeterminados
         
         # Obtener límite base según el tier
-        base_limit = default_limits.get(tier.lower(), default_limits["free"])
+        base_limit = default_rate_limits.get(tier.lower(), default_rate_limits["free"])
         error_context["base_limit"] = base_limit
         
         # Aplicar multiplicador si es un servicio específico
@@ -99,115 +152,86 @@ async def get_tier_rate_limit(tenant_id: str, tier: str, service_name: Optional[
     except Exception as e:
         error_message = f"Error determinando límite de tasa para tenant {tenant_id}: {str(e)}"
         logger.error(error_message, extra=error_context, exc_info=True)
-        raise ServiceError(
-            message=error_message,
-            error_code=ErrorCode.RATE_LIMIT_ERROR.value,
-            context=error_context
-        )
+        
+        # Devolver un valor predeterminado para no interrumpir el servicio
+        return default_rate_limits.get("free", 600)
 
 
-def get_tier_limits(tier: str, settings: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def get_tier_limits(tier: str, tenant_id: Optional[str] = None) -> Dict[str, Any]:
     """
     Obtiene los límites para un nivel de suscripción específico.
     
     Args:
         tier: Nivel de suscripción ('free', 'pro', 'business')
-        settings: Configuraciones opcionales (evita importación circular)
+        tenant_id: ID opcional del tenant para personalización
         
     Returns:
         Dict[str, Any]: Límites del nivel de suscripción
     """
-    # Usamos los límites predeterminados si no se proporcionan settings
-    if settings is None:
-        from .settings import default_tier_limits
-        return default_tier_limits.get(tier, default_tier_limits["free"])
+    tier = tier.lower()
     
-    # Combinamos con configuraciones personalizadas si existen
-    tier_limits = default_tier_limits.get(tier, default_tier_limits["free"]).copy()
+    # Si el tier no existe, usar free como fallback
+    if tier not in default_tier_limits:
+        logger.warning(f"Tier desconocido: {tier}, usando 'free' como fallback")
+        tier = "free"
     
-    # Sobreescribimos con configuraciones personalizadas si existen
-    custom_limits = settings.get("tier_limits", {}).get(tier, {})
-    tier_limits.update(custom_limits)
-    
-    return tier_limits
+    # Devolver una copia para evitar modificaciones accidentales
+    return dict(default_tier_limits[tier])
 
 
-def get_available_llm_models(tier: str, settings: Optional[Dict[str, Any]] = None) -> List[str]:
+def get_available_llm_models(tier: str) -> List[str]:
     """
     Obtiene los modelos LLM disponibles para un nivel de suscripción específico.
     
     Args:
         tier: Nivel de suscripción ('free', 'pro', 'business')
-        settings: Configuraciones opcionales (evita importación circular)
         
     Returns:
         List[str]: Lista de modelos LLM disponibles
     """
-    tier_limits = get_tier_limits(tier, settings)
-    
-    # Añadir modelos de Ollama si está configurado para usarlos
-    available_models = list(tier_limits.get("allowed_llm_models", []))
-    if settings and settings.get("use_ollama"):
-        default_ollama_model = settings.get("default_ollama_llm_model", "llama3")
-        available_models.append(default_ollama_model)
-    
-    return available_models
+    tier_limits = get_tier_limits(tier)
+    return list(tier_limits.get("allowed_llm_models", ["gpt-3.5-turbo"]))
 
 
-def get_available_embedding_models(tier: str, settings: Optional[Dict[str, Any]] = None) -> List[str]:
+def get_available_embedding_models(tier: str) -> List[str]:
     """
     Obtiene los modelos de embedding disponibles para un nivel de suscripción específico.
     
     Args:
         tier: Nivel de suscripción ('free', 'pro', 'business')
-        settings: Configuraciones opcionales (evita importación circular)
         
     Returns:
         List[str]: Lista de modelos de embedding disponibles
     """
-    tier_limits = get_tier_limits(tier, settings)
-    
-    # Añadir modelos de Ollama si está configurado para usarlos
-    available_models = list(tier_limits.get("allowed_embedding_models", []))
-    if settings and settings.get("use_ollama"):
-        default_ollama_model = settings.get("default_ollama_embedding_model", "nomic-embed-text")
-        available_models.append(default_ollama_model)
-    
-    return available_models
+    tier_limits = get_tier_limits(tier)
+    return list(tier_limits.get("allowed_embedding_models", ["text-embedding-3-small"]))
 
 
-def get_service_port(service_name: str, settings: Optional[Dict[str, Any]] = None) -> int:
+def get_service_port(service_name: str) -> int:
     """
     Obtiene el puerto configurado para un servicio específico.
     
     Args:
         service_name: Nombre del servicio ('embedding', 'ingestion', 'query', 'agent')
-        settings: Configuraciones opcionales (evita importación circular)
         
     Returns:
         int: Puerto configurado para el servicio
     """
-    # Intentar obtener el puerto específico para cada servicio
-    try:
-        if service_name == "embedding":
-            return settings.get("embedding_service_port", 8001)
-        elif service_name == "ingestion":
-            return settings.get("ingestion_service_port", 8000)
-        elif service_name == "query":
-            return settings.get("query_service_port", 8002)
-        elif service_name == "agent":
-            return settings.get("agent_service_port", 8003)
-        else:
-            return 8004  # Puerto por defecto
-    except AttributeError:
-        # Valores por defecto si no están definidos en configuración
-        defaults = {
-            "embedding": 8001,
-            "ingestion": 8000,
-            "query": 8002,
-            "agent": 8003
-        }
-        return defaults.get(service_name, 8004)
+    # Puertos por defecto para cada servicio
+    default_ports = {
+        "embedding": 8001, 
+        "ingestion": 8000,
+        "query": 8002,
+        "agent": 8003,
+        "ui": 3000,
+        "web": 3000
+    }
+    
+    if service_name not in default_ports:
+        logger.warning(f"Servicio desconocido: {service_name}, usando puerto genérico 8000")
+        return 8000
+    
+    return default_ports[service_name]
 
 
 # Funciones de entorno para configuración
@@ -219,12 +243,9 @@ def is_development_environment() -> bool:
         bool: True si estamos en entorno de desarrollo
     """
     import os
-    # Verificar variables de entorno comunes para identificar desarrollo
-    env_vars = os.environ.get("CONFIG_ENVIRONMENT", "").lower()
-    return (
-        env_vars in ["development", "dev", "local", ""] or
-        os.environ.get("DEBUG", "").lower() in ["true", "1", "yes"]
-    )
+    env = os.environ.get("ENVIRONMENT", "development").lower()
+    return env in ("development", "dev", "local", "test")
+
 
 def should_use_mock_config() -> bool:
     """
@@ -237,16 +258,13 @@ def should_use_mock_config() -> bool:
     Returns:
         bool: True si se deben usar configuraciones mock
     """
-    import os
     if not is_development_environment():
         return False
-        
-    # Verificar si tenemos valores básicos de Supabase
-    supabase_url = os.environ.get("SUPABASE_URL", "")
-    supabase_key = os.environ.get("SUPABASE_KEY", "")
     
-    # Si no tenemos credenciales de Supabase, usar mock
-    if not supabase_url or not supabase_key or supabase_url == "http://localhost:54321":
+    # En desarrollo, intentar detectar si hay conexión a Supabase
+    try:
+        import os
+        return not (os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_KEY"))
+    except Exception:
+        # Si hay algún error, asumir que no hay conexión
         return True
-        
-    return False

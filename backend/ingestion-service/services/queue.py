@@ -56,42 +56,100 @@ async def shutdown_queue():
 async def queue_document_processing_job(
     tenant_id: str,
     document_id: str,
-    file_key: str,
-    metadata: Optional[Dict] = None
-) -> bool:
+    collection_id: str,
+    file_key: str = None,
+    url: str = None,
+    text_content: str = None,
+    file_info: Optional[Dict[str, Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None
+) -> str:
     """
     Encola un trabajo de procesamiento de documento.
     
     Args:
         tenant_id: ID del tenant
         document_id: ID del documento
-        file_key: Clave del archivo en storage
-        metadata: Metadatos adicionales
+        collection_id: ID de la colección a la que pertenece el documento
+        file_key: Clave del archivo en storage (para archivos subidos)
+        url: URL del documento (para ingestión desde URLs)
+        text_content: Texto del documento (para ingestión de texto plano)
+        file_info: Información del archivo (tipo, tamaño, etc.)
+        metadata: Metadatos adicionales del documento
         
     Returns:
-        bool: True si se encoló correctamente
+        str: ID del trabajo creado
+        
+    Raises:
+        ServiceError: Si hay un error al encolar el trabajo
     """
+    job_id = str(uuid.uuid4())
+    
     try:
+        # Validar que exista un tenant válido
+        tenant_id = validate_tenant_context(tenant_id)
+        
+        # Construir los datos completos del trabajo
+        job_data = {
+            "job_id": job_id,
+            "tenant_id": tenant_id,
+            "document_id": document_id,
+            "collection_id": collection_id,
+            "status": "pending",
+            "created_at": int(time.time()),
+            "metadata": metadata or {}
+        }
+        
+        # Agregar información específica según el tipo de fuente
+        if file_key:
+            job_data["file_key"] = file_key
+            job_data["source_type"] = "file"
+        elif url:
+            job_data["url"] = url
+            job_data["source_type"] = "url"
+        elif text_content:
+            job_data["text_content"] = text_content
+            job_data["source_type"] = "text"
+        else:
+            logger.error("Se requiere al menos una fuente: file_key, url o text_content")
+            raise ServiceError(
+                message="Se requiere especificar una fuente para el documento",
+                error_code="MISSING_DOCUMENT_SOURCE",
+                status_code=400
+            )
+            
+        # Almacenar información del archivo si se proporciona
+        if file_info:
+            job_data["file_info"] = file_info
+        
         supabase = get_supabase_client()
         
+        # Insertar trabajo en la tabla de trabajos de procesamiento
         result = await supabase.table(get_table_name("processing_jobs")) \
-            .insert({
-                "tenant_id": tenant_id,
-                "document_id": document_id,
-                "file_key": file_key,
-                "metadata": metadata or {},
-                "status": "pending"
-            }) \
+            .insert(job_data) \
             .execute()
             
         if result.error:
             logger.error(f"Error encolando trabajo: {result.error}")
-            return False
+            raise ServiceError(
+                message=f"Error al encolar el trabajo: {result.error.message}",
+                error_code="JOB_QUEUE_ERROR",
+                status_code=500
+            )
             
-        return True
+        # Encolar el trabajo en Redis para procesamiento
+        await CacheManager.rpush(INGESTION_QUEUE, json.dumps(job_data))
+            
+        return job_id
+    except ServiceError:
+        # Re-lanzar ServiceError para mantener el contexto
+        raise
     except Exception as e:
         logger.error(f"Error inesperado encolando trabajo: {str(e)}")
-        return False
+        raise ServiceError(
+            message=f"Error inesperado al encolar el trabajo: {str(e)}",
+            error_code="JOB_QUEUE_ERROR",
+            status_code=500
+        )
 
 async def check_stuck_jobs():
     """Verifica trabajos estancados y los marca como fallidos."""
@@ -252,14 +310,44 @@ async def process_next_job() -> bool:
     if not job_data:
         return False  # No hay trabajos en la cola
     
+    # Inicializar variables fuera del bloque try para usarlas en finally
+    job_id = None
+    tenant_id = None
+    document_id = None
+    lock_acquired = False
+    lock_key = None
+    
     try:
         # Parsear los datos del trabajo
         job = json.loads(job_data)
         job_id = job.get("job_id")
         tenant_id = job.get("tenant_id")
+        document_id = job.get("document_id")
+        collection_id = job.get("collection_id")
+        file_key = job.get("file_key")  # Referencia a Supabase Storage
+        url = job.get("url")            # URL si es ingestión web
+        text_content = job.get("text_content")  # Contenido texto si es directo
+        
+        # Crear contexto para logging y errores
+        context = {
+            "job_id": job_id,
+            "tenant_id": tenant_id,
+            "document_id": document_id,
+            "collection_id": collection_id
+        }
         
         # Validar que el tenant sea válido para procesar trabajos
-        tenant_id = validate_tenant_context(tenant_id)
+        if tenant_id:
+            tenant_id = validate_tenant_context(tenant_id)
+        else:
+            error_msg = "Tenant ID no especificado en el trabajo"
+            logger.error(error_msg, extra=context)
+            raise ServiceError(
+                message=error_msg,
+                error_code="INVALID_TENANT",
+                status_code=400,
+                context=context
+            )
         
         # Adquirir un lock para este trabajo
         lock_key = f"{JOB_LOCK_PREFIX}:{job_id}"
@@ -268,58 +356,120 @@ async def process_next_job() -> bool:
         if not lock_acquired:
             logger.warning(
                 f"Lock no adquirido para job_id={job_id}, otro worker podría estar procesándolo", 
-                extra={"job_id": job_id, "tenant_id": tenant_id}
+                extra=context
             )
             return True  # Consideramos el trabajo como procesado y seguimos
         
-        # Inicializar variables antes del bloque try para evitar referencias indefinidas en caso de excepción
-        document_id = job.get("document_id")
-        file_key = job.get("file_key")  # Nueva referencia a Supabase Storage
-        collection_id = job.get("collection_id")
-        
-        # Validar que todos los campos requeridos existan
-        required_fields = {"job_id": job_id, "tenant_id": tenant_id, "document_id": document_id, 
-                          "file_key": file_key, "collection_id": collection_id}
-        
-        missing_fields = [field for field, value in required_fields.items() if not value]
-        
-        if missing_fields:
-            error_msg = f"Campos requeridos faltantes en el trabajo: {', '.join(missing_fields)}"
-            logger.error(error_msg)
+        # Validar que tenemos la información necesaria según el tipo de fuente
+        source_type = None
+        if file_key:
+            source_type = "file"
+        elif url:
+            source_type = "url"
+        elif text_content:
+            source_type = "text"
+        else:
+            error_msg = "Fuente de documento no especificada (se requiere file_key, url o text_content)"
+            logger.error(error_msg, extra=context)
             
-            # Si tenemos suficiente información, actualizar el estado del trabajo
-            if job_id and tenant_id:
-                await update_processing_job(
-                    job_id=job_id,
+            await update_processing_job(
+                job_id=job_id,
+                tenant_id=tenant_id,
+                status="failed",
+                error=error_msg
+            )
+            
+            if document_id:
+                await update_document_status(
+                    document_id=document_id,
                     tenant_id=tenant_id,
                     status="failed",
-                    error=error_msg
+                    metadata={"error": error_msg}
                 )
                 
-                # Si también tenemos document_id, actualizar el estado del documento
-                if document_id:
-                    await update_document_status(
-                        document_id=document_id,
-                        tenant_id=tenant_id,
-                        status="failed",
-                        metadata={"error": error_msg}
-                    )
+            # No lanzamos excepción para permitir que el finally libere el lock
+            return False
+        
+        context["source_type"] = source_type
+        
+        # Validar que tenemos la información básica necesaria
+        if not document_id or not collection_id:
+            missing = []
+            if not document_id:
+                missing.append("document_id")
+            if not collection_id:
+                missing.append("collection_id")
+                
+            error_msg = f"Campos requeridos faltantes: {', '.join(missing)}"
+            logger.error(error_msg, extra=context)
             
+            await update_processing_job(
+                job_id=job_id,
+                tenant_id=tenant_id,
+                status="failed",
+                error=error_msg
+            )
+            
+            if document_id:
+                await update_document_status(
+                    document_id=document_id,
+                    tenant_id=tenant_id,
+                    status="failed",
+                    metadata={"error": error_msg}
+                )
+                
+            # No lanzamos excepción para permitir que el finally libere el lock
             return False
             
-        # Actualizar el estado del trabajo a "processing" para indicar que está en progreso
+        # Actualizar el estado del trabajo a "processing"
         await update_processing_job(
             job_id=job_id,
             tenant_id=tenant_id,
             status="processing"
         )
 
-        # Procesar usando el nuevo servicio unificado
-        processed_text = await process_file_from_storage(
-            tenant_id=tenant_id,
-            collection_id=collection_id,
-            file_key=file_key
-        )
+        # Procesar según el tipo de fuente
+        processed_text = None
+        
+        if source_type == "file":
+            # Procesamiento de archivo almacenado
+            processed_text = await process_file_from_storage(
+                tenant_id=tenant_id,
+                collection_id=collection_id,
+                file_key=file_key
+            )
+        elif source_type == "url":
+            # Aquí iría el procesamiento para URL (pendiente de implementar)
+            raise ServiceError(
+                message="Procesamiento de URL no implementado",
+                error_code="NOT_IMPLEMENTED",
+                status_code=501,
+                context=context
+            )
+        elif source_type == "text":
+            # El texto ya está disponible
+            processed_text = text_content
+        
+        # Verificar que tenemos texto procesado
+        if not processed_text:
+            error_msg = f"No se pudo extraer texto de la fuente tipo {source_type}"
+            logger.error(error_msg, extra=context)
+            
+            await update_processing_job(
+                job_id=job_id,
+                tenant_id=tenant_id,
+                status="failed",
+                error=error_msg
+            )
+            
+            await update_document_status(
+                document_id=document_id,
+                tenant_id=tenant_id,
+                status="failed",
+                metadata={"error": error_msg}
+            )
+            
+            return False
 
         # Dividir en chunks y generar embeddings
         chunks = await split_document_intelligently(
@@ -349,51 +499,75 @@ async def process_next_job() -> bool:
             metadata={"chunks_count": len(chunks)}
         )
 
-        # Limpiar recursos
-        await CacheManager.delete(
-            data_type="job",
-            resource_id=f"{job_id}:file",
-            tenant_id=tenant_id
-        )
-        await CacheManager.delete(
-            data_type="job",
-            resource_id=f"{job_id}:text",
-            tenant_id=tenant_id
-        )
-        await CacheManager.delete(
-            data_type="job",
-            resource_id=f"{job_id}:data",
-            tenant_id=tenant_id
-        )
-
-        # Liberar el bloqueo después de procesar el trabajo con éxito
-        lock_key = f"{JOB_LOCK_PREFIX}:{job_id}"
-        await CacheManager.delete(data_type="system", resource_id=lock_key)
+        # Limpiar recursos de caché asociados al trabajo
+        if job_id and tenant_id:
+            await _cleanup_job_resources(job_id, tenant_id)
         
         return True
-
     except Exception as e:
-        logger.error(f"Error procesando trabajo {job_id}: {str(e)}", exc_info=True)
+        error_context = {
+            "job_id": job_id,
+            "tenant_id": tenant_id,
+            "document_id": document_id,
+            "error": str(e)
+        }
+        
+        logger.error(f"Error procesando trabajo: {str(e)}", extra=error_context, exc_info=True)
 
-        error_message = str(e)
+        try:
+            # Solo intentar actualizar si tenemos la información mínima necesaria
+            if job_id and tenant_id:
+                error_message = str(e)
+                
+                # Actualizar estado del trabajo a fallido
+                await update_processing_job(
+                    job_id=job_id,
+                    tenant_id=tenant_id,
+                    status="failed",
+                    error=error_message
+                )
 
-        # Actualizar estado del trabajo a fallido
-        await update_processing_job(
-            job_id=job_id,
-            tenant_id=tenant_id,
-            status="failed",
-            error=error_message
-        )
+                # Actualizar estado del documento si tenemos el ID
+                if document_id:
+                    await update_document_status(
+                        document_id=document_id,
+                        tenant_id=tenant_id,
+                        status="failed",
+                        metadata={"error": error_message}
+                    )
+                    
+                # Limpiar recursos de caché asociados al trabajo
+                await _cleanup_job_resources(job_id, tenant_id)
+        except Exception as cleanup_error:
+            # Si falla la limpieza, solo registrarlo pero continuar
+            logger.error(f"Error en limpieza tras fallo: {str(cleanup_error)}", 
+                        extra=error_context, 
+                        exc_info=True)
+        
+        return False
+    finally:
+        # Garantizar que el lock se libere en cualquier circunstancia
+        if lock_acquired and lock_key:
+            try:
+                await CacheManager.delete(lock_key)
+                logger.debug(f"Lock liberado para job_id={job_id}", 
+                           extra={"job_id": job_id})
+            except Exception as unlock_error:
+                # Si falla la liberación del lock, registrarlo
+                logger.error(f"Error liberando lock: {str(unlock_error)}", 
+                           extra={"job_id": job_id, "lock_key": lock_key}, 
+                           exc_info=True)
 
-        # Actualizar estado del documento
-        await update_document_status(
-            document_id=document_id,
-            tenant_id=tenant_id,
-            status="failed",
-            metadata={"error": error_message}
-        )
-
-        # Limpiar recursos
+async def _cleanup_job_resources(job_id: str, tenant_id: str):
+    """
+    Limpia los recursos temporales asociados a un trabajo.
+    
+    Args:
+        job_id: ID del trabajo
+        tenant_id: ID del tenant
+    """
+    try:
+        # Limpiar recursos de caché asociados al trabajo
         await CacheManager.delete(
             data_type="job",
             resource_id=f"{job_id}:file",
@@ -409,10 +583,8 @@ async def process_next_job() -> bool:
             resource_id=f"{job_id}:data",
             tenant_id=tenant_id
         )
-        
-        # Liberar el bloqueo si lo habíamos adquirido
-        if job_id:
-            lock_key = f"{JOB_LOCK_PREFIX}:{job_id}"
-            await CacheManager.delete(data_type="system", resource_id=lock_key)
-
-        return False
+    except Exception as e:
+        # Solo registrar el error, no propagarlo
+        logger.error(f"Error limpiando recursos del trabajo {job_id}: {str(e)}", 
+                    extra={"job_id": job_id, "tenant_id": tenant_id},
+                    exc_info=True)

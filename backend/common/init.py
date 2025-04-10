@@ -4,7 +4,7 @@ Proporciona funciones compartidas para autenticación, caché, rate limiting y m
 """
 
 # Importaciones principales para compatibilidad con código existente
-from .auth import verify_tenant, check_tenant_quotas
+from .auth import verify_tenant
 from .cache import get_redis_client
 from .config import get_settings
 from .models import TenantInfo, HealthResponse
@@ -15,7 +15,6 @@ from .errors import setup_error_handling, handle_service_error_simple
 
 # Aliases para mantener compatibilidad hacia atrás
 from .auth import verify_tenant as verify_tenant
-from .auth import check_tenant_quotas as check_tenant_quotas
 from .db import get_supabase_client as get_supabase_client
 from .cache import get_redis_client as get_redis_client
 from .config import get_settings as get_settings
@@ -30,7 +29,6 @@ from .errors import handle_service_error_simple as handle_service_error_simple
 # Exportar todos los símbolos importantes para mantener compatibilidad
 __all__ = [
     'verify_tenant',
-    'check_tenant_quotas',
     'get_redis_client',
     'get_settings',
     'TenantInfo',

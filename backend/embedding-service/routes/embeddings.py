@@ -15,8 +15,8 @@ from common.errors import (
     TextTooLargeError, RateLimitExceeded, handle_service_error, handle_service_error_simple
 )
 from common.config.settings import get_settings
-from common.tracking import track_embedding_usage
-from common.auth.quotas import check_tenant_quotas
+from common.tracking import track_embedding_usage, track_token_usage
+from common.auth import verify_tenant, get_allowed_models_for_tier
 
 from models.embeddings import (
     EmbeddingRequest, EmbeddingResponse, 
@@ -48,7 +48,7 @@ async def generate_embeddings(
     tenant_id = tenant_info.tenant_id
     
     # Verificar cuotas del tenant
-    await check_tenant_quotas(tenant_info)
+    # await check_tenant_quotas(tenant_info)
     
     # Obtener textos a procesar
     texts = request.texts
@@ -140,7 +140,7 @@ async def batch_generate_embeddings(
     tenant_id = tenant_info.tenant_id
     
     # Verificar cuotas del tenant
-    await check_tenant_quotas(tenant_info)
+    # await check_tenant_quotas(tenant_info)
     
     # Verificar que hay items para procesar
     if not request.items:

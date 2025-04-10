@@ -15,6 +15,7 @@ from ..errors.exceptions import ConfigurationError, ErrorCode
 
 # Importaciones internas (minimizadas para evitar ciclos)
 from .schema import get_service_configurations, get_mock_configurations
+from .tiers import default_tier_limits, get_tier_limits
 
 logger = logging.getLogger(__name__)
 
@@ -22,71 +23,6 @@ logger = logging.getLogger(__name__)
 _force_settings_reload = False
 _settings_last_refresh = {}  # {tenant_id: timestamp}
 _settings_ttl = 3600  # 1 hora por defecto
-
-# Constantes para límites de tiers
-default_tier_limits = {
-    "free": {
-        "max_docs": 20,
-        "max_knowledge_bases": 1,
-        "has_advanced_rag": False,
-        "max_tokens_per_month": 100000,
-        "similarity_top_k": 4,
-        "allowed_llm_models": ["gpt-3.5-turbo"],
-        "allowed_embedding_models": ["text-embedding-3-small"],
-        "query_rate_limit_per_day": 100,
-        "max_agents": 1,
-        "max_tools_per_agent": 2,
-    },
-    "pro": {
-        "max_docs": 100,
-        "max_knowledge_bases": 5,
-        "has_advanced_rag": True,
-        "max_tokens_per_month": 500000,
-        "similarity_top_k": 8,
-        "allowed_llm_models": ["gpt-3.5-turbo", "gpt-4"],
-        "allowed_embedding_models": ["text-embedding-3-small", "text-embedding-3-large"],
-        "query_rate_limit_per_day": 500,
-        "max_agents": 5,
-        "max_tools_per_agent": 5,
-    },
-    "business": {
-        "max_docs": 1000,
-        "max_knowledge_bases": 20,
-        "has_advanced_rag": True,
-        "max_tokens_per_month": 2000000,
-        "similarity_top_k": 12,
-        "allowed_llm_models": ["gpt-3.5-turbo", "gpt-4", "claude-2"],
-        "allowed_embedding_models": ["text-embedding-3-small", "text-embedding-3-large"],
-        "query_rate_limit_per_day": 2000,
-        "max_agents": 20,
-        "max_tools_per_agent": 10,
-    }
-}
-
-def invalidate_settings_cache(tenant_id: Optional[str] = None):
-    """
-    Fuerza la recarga de configuraciones en la próxima llamada a get_settings().
-    
-    Esta función puede ser llamada cuando se sabe que las configuraciones
-    han cambiado en Supabase o cuando se desea forzar una recarga.
-    
-    Args:
-        tenant_id: ID del tenant específico o None para todos
-    """
-    global _force_settings_reload, _settings_last_refresh
-    
-    _force_settings_reload = True
-    
-    if tenant_id:
-        # Eliminar timestamp de tenant específico
-        if tenant_id in _settings_last_refresh:
-            del _settings_last_refresh[tenant_id]
-        logger.info(f"Caché de configuraciones invalidado para tenant {tenant_id}")
-    else:
-        # Limpiar todos los timestamps
-        _settings_last_refresh.clear()
-        logger.info("Caché de configuraciones invalidado para todos los tenants")
-
 
 class Settings(BaseSettings):
     """
@@ -146,6 +82,10 @@ class Settings(BaseSettings):
     default_embedding_model: str = Field("text-embedding-3-small", description="Modelo de embeddings por defecto")
     embedding_cache_enabled: bool = Field(True, description="Habilitar caché de embeddings")
     embedding_batch_size: int = Field(100, description="Tamaño de lote para embeddings")
+    max_embedding_batch_size: int = Field(200, description="Tamaño máximo de lote para embeddings")
+    max_tokens_per_batch: int = Field(50000, description="Número máximo de tokens por lote de embeddings")
+    max_token_length_per_text: int = Field(8000, description="Límite de tokens para textos individuales en embeddings")
+    default_embedding_dimension: int = Field(1536, description="Dimensión del vector de embedding por defecto")
     
     # =========== Configuración de Consultas ===========
     default_similarity_top_k: int = Field(4, description="Número de resultados similares a recuperar por defecto")
@@ -232,16 +172,43 @@ class Settings(BaseSettings):
         Returns:
             int: Límite de solicitudes personalizado para el tenant
         """
+        # Llamamos a la función centralizada en tiers.py
         from .tiers import get_tier_rate_limit
         
-        base_limit = get_tier_rate_limit(tier)
+        try:
+            # Intentar obtener de manera asíncrona, pero con fallback 
+            # para contextos sincrónicos
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # Estamos en contexto asíncrono
+                    return asyncio.create_task(get_tier_rate_limit(
+                        tenant_id=tenant_id,
+                        tier=tier,
+                        service_name=service_name
+                    ))
+                else:
+                    # Contexto sincrónico pero tenemos event loop
+                    return loop.run_until_complete(get_tier_rate_limit(
+                        tenant_id=tenant_id,
+                        tier=tier,
+                        service_name=service_name
+                    ))
+            except RuntimeError:
+                # No hay event loop disponible, usar valores por defecto
+                pass
+        except Exception as e:
+            logger.warning(f"Error obteniendo límite de tasa para {tenant_id}: {str(e)}")
         
-        # Aplicar ajustes específicos por tenant si existen
-        tenant_settings = self.get_tenant_settings(tenant_id)
-        if tenant_settings and "rate_limit_multiplier" in tenant_settings:
-            return int(base_limit * tenant_settings["rate_limit_multiplier"])
-        
-        return base_limit
+        # Valores por defecto según tier si falla la obtención asíncrona
+        tier_limits = {
+            "free": self.rate_limit_free_tier,
+            "pro": self.rate_limit_pro_tier,
+            "business": self.rate_limit_business_tier,
+            "enterprise": 5000  # Valor alto por defecto
+        }
+        return tier_limits.get(tier.lower(), self.rate_limit_free_tier)
     
     class Config:
         env_file = ".env"
@@ -352,3 +319,28 @@ async def get_settings() -> Settings:
     _settings_last_refresh[tenant_id] = current_time
     
     return settings
+
+
+def invalidate_settings_cache(tenant_id: Optional[str] = None):
+    """
+    Fuerza la recarga de configuraciones en la próxima llamada a get_settings().
+    
+    Esta función puede ser llamada cuando se sabe que las configuraciones
+    han cambiado en Supabase o cuando se desea forzar una recarga.
+    
+    Args:
+        tenant_id: ID del tenant específico o None para todos
+    """
+    global _force_settings_reload, _settings_last_refresh
+    
+    _force_settings_reload = True
+    
+    if tenant_id:
+        # Eliminar timestamp de tenant específico
+        if tenant_id in _settings_last_refresh:
+            del _settings_last_refresh[tenant_id]
+        logger.info(f"Caché de configuraciones invalidado para tenant {tenant_id}")
+    else:
+        # Limpiar todos los timestamps
+        _settings_last_refresh.clear()
+        logger.info("Caché de configuraciones invalidado para todos los tenants")

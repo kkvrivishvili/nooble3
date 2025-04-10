@@ -31,8 +31,9 @@ class IngestionConfig:
         self.max_retries = int(os.getenv("MAX_RETRIES", "3"))
         self.retry_backoff_base = float(os.getenv("RETRY_BACKOFF_BASE", "2.0"))
         
-        # Almacenamiento
-        self.storage_path = os.getenv("STORAGE_PATH", "documents")
+        # NOTA: Se eliminó storage_path (os.getenv("STORAGE_PATH", "documents"))
+        # ya que no se utiliza en el código actual. Si se necesita almacenamiento
+        # local en el futuro, se debe implementar siguiendo el patrón común.config
         
         # Chunking
         self.chunk_size = int(os.getenv("CHUNK_SIZE", "1000"))
