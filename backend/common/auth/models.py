@@ -11,26 +11,6 @@ from ..config.tiers import get_available_llm_models, get_available_embedding_mod
 
 logger = logging.getLogger(__name__)
 
-def get_allowed_models_for_tier(tier: str, model_type: str = "llm") -> list:
-    """
-    Obtiene los modelos permitidos para un nivel de suscripción.
-    
-    Args:
-        tier: Nivel de suscripción ('free', 'pro', 'business')
-        model_type: Tipo de modelo ('llm' o 'embedding')
-        
-    Returns:
-        list: Lista de IDs de modelos permitidos
-    """
-    # Usamos las funciones del módulo tiers
-    if model_type == "llm":
-        return get_available_llm_models(tier)
-    elif model_type == "embedding":
-        return get_available_embedding_models(tier)
-    else:
-        logger.warning(f"Tipo de modelo desconocido: {model_type}, usando LLM por defecto")
-        return get_available_llm_models(tier)
-
 
 async def validate_model_access(tenant_info: TenantInfo, model_id: str, model_type: str = "llm") -> str:
     """
@@ -48,7 +28,15 @@ async def validate_model_access(tenant_info: TenantInfo, model_id: str, model_ty
         ServiceError: Si el modelo solicitado no está permitido para el tier del tenant
     """
     tier = tenant_info.subscription_tier
-    allowed_models = get_allowed_models_for_tier(tier, model_type)
+    
+    # Obtenemos los modelos permitidos directamente de las funciones en tiers.py
+    if model_type == "llm":
+        allowed_models = get_available_llm_models(tier)
+    elif model_type == "embedding":
+        allowed_models = get_available_embedding_models(tier)
+    else:
+        logger.warning(f"Tipo de modelo desconocido: {model_type}, usando LLM por defecto")
+        allowed_models = get_available_llm_models(tier)
     
     # Si el modelo solicitado está permitido, lo devolvemos
     if model_id in allowed_models:
