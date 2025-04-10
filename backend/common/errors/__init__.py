@@ -40,8 +40,6 @@ from .exceptions import (
     BatchTooLargeError,
     InvalidEmbeddingParamsError,
     ConfigurationError,
-    handle_service_error,
-    handle_service_error_simple,
     setup_error_handling
 )
 
@@ -85,7 +83,5 @@ __all__ = [
     "BatchTooLargeError",
     "InvalidEmbeddingParamsError",
     "ConfigurationError",
-    "handle_service_error",
-    "handle_service_error_simple",
     "setup_error_handling"
 ]

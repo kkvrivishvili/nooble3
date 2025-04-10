@@ -318,8 +318,4 @@ def handle_errors(
     
     return decorator
 
-# Alias para compatibilidad con código existente
-# Eventualmente se eliminarán, manteniéndolas por ahora para compatibilidad
-handle_service_error = handle_errors
-handle_service_error_simple = lambda func: handle_errors(error_type="simple", convert_exceptions=True, log_traceback=False)(func)
-handle_config_error = lambda func: handle_errors(error_type="config")(func)
+# Los alias de compatibilidad han sido eliminados según la migración completa al decorador unificado

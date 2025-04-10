@@ -13,7 +13,7 @@ from supabase import create_client, Client
 from ..context.vars import get_current_tenant_id, get_full_context
 from ..cache.manager import CacheManager
 from ..errors.exceptions import DatabaseError, ConfigurationError, ServiceError, ErrorCode
-from ..errors.handlers import handle_config_error
+from ..errors.handlers import handle_errors
 from ..config.settings import get_settings
 
 # IMPORTANTE: Estas funciones deben importarse directamente desde common.auth.tenant
