@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from common.models import TenantInfo, FileUploadResponse, BatchJobResponse
 from common.errors import (
-    ServiceError, handle_service_error_simple, ErrorCode,
+    ServiceError, handle_errors, ErrorCode,
     DocumentProcessingError, ValidationError
 )
 from common.context import with_context
@@ -46,7 +46,7 @@ class DocumentUploadMetadata(BaseModel):
     summary="Cargar documento",
     description="Carga un documento para procesamiento y generación de embeddings"
 )
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 @with_context(tenant=True, collection=True)
 async def upload_document(
     file: UploadFile = File(...),
@@ -175,7 +175,7 @@ class UrlIngestionRequest(BaseModel):
     summary="Ingerir contenido de URL",
     description="Procesa y genera embeddings para el contenido de una URL"
 )
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 @with_context(tenant=True, collection=True)
 async def ingest_url(
     request: UrlIngestionRequest,
@@ -272,7 +272,7 @@ class TextIngestionRequest(BaseModel):
     summary="Ingerir texto plano",
     description="Procesa y genera embeddings para texto plano"
 )
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 @with_context(tenant=True, collection=True)
 async def ingest_text(
     request: TextIngestionRequest,
@@ -368,7 +368,7 @@ class BatchUrlsRequest(BaseModel):
     summary="Procesar lote de URLs",
     description="Procesa un lote de URLs en segundo plano"
 )
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 @with_context(tenant=True, collection=True)
 async def batch_process_urls(
     request: BatchUrlsRequest,

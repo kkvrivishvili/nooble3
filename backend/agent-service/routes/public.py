@@ -7,7 +7,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Query, Path
 from fastapi.responses import StreamingResponse
 
 from common.models import PublicChatRequest, ChatResponse, ChatMessage
-from common.errors import ServiceError, handle_service_error_simple
+from common.errors import ServiceError, handle_errors
 from common.context import with_context, run_public_context
 from common.db.rpc import create_conversation, add_chat_history
 from common.tracking import track_query
@@ -23,7 +23,7 @@ router = APIRouter()
 settings = get_settings()
 
 @router.post("/public/{tenant_slug}/chat/{agent_id}", response_model=ChatResponse, tags=["Chat"])
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 async def public_chat_with_agent(
     tenant_slug: str,
     agent_id: str,

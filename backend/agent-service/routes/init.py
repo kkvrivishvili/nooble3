@@ -19,11 +19,11 @@ def register_routes(app: FastAPI):
     
     # También registrar endpoints de verificación de salud (health check)
     from common.models import HealthResponse
-    from common.errors import handle_service_error_simple
+    from common.errors import handle_errors
     
     @app.get("/status", response_model=HealthResponse, tags=["Health"])
     @app.get("/health", response_model=HealthResponse, tags=["Health"])
-    @handle_service_error_simple
+    @handle_errors(error_type="simple", log_traceback=False)
     async def get_service_status() -> HealthResponse:
         """Verifica el estado del servicio y sus dependencias."""
         from common.config import get_settings

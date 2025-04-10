@@ -10,12 +10,13 @@ from typing import Dict, Any, Optional, List, Union
 from functools import lru_cache
 from pydantic import Field, validator
 from pydantic_settings import BaseSettings
-from ..errors.handlers import handle_config_error
+from ..errors.handlers import handle_errors
 from ..errors.exceptions import ConfigurationError, ErrorCode
 
-# Importaciones internas (minimizadas para evitar ciclos)
-from .schema import get_service_configurations, get_mock_configurations
-from .tiers import default_tier_limits, get_tier_limits
+# Eliminamos importaciones a nivel de módulo para evitar ciclos
+# Ya no importamos aquí:
+# from .schema import get_service_configurations, get_mock_configurations
+# from .tiers import default_tier_limits, get_tier_limits
 
 logger = logging.getLogger(__name__)
 
@@ -111,12 +112,14 @@ class Settings(BaseSettings):
         """
         Obtiene el esquema de configuración para un servicio específico.
         """
+        from .schema import get_service_configurations
         return get_service_configurations(service_name or self.service_name)
     
     def get_mock_configuration(self, service_name: Optional[str] = None) -> Dict[str, Any]:
         """
         Obtiene configuraciones mock para un servicio específico.
         """
+        from .schema import get_mock_configurations
         return get_mock_configurations(service_name or self.service_name)
     
     def use_mock_if_empty(self, service_name: Optional[str] = None, tenant_id: Optional[str] = None):
@@ -218,7 +221,7 @@ class Settings(BaseSettings):
 
 
 @lru_cache(maxsize=100)  # Limitar tamaño del caché
-@handle_config_error
+@handle_errors(error_type="config")
 async def get_settings() -> Settings:
     """
     Obtiene la configuración con caché para el servicio.

@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Query, Path, HTTPException
 
 from common.models import TenantInfo, DocumentListResponse, DocumentDetailResponse, DeleteDocumentResponse
 from common.errors import (
-    ServiceError, handle_service_error_simple, ErrorCode,
+    ServiceError, handle_errors, ErrorCode,
     DocumentProcessingError, NotFoundError
 )
 from common.context import with_context
@@ -26,7 +26,10 @@ logger = logging.getLogger(__name__)
     summary="Listar documentos",
     description="Obtiene la lista de documentos para un tenant o colección específica"
 )
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False, error_map={
+    NotFoundError: ("NOT_FOUND", 404),
+    DocumentProcessingError: ("DOCUMENT_PROCESSING_ERROR", 500)
+})
 @with_context(tenant=True, collection=True)
 async def list_documents(
     collection_id: Optional[str] = Query(None, description="Filtrar por ID de colección"),
@@ -119,7 +122,10 @@ async def list_documents(
     summary="Obtener documento",
     description="Obtiene detalles de un documento específico"
 )
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False, error_map={
+    NotFoundError: ("NOT_FOUND", 404),
+    DocumentProcessingError: ("DOCUMENT_PROCESSING_ERROR", 500)
+})
 @with_context(tenant=True)
 async def get_document(
     document_id: str = Path(..., description="ID del documento"),
@@ -220,7 +226,10 @@ async def get_document(
     summary="Eliminar documento",
     description="Elimina un documento y todos sus chunks"
 )
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False, error_map={
+    NotFoundError: ("NOT_FOUND", 404),
+    DocumentProcessingError: ("DOCUMENT_PROCESSING_ERROR", 500)
+})
 @with_context(tenant=True)
 async def delete_document(
     document_id: str = Path(..., description="ID del documento a eliminar"),

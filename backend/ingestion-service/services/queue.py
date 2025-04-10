@@ -14,13 +14,13 @@ from common.cache.manager import CacheManager
 from common.errors import ServiceError, DocumentProcessingError
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
+from common.context import with_context, Context
 
 from config import get_settings
 from services.extraction import process_file_from_storage
 from services.chunking import split_document_intelligently
 from services.embedding import process_and_store_chunks
 from services.storage import update_document_status, update_processing_job
-from common.context.vars import validate_tenant_context
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -53,6 +53,7 @@ async def shutdown_queue():
     # No se requiere acción específica para cerrar CacheManager
     logger.info("Sistema de colas cerrado correctamente")
 
+@with_context(tenant=True, validate_tenant=True)
 async def queue_document_processing_job(
     tenant_id: str,
     document_id: str,
@@ -61,7 +62,8 @@ async def queue_document_processing_job(
     url: str = None,
     text_content: str = None,
     file_info: Optional[Dict[str, Any]] = None,
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = None,
+    ctx: Context = None
 ) -> str:
     """
     Encola un trabajo de procesamiento de documento.
@@ -75,6 +77,7 @@ async def queue_document_processing_job(
         text_content: Texto del documento (para ingestión de texto plano)
         file_info: Información del archivo (tipo, tamaño, etc.)
         metadata: Metadatos adicionales del documento
+        ctx: Contexto proporcionado por el decorador with_context
         
     Returns:
         str: ID del trabajo creado
@@ -85,8 +88,10 @@ async def queue_document_processing_job(
     job_id = str(uuid.uuid4())
     
     try:
-        # Validar que exista un tenant válido
-        tenant_id = validate_tenant_context(tenant_id)
+        # Tenant ya validado por el decorador with_context
+        # El parámetro tenant_id tiene prioridad sobre el contexto
+        if tenant_id is None:
+            tenant_id = ctx.get_tenant_id()
         
         # Construir los datos completos del trabajo
         job_data = {
@@ -288,7 +293,8 @@ async def process_next_job_with_retry(max_retries: int = 3) -> bool:
             await asyncio.sleep(2 ** attempt)  # Backoff exponencial
     return False
 
-async def process_next_job() -> bool:
+@with_context(tenant=True, validate_tenant=True)
+async def process_next_job(ctx: Context = None) -> bool:
     """
     Procesa el siguiente trabajo de la cola de ingesta.
     
@@ -337,17 +343,8 @@ async def process_next_job() -> bool:
         }
         
         # Validar que el tenant sea válido para procesar trabajos
-        if tenant_id:
-            tenant_id = validate_tenant_context(tenant_id)
-        else:
-            error_msg = "Tenant ID no especificado en el trabajo"
-            logger.error(error_msg, extra=context)
-            raise ServiceError(
-                message=error_msg,
-                error_code="INVALID_TENANT",
-                status_code=400,
-                context=context
-            )
+        if tenant_id is None:
+            tenant_id = ctx.get_tenant_id()
         
         # Adquirir un lock para este trabajo
         lock_key = f"{JOB_LOCK_PREFIX}:{job_id}"

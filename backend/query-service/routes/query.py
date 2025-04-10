@@ -11,7 +11,7 @@ from pydantic import UUID4, BaseModel, Field
 
 from common.models import TenantInfo, QueryRequest, QueryResponse
 from common.errors import (
-    ErrorCode, ServiceError, handle_service_error_simple,
+    ErrorCode, ServiceError, handle_errors,
     QueryProcessingError, CollectionNotFoundError, 
     InvalidQueryParamsError, RetrievalError, GenerationError
 )
@@ -32,7 +32,7 @@ settings = get_settings()
     summary="Consultar colección",
     description="Realiza una consulta RAG sobre una colección específica"
 )
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 @with_context(tenant=True, collection=True)
 async def query_collection(
     collection_id: str,
@@ -147,7 +147,7 @@ async def query_collection(
     description="Realiza una consulta RAG (para compatibilidad con versiones anteriores)",
     deprecated=True
 )
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 @with_context(tenant=True, collection=True)
 async def legacy_query_endpoint(
     request: QueryRequest,

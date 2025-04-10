@@ -6,7 +6,7 @@ import re
 from fastapi import APIRouter, Depends, Path, Query, HTTPException
 
 from common.models import TenantInfo, AgentConfig, AgentRequest, AgentResponse, AgentListResponse, DeleteAgentResponse
-from common.errors import ServiceError, handle_service_error_simple, InvalidAgentIdError, ErrorCode, AgentNotFoundError, AgentExecutionError
+from common.errors import ServiceError, handle_errors, InvalidAgentIdError, ErrorCode, AgentNotFoundError, AgentExecutionError
 from common.context import with_context
 from common.config import get_settings, invalidate_settings_cache
 from common.db.supabase import get_supabase_client
@@ -20,7 +20,11 @@ router = APIRouter()
 settings = get_settings()
 
 @router.post("", response_model=AgentResponse)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False, error_map={
+    InvalidAgentIdError: ("INVALID_AGENT_ID", 400),
+    AgentNotFoundError: ("AGENT_NOT_FOUND", 404),
+    AgentExecutionError: ("AGENT_EXECUTION_ERROR", 500)
+})
 @with_context(tenant=True)
 async def create_agent(
     request: AgentRequest, 
@@ -132,7 +136,10 @@ async def create_agent(
         ) from e
 
 @router.get("/{agent_id}", response_model=AgentResponse)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False, error_map={
+    InvalidAgentIdError: ("INVALID_AGENT_ID", 400),
+    AgentNotFoundError: ("AGENT_NOT_FOUND", 404)
+})
 @with_context(tenant=True, agent=True)
 async def get_agent(
     agent_id: str, 
@@ -183,7 +190,7 @@ async def get_agent(
     )
 
 @router.get("", response_model=AgentListResponse)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 @with_context(tenant=True)
 async def list_agents(
     tenant_info: TenantInfo = Depends(verify_tenant)
@@ -224,7 +231,11 @@ async def list_agents(
         )
 
 @router.put("/{agent_id}", response_model=AgentResponse)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False, error_map={
+    InvalidAgentIdError: ("INVALID_AGENT_ID", 400),
+    AgentNotFoundError: ("AGENT_NOT_FOUND", 404),
+    AgentExecutionError: ("AGENT_EXECUTION_ERROR", 500)
+})
 @with_context(tenant=True, agent=True)
 async def update_agent(
     agent_id: str, 
@@ -333,7 +344,10 @@ async def update_agent(
         ) from e
 
 @router.delete("/{agent_id}", response_model=DeleteAgentResponse)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False, error_map={
+    InvalidAgentIdError: ("INVALID_AGENT_ID", 400),
+    AgentNotFoundError: ("AGENT_NOT_FOUND", 404)
+})
 @with_context(tenant=True, agent=True)
 async def delete_agent(
     agent_id: str, 

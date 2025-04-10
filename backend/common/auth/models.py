@@ -6,7 +6,6 @@ from typing import List, Optional
 import logging
 
 from ..models.base import TenantInfo
-from ..config.tiers import get_tier_limits, get_available_llm_models, get_available_embedding_models
 from ..errors import ServiceError, ErrorCode
 
 logger = logging.getLogger(__name__)
@@ -22,6 +21,8 @@ def get_allowed_models_for_tier(tier: str, model_type: str = "llm") -> list:
     Returns:
         list: Lista de IDs de modelos permitidos
     """
+    from ..config.tiers import get_available_llm_models, get_available_embedding_models
+    
     # Usamos las funciones de tiers.py que ya no dependen de settings
     if model_type == "llm":
         return get_available_llm_models(tier)

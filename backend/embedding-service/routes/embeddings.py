@@ -12,7 +12,7 @@ from common.auth import verify_tenant, get_allowed_models_for_tier
 from common.context import with_context, get_current_tenant_id, get_current_collection_id
 from common.errors import (
     ErrorCode, ServiceError, EmbeddingGenerationError, 
-    TextTooLargeError, RateLimitExceeded, handle_service_error, handle_service_error_simple
+    TextTooLargeError, RateLimitExceeded, handle_errors
 )
 from common.config.settings import get_settings
 from common.tracking import track_embedding_usage, track_token_usage
@@ -32,7 +32,11 @@ settings = get_settings()
 logger = logging.getLogger(__name__)
 
 @router.post("/embeddings", response_model=EmbeddingResponse)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False, error_map={
+    EmbeddingGenerationError: ("EMBEDDING_GENERATION_ERROR", 500),
+    TextTooLargeError: ("TEXT_TOO_LARGE", 413),
+    RateLimitExceeded: ("RATE_LIMIT_EXCEEDED", 429)
+})
 @with_context(tenant=True, agent=True, conversation=True, collection=True)
 async def generate_embeddings(
     request: EmbeddingRequest,
@@ -121,7 +125,11 @@ async def generate_embeddings(
         )
 
 @router.post("/embeddings/batch", response_model=BatchEmbeddingResponse)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False, error_map={
+    EmbeddingGenerationError: ("EMBEDDING_GENERATION_ERROR", 500),
+    TextTooLargeError: ("TEXT_TOO_LARGE", 413),
+    RateLimitExceeded: ("RATE_LIMIT_EXCEEDED", 429)
+})
 @with_context(tenant=True, agent=True, conversation=True, collection=True)
 async def batch_generate_embeddings(
     request: BatchEmbeddingRequest,
@@ -253,7 +261,11 @@ async def batch_generate_embeddings(
 
 # Endpoint simplificado para uso interno por los servicios de query y agent
 @router.post("/internal/embed", tags=["Internal"])
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False, error_map={
+    EmbeddingGenerationError: ("EMBEDDING_GENERATION_ERROR", 500),
+    TextTooLargeError: ("TEXT_TOO_LARGE", 413),
+    RateLimitExceeded: ("RATE_LIMIT_EXCEEDED", 429)
+})
 @with_context(tenant=True, agent=True, conversation=True, collection=True)
 async def internal_embed(
     texts: List[str] = Body(..., description="Textos para generar embeddings"),

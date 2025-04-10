@@ -5,11 +5,6 @@ Definiciones de niveles, límites y configuraciones específicas por tier.
 from typing import Dict, Any, List, Optional
 import logging
 
-from ..context.vars import get_full_context
-from ..errors.exceptions import ServiceError, ErrorCode
-from ..errors.handlers import handle_errors
-from ..db.supabase import get_tenant_configurations
-
 logger = logging.getLogger(__name__)
 
 # Centralización de límites de tiers en un único lugar
@@ -83,7 +78,18 @@ service_multipliers = {
     "collection": 0.5    # Restrictivo para operaciones de colección
 }
 
-@handle_errors()
+def handle_errors(func):
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            from ..errors.exceptions import ServiceError, ErrorCode
+            error_message = f"Error en la función {func.__name__}: {str(e)}"
+            logger.error(error_message, exc_info=True)
+            raise ServiceError(ErrorCode.INTERNAL_ERROR, error_message)
+    return wrapper
+
+@handle_errors
 async def get_tier_rate_limit(tenant_id: str, tier: str, service_name: Optional[str] = None) -> int:
     """
     Obtiene el límite de tasa para un tenant y tier específicos.
@@ -99,6 +105,9 @@ async def get_tier_rate_limit(tenant_id: str, tier: str, service_name: Optional[
     Raises:
         ServiceError: Si hay un error obteniendo el límite
     """
+    from ..context.vars import get_full_context
+    from ..db.supabase import get_tenant_configurations
+    
     error_context = {
         "function": "get_tier_rate_limit",
         "tenant_id": tenant_id,
@@ -157,7 +166,8 @@ async def get_tier_rate_limit(tenant_id: str, tier: str, service_name: Optional[
         return default_rate_limits.get("free", 600)
 
 
-def get_tier_limits(tier: str, tenant_id: Optional[str] = None) -> Dict[str, Any]:
+@handle_errors
+async def get_tier_limits(tier: str, tenant_id: Optional[str] = None) -> Dict[str, Any]:
     """
     Obtiene los límites para un nivel de suscripción específico.
     
@@ -168,16 +178,31 @@ def get_tier_limits(tier: str, tenant_id: Optional[str] = None) -> Dict[str, Any
     Returns:
         Dict[str, Any]: Límites del nivel de suscripción
     """
-    tier = tier.lower()
+    # Importaciones dinámicas
+    from ..db.supabase import get_tenant_configurations
+    from ..errors.exceptions import ServiceError, ErrorCode
     
-    # Si el tier no existe, usar free como fallback
     if tier not in default_tier_limits:
-        logger.warning(f"Tier desconocido: {tier}, usando 'free' como fallback")
-        tier = "free"
+        raise ServiceError(
+            error_code=ErrorCode.INVALID_PARAMETER,
+            message=f"Nivel de suscripción no válido: {tier}"
+        )
     
-    # Devolver una copia para evitar modificaciones accidentales
-    return dict(default_tier_limits[tier])
-
+    # Por defecto, usamos los límites predefinidos
+    limits = default_tier_limits[tier].copy()
+    
+    # Si se proporciona un tenant_id, intentamos obtener configuraciones personalizadas
+    if tenant_id:
+        try:
+            custom_configs = await get_tenant_configurations(tenant_id)
+            # Combinamos con la configuración personalizada si existe
+            if custom_configs and "tier_limits" in custom_configs and tier in custom_configs["tier_limits"]:
+                custom_tier_limits = custom_configs["tier_limits"][tier]
+                limits.update(custom_tier_limits)
+        except Exception as e:
+            logger.warning(f"Error al obtener configuraciones personalizadas para {tenant_id}: {str(e)}")
+    
+    return limits
 
 def get_available_llm_models(tier: str) -> List[str]:
     """
@@ -189,9 +214,10 @@ def get_available_llm_models(tier: str) -> List[str]:
     Returns:
         List[str]: Lista de modelos LLM disponibles
     """
-    tier_limits = get_tier_limits(tier)
-    return list(tier_limits.get("allowed_llm_models", ["gpt-3.5-turbo"]))
-
+    if tier not in default_tier_limits:
+        return default_tier_limits["free"]["allowed_llm_models"]
+    
+    return default_tier_limits[tier]["allowed_llm_models"]
 
 def get_available_embedding_models(tier: str) -> List[str]:
     """
@@ -203,9 +229,10 @@ def get_available_embedding_models(tier: str) -> List[str]:
     Returns:
         List[str]: Lista de modelos de embedding disponibles
     """
-    tier_limits = get_tier_limits(tier)
-    return list(tier_limits.get("allowed_embedding_models", ["text-embedding-3-small"]))
-
+    if tier not in default_tier_limits:
+        return default_tier_limits["free"]["allowed_embedding_models"]
+    
+    return default_tier_limits[tier]["allowed_embedding_models"]
 
 def get_service_port(service_name: str) -> int:
     """
@@ -217,21 +244,23 @@ def get_service_port(service_name: str) -> int:
     Returns:
         int: Puerto configurado para el servicio
     """
-    # Puertos por defecto para cada servicio
-    default_ports = {
-        "embedding": 8001, 
+    # Mapa de puertos por defecto para servicios
+    service_ports = {
+        "embedding": 8001,
         "ingestion": 8000,
         "query": 8002,
         "agent": 8003,
-        "ui": 3000,
-        "web": 3000
+        "chat": 8004
     }
     
-    if service_name not in default_ports:
-        logger.warning(f"Servicio desconocido: {service_name}, usando puerto genérico 8000")
-        return 8000
+    # Intentamos obtener de la configuración de entorno
+    import os
+    env_port = os.environ.get(f"{service_name.upper()}_SERVICE_PORT")
+    if env_port and env_port.isdigit():
+        return int(env_port)
     
-    return default_ports[service_name]
+    # Por defecto
+    return service_ports.get(service_name.lower(), 8000)
 
 
 # Funciones de entorno para configuración
@@ -244,8 +273,7 @@ def is_development_environment() -> bool:
     """
     import os
     env = os.environ.get("ENVIRONMENT", "development").lower()
-    return env in ("development", "dev", "local", "test")
-
+    return env in ["development", "dev", "local"]
 
 def should_use_mock_config() -> bool:
     """
@@ -258,13 +286,24 @@ def should_use_mock_config() -> bool:
     Returns:
         bool: True si se deben usar configuraciones mock
     """
+    # Si no estamos en desarrollo, nunca usamos mock
     if not is_development_environment():
         return False
     
-    # En desarrollo, intentar detectar si hay conexión a Supabase
+    # En desarrollo, intentamos verificar si tenemos conexión
     try:
-        import os
-        return not (os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_KEY"))
-    except Exception:
-        # Si hay algún error, asumir que no hay conexión
+        from ..db.supabase import get_supabase_client
+        supabase = get_supabase_client()
+        
+        # Hacemos una consulta simple para verificar conexión
+        result = supabase.table("tenants").select("count", count="exact").limit(1).execute()
+        
+        # Si hay algún error o no hay datos, usamos mock
+        if hasattr(result, "error") and result.error:
+            logger.warning(f"Usando mock por error de Supabase: {result.error}")
+            return True
+            
+        return False
+    except Exception as e:
+        logger.warning(f"Usando mock por excepción al verificar Supabase: {str(e)}")
         return True

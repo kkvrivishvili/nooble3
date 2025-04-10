@@ -7,7 +7,7 @@ import logging
 from fastapi import APIRouter, Depends
 
 from common.models import TenantInfo, ModelListResponse
-from common.errors import handle_service_error_simple
+from common.errors import handle_errors
 from common.context import with_context
 from common.auth import verify_tenant
 from common.config import get_settings
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 @router.get("/models", response_model=ModelListResponse)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 @with_context(tenant=True)
 async def list_available_models(
     tenant_info: TenantInfo = Depends(verify_tenant)

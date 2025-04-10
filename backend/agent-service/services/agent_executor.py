@@ -14,7 +14,7 @@ from langchain.agents import AgentExecutor, create_tool_calling_agent
 from common.config import get_settings
 from common.context import ContextManager, with_context
 from common.errors import (
-    ServiceError, handle_service_error_simple, ErrorCode,
+    ServiceError, handle_errors, ErrorCode,
     AgentNotFoundError, AgentInactiveError, AgentExecutionError, 
     AgentSetupError, AgentToolError
 )
@@ -32,6 +32,10 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 @with_context(tenant=True, agent=True)
+@handle_errors(error_type="service", log_traceback=True, error_map={
+    AgentNotFoundError: ("AGENT_CONFIG_NOT_FOUND", 404),
+    AgentInactiveError: ("AGENT_INACTIVE", 400)
+})
 async def get_agent_config(agent_id: str, tenant_id: str) -> Dict[str, Any]:
     """Obtiene la configuración de un agente desde Supabase."""
     
@@ -82,6 +86,11 @@ async def get_agent_config(agent_id: str, tenant_id: str) -> Dict[str, Any]:
     return result.data
 
 @with_context(tenant=True, agent=True, conversation=True)
+@handle_errors(error_type="service", log_traceback=True, error_map={
+    AgentExecutionError: ("AGENT_EXECUTION_ERROR", 500),
+    AgentSetupError: ("AGENT_SETUP_ERROR", 500),
+    AgentToolError: ("AGENT_TOOL_ERROR", 500)
+})
 async def execute_agent(
     tenant_id: str,
     agent_id: str,

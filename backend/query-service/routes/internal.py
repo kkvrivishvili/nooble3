@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from common.models import TenantInfo, QueryContextItem
 from common.errors import (
-    ServiceError, handle_service_error_simple, ErrorCode,
+    ServiceError, handle_errors, ErrorCode,
     QueryProcessingError, CollectionNotFoundError, 
     RetrievalError, GenerationError, InvalidQueryParamsError,
     EmbeddingGenerationError, EmbeddingModelError, TextTooLargeError
@@ -19,8 +19,6 @@ from common.errors import (
 from common.context import with_context, get_current_tenant_id, set_current_collection_id
 from common.auth import verify_tenant, validate_model_access
 from common.tracking import track_query
-
-from services.query_engine import create_query_engine, process_query_with_sources
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -51,10 +49,20 @@ class InternalSearchRequest(BaseModel):
 
 @router.post(
     "/internal/query",
+    response_model=InternalQueryResponse,
     summary="Consulta RAG interna",
     description="Endpoint para uso exclusivo del Agent Service"
 )
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False, error_map={
+    QueryProcessingError: ("QUERY_PROCESSING_ERROR", 500),
+    CollectionNotFoundError: ("COLLECTION_NOT_FOUND", 404),
+    RetrievalError: ("RETRIEVAL_ERROR", 500),
+    GenerationError: ("GENERATION_ERROR", 500),
+    InvalidQueryParamsError: ("INVALID_QUERY_PARAMS", 400),
+    EmbeddingGenerationError: ("EMBEDDING_GENERATION_ERROR", 500),
+    EmbeddingModelError: ("EMBEDDING_MODEL_ERROR", 500),
+    TextTooLargeError: ("TEXT_TOO_LARGE", 413)
+})
 @with_context(tenant=True, collection=True, agent=True, conversation=True)
 async def internal_query(
     request: InternalQueryRequest = Body(...)
@@ -212,10 +220,19 @@ async def internal_query(
 
 @router.post(
     "/internal/search",
+    response_model=InternalSearchResponse,
     summary="Búsqueda interna para otros servicios",
     description="Endpoint para búsqueda rápida entre documentos, para uso exclusivo de otros servicios"
 )
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False, error_map={
+    CollectionNotFoundError: ("COLLECTION_NOT_FOUND", 404),
+    RetrievalError: ("RETRIEVAL_ERROR", 500),
+    GenerationError: ("GENERATION_ERROR", 500),
+    InvalidQueryParamsError: ("INVALID_QUERY_PARAMS", 400),
+    EmbeddingGenerationError: ("EMBEDDING_GENERATION_ERROR", 500),
+    EmbeddingModelError: ("EMBEDDING_MODEL_ERROR", 500),
+    TextTooLargeError: ("TEXT_TOO_LARGE", 413)
+})
 @with_context(tenant=True, collection=True, agent=True, conversation=True)
 async def internal_search(
     request: InternalSearchRequest = Body(...)

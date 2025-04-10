@@ -5,11 +5,11 @@ from typing import List, Dict, Any, Optional
 
 from common.config import get_settings
 from common.errors import (
-    ServiceError, handle_service_error_simple, ErrorCode,
+    ServiceError, handle_errors, ErrorCode,
     EmbeddingGenerationError, EmbeddingModelError,
     TextTooLargeError, BatchTooLargeError, InvalidEmbeddingParamsError
 )
-from common.context.vars import get_current_tenant_id, get_current_agent_id, get_current_conversation_id, validate_tenant_context
+from common.context import with_context, Context
 from common.cache.manager import CacheManager  # Usar la implementación unificada de caché
 
 logger = logging.getLogger(__name__)
@@ -53,13 +53,20 @@ class CachedEmbeddingProvider:
                 embed_batch_size=embed_batch_size
             )
     
-    @handle_service_error_simple
-    async def get_embedding(self, text: str) -> List[float]:
+    @handle_errors(error_type="simple", log_traceback=False, error_map={
+        EmbeddingGenerationError: ("EMBEDDING_GENERATION_ERROR", 500),
+        EmbeddingModelError: ("EMBEDDING_MODEL_ERROR", 500),
+        TextTooLargeError: ("TEXT_TOO_LARGE", 413),
+        BatchTooLargeError: ("BATCH_TOO_LARGE", 413)
+    })
+    @with_context(tenant=True, validate_tenant=True)
+    async def get_embedding(self, text: str, ctx: Context = None) -> List[float]:
         """
         Obtiene un embedding con soporte de caché unificada.
         
         Args:
             text: Texto para generar embedding
+            ctx: Contexto proporcionado por el decorador with_context
             
         Returns:
             List[float]: Vector de embedding
@@ -72,10 +79,7 @@ class CachedEmbeddingProvider:
         # Usar tenant_id proporcionado o el del contexto actual (validando que sea válido)
         tenant_id = self.tenant_id
         if tenant_id is None:
-            tenant_id = get_current_tenant_id()
-            tenant_id = validate_tenant_context(tenant_id)
-            if tenant_id is None:
-                raise ServiceError(ErrorCode.INVALID_TENANT_CONTEXT)
+            tenant_id = ctx.get_tenant_id()
         
         if not text.strip():
             # Vector de ceros para texto vacío
@@ -101,7 +105,7 @@ class CachedEmbeddingProvider:
             text=text,
             model_name=self.model_name,
             tenant_id=tenant_id,
-            agent_id=get_current_agent_id()
+            agent_id=ctx.get_agent_id()
         )
         
         if cached_embedding:
@@ -119,19 +123,26 @@ class CachedEmbeddingProvider:
             embedding=embedding,
             model_name=self.model_name,
             tenant_id=tenant_id,
-            agent_id=get_current_agent_id(),
+            agent_id=ctx.get_agent_id(),
             ttl=86400  # 24 horas
         )
         
         return embedding
     
-    @handle_service_error_simple
-    async def get_batch_embeddings(self, texts: List[str]) -> List[List[float]]:
+    @handle_errors(error_type="simple", log_traceback=False, error_map={
+        EmbeddingGenerationError: ("EMBEDDING_GENERATION_ERROR", 500),
+        EmbeddingModelError: ("EMBEDDING_MODEL_ERROR", 500),
+        TextTooLargeError: ("TEXT_TOO_LARGE", 413),
+        BatchTooLargeError: ("BATCH_TOO_LARGE", 413)
+    })
+    @with_context(tenant=True, validate_tenant=True)
+    async def get_batch_embeddings(self, texts: List[str], ctx: Context = None) -> List[List[float]]:
         """
         Obtiene embeddings para un lote de textos con soporte de caché.
         
         Args:
             texts: Lista de textos para generar embeddings
+            ctx: Contexto proporcionado por el decorador with_context
             
         Returns:
             List[List[float]]: Lista de vectores de embedding
@@ -145,10 +156,7 @@ class CachedEmbeddingProvider:
         # Validar tenant_id (usar el proporcionado o el del contexto)
         tenant_id = self.tenant_id
         if tenant_id is None:
-            tenant_id = get_current_tenant_id()
-            tenant_id = validate_tenant_context(tenant_id)
-            if tenant_id is None:
-                raise ServiceError(ErrorCode.INVALID_TENANT_CONTEXT)
+            tenant_id = ctx.get_tenant_id()
         
         if not texts:
             return []
@@ -164,7 +172,7 @@ class CachedEmbeddingProvider:
                          extra=error_context)
             
             # Procesar en sublotes si es posible
-            return await self._process_large_batch(texts, tenant_id)
+            return await self._process_large_batch(texts, tenant_id, ctx)
         
         # Validar longitud de textos individuales y estimar tokens totales
         total_tokens = 0
@@ -212,7 +220,7 @@ class CachedEmbeddingProvider:
                          extra=error_context)
             
             # Procesar en sublotes divididos por tokens
-            return await self._process_large_batch(texts, tenant_id, total_tokens)
+            return await self._process_large_batch(texts, tenant_id, ctx, total_tokens)
         
         # Preparar resultado con espacio para todos los textos
         result: List[Optional[List[float]]] = [None] * len(texts)
@@ -258,6 +266,7 @@ class CachedEmbeddingProvider:
                         embedding=embedding,
                         model_name=self.model_name,
                         tenant_id=tenant_id,
+                        agent_id=ctx.get_agent_id(),
                         ttl=86400  # 24 horas
                     )
             except Exception as e:
@@ -290,13 +299,14 @@ class CachedEmbeddingProvider:
         
         return result
     
-    async def _process_large_batch(self, texts: List[str], tenant_id: str, estimated_tokens: Optional[int] = None) -> List[List[float]]:
+    async def _process_large_batch(self, texts: List[str], tenant_id: str, ctx: Context, estimated_tokens: Optional[int] = None) -> List[List[float]]:
         """
         Procesa un lote grande dividiéndolo en sublotes manejables.
         
         Args:
             texts: Lista de textos para generar embeddings
             tenant_id: ID del tenant
+            ctx: Contexto proporcionado por el decorador with_context
             estimated_tokens: Tokens estimados para el lote completo (opcional)
             
         Returns:
@@ -341,7 +351,7 @@ class CachedEmbeddingProvider:
                 batch = batch[:self.max_batch_size]
                 
             # Procesar sublote
-            batch_results = await temp_provider.get_batch_embeddings(batch)
+            batch_results = await temp_provider.get_batch_embeddings(batch, ctx)
             results.extend(batch_results)
             
             # Liberar recursos explícitamente

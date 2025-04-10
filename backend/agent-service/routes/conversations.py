@@ -4,7 +4,7 @@ from typing import Optional, List
 from fastapi import APIRouter, Depends, Path, Query
 
 from common.models import TenantInfo, ConversationListResponse, MessageListResponse, DeleteConversationResponse, ChatMessage
-from common.errors import ServiceError, handle_service_error_simple
+from common.errors import ServiceError, handle_errors
 from common.context import with_context
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 @router.get("", response_model=ConversationListResponse)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 @with_context(tenant=True)
 async def list_conversations(
     agent_id: Optional[str] = None,
@@ -102,7 +102,7 @@ async def list_conversations(
         )
 
 @router.get("/{conversation_id}/messages", response_model=MessageListResponse)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 @with_context(tenant=True, conversation=True)
 async def get_conversation_messages(
     conversation_id: str,
@@ -188,7 +188,7 @@ async def get_conversation_messages(
         )
 
 @router.delete("/{conversation_id}", response_model=DeleteConversationResponse)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 @with_context(tenant=True, conversation=True)
 async def delete_conversation(
     conversation_id: str,
@@ -277,7 +277,7 @@ async def delete_conversation(
         )
 
 @router.post("/{conversation_id}/end", response_model=DeleteConversationResponse)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 @with_context(tenant=True, conversation=True)
 async def end_conversation(
     conversation_id: str,

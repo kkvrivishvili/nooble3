@@ -11,7 +11,7 @@ from langchain.retrievers import RetrieverQueryEngine
 from llamaindex.callbacks import LlamaDebugHandler
 
 from common.config import get_settings
-from common.context import with_context, get_current_tenant_id, get_current_collection_id, get_current_agent_id, validate_tenant_context
+from common.context import with_context
 from common.errors import (
     ErrorCode, ServiceError, 
     QueryProcessingError, CollectionNotFoundError, 
@@ -40,20 +40,21 @@ class QueryContextItem:
         }
 
 
-@with_context(tenant=True, collection=True)
+@with_context(tenant=True, collection=True, agent=True)
 async def process_query_with_sources(
     query_engine: RetrieverQueryEngine,
     debug_handler: LlamaDebugHandler,
     query: str,
     filters: Optional[Dict[str, Any]] = None,
     similarity_top_k: int = 4,
-    response_mode: str = "compact"
+    response_mode: str = "compact",
+    ctx=None
 ) -> Dict[str, Any]:
     """Procesa una consulta y devuelve la respuesta con fuentes."""
     
-    tenant_id = validate_tenant_context(get_current_tenant_id())
-    collection_id = get_current_collection_id()
-    agent_id = get_current_agent_id()
+    tenant_id = ctx.get_tenant_id()
+    collection_id = ctx.get_collection_id()
+    agent_id = ctx.get_agent_id()
     
     # Verificar caché primero
     cached_result = await CacheManager.get_query_result(
@@ -165,10 +166,9 @@ async def process_query_with_sources(
         )
 
 
-@with_context(tenant=True, collection=True)
+@with_context(tenant=True, collection=True, agent=True)
 async def create_query_engine(
-    tenant_info: TenantInfo, 
-    collection_id: str,
+    ctx=None,
     llm_model: Optional[str] = None,
     similarity_top_k: int = 4,
     response_mode: str = "compact"
@@ -177,8 +177,7 @@ async def create_query_engine(
     Crea un motor de consulta para una colección específica.
     
     Args:
-        tenant_info: Información del tenant
-        collection_id: ID de la colección a consultar
+        ctx: Contexto de la consulta
         llm_model: Modelo de lenguaje a utilizar (opcional)
         similarity_top_k: Número de documentos a recuperar
         response_mode: Modo de respuesta (compact, verbose, etc.)
@@ -195,7 +194,8 @@ async def create_query_engine(
     from services.llm import get_llm_for_model
     from common.llm.llamaindex import create_response_synthesizer
     
-    tenant_id = tenant_info.tenant_id
+    tenant_id = ctx.get_tenant_id()
+    collection_id = ctx.get_collection_id()
     settings = get_settings()
     
     try:

@@ -4,7 +4,7 @@ from typing import Optional
 from fastapi import APIRouter, Query, Depends
 
 from common.models import TenantInfo, CacheClearResponse
-from common.errors import ServiceError, handle_service_error_simple
+from common.errors import ServiceError, handle_errors
 from common.auth import verify_tenant, get_auth_info
 from common.config import get_settings, invalidate_settings_cache
 from common.cache.redis import delete_pattern
@@ -21,7 +21,7 @@ settings = get_settings()
     description="Invalida el caché de configuraciones para forzar la recarga (global o específico del tenant).",
     response_model=CacheClearResponse
 )
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 async def clear_config_cache(
     scope: Optional[str] = Query(None, description="Ámbito específico a invalidar ('tenant', 'service', 'agent', 'collection')"),
     scope_id: Optional[str] = Query(None, description="ID específico del ámbito (ej: agent_id, service_name)"),
@@ -122,7 +122,7 @@ async def clear_config_cache(
     description="Invalida toda la caché asociada a un tenant específico.",
     response_model=CacheClearResponse
 )
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 async def clear_tenant_cache(
     tenant_info: TenantInfo = Depends(verify_tenant)
 ):

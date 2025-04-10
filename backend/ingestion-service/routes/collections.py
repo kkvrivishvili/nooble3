@@ -7,7 +7,7 @@ from typing import List
 from fastapi import APIRouter, Depends
 
 from common.models import TenantInfo, CollectionsListResponse
-from common.errors import ServiceError, handle_service_error_simple
+from common.errors import ServiceError, handle_errors
 from common.context import with_context
 from common.auth import verify_tenant
 from common.db.supabase import get_supabase_client
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
     summary="Listar colecciones",
     description="Obtiene la lista de colecciones disponibles para el tenant con estadísticas"
 )
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 @with_context(tenant=True)
 async def list_collections(
     tenant_info: TenantInfo = Depends(verify_tenant)

@@ -15,7 +15,7 @@ from common.models import (
     CollectionStatsResponse, DeleteCollectionResponse
 )
 from common.errors import (
-    ServiceError, handle_service_error_simple, ErrorCode,
+    ServiceError, handle_errors, ErrorCode,
     CollectionNotFoundError, InvalidQueryParamsError, 
     QueryProcessingError, RetrievalError
 )
@@ -27,12 +27,15 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 @router.get(
-    "",
+    "/collections",
     response_model=CollectionsListResponse,
     summary="Listar colecciones",
     description="Obtiene la lista de colecciones disponibles para el tenant"
 )
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False, error_map={
+    CollectionNotFoundError: ("COLLECTION_NOT_FOUND", 404),
+    InvalidQueryParamsError: ("INVALID_QUERY_PARAMS", 400)
+})
 @with_context(tenant=True)
 async def list_collections(
     tenant_info: TenantInfo = Depends(verify_tenant)
@@ -78,13 +81,13 @@ async def list_collections(
         )
 
 @router.post(
-    "",
+    "/collections",
     response_model=CollectionCreationResponse,
     status_code=201,
     summary="Crear colección",
     description="Crea una nueva colección para organizar documentos"
 )
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 @with_context(tenant=True)
 async def create_collection(
     name: str,
@@ -146,12 +149,14 @@ async def create_collection(
         )
 
 @router.put(
-    "/{collection_id}",
+    "/collections/{collection_id}",
     response_model=CollectionUpdateResponse,
     summary="Actualizar colección",
     description="Modifica una colección existente"
 )
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False, error_map={
+    CollectionNotFoundError: ("COLLECTION_NOT_FOUND", 404)
+})
 @with_context(tenant=True, collection=True)
 async def update_collection(
     collection_id: str,
@@ -237,12 +242,14 @@ async def update_collection(
         )
 
 @router.delete(
-    "/{collection_id}",
+    "/collections/{collection_id}",
     response_model=DeleteCollectionResponse,
     summary="Eliminar colección",
     description="Elimina una colección y todos sus documentos"
 )
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False, error_map={
+    CollectionNotFoundError: ("COLLECTION_NOT_FOUND", 404)
+})
 @with_context(tenant=True, collection=True)
 async def delete_collection(
     collection_id: str,
@@ -317,12 +324,14 @@ async def delete_collection(
         )
 
 @router.get(
-    "/{collection_id}/stats",
+    "/collections/{collection_id}/stats",
     response_model=CollectionStatsResponse,
     summary="Estadísticas de colección",
     description="Obtiene estadísticas detalladas de una colección"
 )
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False, error_map={
+    CollectionNotFoundError: ("COLLECTION_NOT_FOUND", 404)
+})
 @with_context(tenant=True, collection=True)
 async def get_collection_stats(
     collection_id: str,

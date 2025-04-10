@@ -163,91 +163,155 @@ def setup_error_handling(app: FastAPI) -> None:
 
 def handle_errors(
     on_error_response: Optional[Dict[str, Any]] = None,
-    error_map: Optional[Dict[Type[Exception], Tuple[str, int]]] = None
-):
+    error_map: Optional[Dict[Type[Exception], Tuple[str, int]]] = None,
+    error_type: str = "service",  # Nuevo parámetro: 'service', 'config' o 'simple'
+    convert_exceptions: bool = True,  # Determina si convertir excepciones a ServiceError
+    log_traceback: bool = True,  # Determina si se loggea el traceback
+    ignore_exceptions: Optional[List[Type[Exception]]] = None  # Excepciones a ignorar
+) -> Callable[[Func], Func]:
     """
-    Decorador avanzado para manejar errores en funciones asíncronas.
+    Decorador unificado y parametrizable para manejar errores en funciones asíncronas.
     
     Este decorador captura todas las excepciones y las convierte en ServiceError
-    con información de contexto adecuada.
+    o ConfigurationError dependiendo del valor de error_type con información de contexto adecuada.
     
     Args:
         on_error_response: Respuesta personalizada opcional en caso de error
         error_map: Mapeo de tipos de excepción a tuplas (error_code, status_code)
+        error_type: Tipo de error a manejar ('service', 'config', o 'simple')
+        convert_exceptions: Si es True, convierte excepciones a ServiceError
+        log_traceback: Si es True, loggea el traceback completo
+        ignore_exceptions: Lista de excepciones que no se deben capturar
         
     Returns:
         Decorador configurado
         
     Ejemplo:
         ```python
+        # Uso normal para errores de servicio
         @handle_errors(error_map={
             ValueError: ("VALIDATION_ERROR", 422),
             KeyError: ("NOT_FOUND", 404)
         })
         async def my_function():
             # Código que puede lanzar excepciones
+            
+        # Para errores de configuración
+        @handle_errors(error_type="config")
+        async def load_config():
+            # Código que carga configuración
+            
+        # Versión simple
+        @handle_errors(error_type="simple")
+        async def simple_function():
+            # Código con manejo de errores básico
         ```
     """
-    error_map = error_map or {}
+    # Normalizar los parámetros
+    ignore_exceptions = ignore_exceptions or []
     
     def decorator(func: Func) -> Func:
         @wraps(func)
         async def wrapper(*args, **kwargs):
             try:
                 return await func(*args, **kwargs)
-            except ServiceError:
-                # Propagar ServiceError directamente, ya contiene toda la información necesaria
+            except tuple(ignore_exceptions):
+                # Permitir que ciertas excepciones pasen sin modificar
                 raise
-            except ValidationError as e:
-                # Manejar errores de validación de Pydantic
-                raise ServiceError(
-                    message="Error de validación de datos",
-                    error_code="VALIDATION_ERROR",
-                    details={"errors": e.errors()}
-                )
+            except (ServiceError, ConfigurationError):
+                # Ya es un error manejado, dejar pasar
+                raise
             except Exception as e:
-                # Buscar en el mapa de errores si esta excepción tiene un manejo específico
-                for exc_type, (error_code, status_code) in error_map.items():
-                    if isinstance(e, exc_type):
+                # Obtener contexto actual para enriquecer el error
+                context = get_full_context()
+                function_name = func.__name__
+                
+                # Añadir información de la función y su ubicación
+                context.update({
+                    "function": function_name,
+                    "module": func.__module__
+                })
+                
+                # Añadir argumentos no sensibles para depuración
+                try:
+                    safe_args = [f"{i}:{type(arg).__name__}" for i, arg in enumerate(args)]
+                    safe_kwargs = {k: type(v).__name__ for k, v in kwargs.items()}
+                    context.update({
+                        "args": str(safe_args),
+                        "kwargs": str(safe_kwargs)
+                    })
+                except Exception:
+                    pass
+                
+                # Para logging
+                log_extras = {"extra": context} if context else {}
+                
+                # Manejamos los diferentes tipos de errores según el parámetro error_type
+                if error_type == "config":
+                    # Manejo específico para errores de configuración
+                    if isinstance(e, KeyError):
+                        # Error típico al intentar acceder a una configuración inexistente
+                        context.update({"missing_key": str(e)})
+                        logger.error(f"Configuración faltante: {str(e)}", **log_extras)
+                        raise ConfigurationError(
+                            message=f"Configuración faltante: {str(e)}",
+                            error_code=ErrorCode.MISSING_CONFIGURATION.value,
+                            context=context
+                        )
+                    elif isinstance(e, (ValueError, TypeError)):
+                        # Error típico de configuración inválida
+                        logger.error(f"Configuración inválida: {str(e)}", **log_extras)
+                        raise ConfigurationError(
+                            message=f"Configuración inválida: {str(e)}",
+                            error_code=ErrorCode.INVALID_CONFIGURATION.value,
+                            status_code=400,
+                            context=context
+                        )
+                    else:
+                        # Otras excepciones se convierten en error genérico de configuración
+                        if log_traceback:
+                            logger.error(f"Error de configuración: {str(e)}", exc_info=True, **log_extras)
+                        else:
+                            logger.error(f"Error de configuración: {str(e)}", **log_extras)
+                        
+                        raise ConfigurationError(
+                            message=f"Error de configuración: {str(e)}",
+                            context=context
+                        )
+                else:
+                    # Manejo estándar para errores de servicio
+                    # Verificar si el tipo de excepción está en el mapa de errores
+                    exception_type = type(e)
+                    error_code = ErrorCode.INTERNAL_ERROR
+                    status_code = 500
+                    
+                    if error_map and exception_type in error_map:
+                        error_code_str, status_code = error_map[exception_type]
+                        error_code = ErrorCode(error_code_str) if isinstance(error_code_str, str) else error_code_str
+                    
+                    # Log del error
+                    error_message = f"Error en {function_name}: {str(e)}"
+                    if log_traceback:
+                        logger.error(error_message, exc_info=True, **log_extras)
+                    else:
+                        logger.error(error_message, **log_extras)
+                    
+                    if convert_exceptions:
+                        # Convertir a ServiceError con contexto
                         raise ServiceError(
                             message=str(e),
                             error_code=error_code,
-                            status_code=status_code
+                            status_code=status_code,
+                            context=context
                         )
-                
-                # Para excepciones no mapeadas, registrar y convertir en ServiceError
-                context = get_full_context()
-                context_str = ", ".join([f"{k}='{v}'" for k, v in context.items() if v])
-                
-                logger.error(f"Error in {func.__name__} [{context_str}]: {str(e)}")
-                logger.error(traceback.format_exc())
-                
-                # Si se proporciona una respuesta personalizada, usarla
-                if on_error_response:
-                    raise ServiceError(
-                        message=str(e),
-                        error_code="GENERAL_ERROR",
-                        details=on_error_response
-                    )
-                
-                # Por defecto, crear ServiceError general
-                raise ServiceError(
-                    message=f"Error interno del servidor: {str(e)}",
-                    error_code="GENERAL_ERROR"
-                )
-        
-        # Preservar metadatos para FastAPI
-        if hasattr(func, "__annotations__"):
-            wrapper.__annotations__ = func.__annotations__
-        
-        for attr in ["response_model", "responses", "status_code", "tags", "summary", "description"]:
-            if hasattr(func, attr):
-                setattr(wrapper, attr, getattr(func, attr))
-        
+                    else:
+                        # Dejar pasar la excepción original
+                        raise
+                    
         return wrapper
     
-    # Permitir usar el decorador con o sin parámetros
-    if callable(on_error_response):
+    # Handle case where decorator is used without parentheses
+    if callable(on_error_response) and not error_map:
         func = on_error_response
         on_error_response = None
         return decorator(func)
@@ -255,55 +319,7 @@ def handle_errors(
     return decorator
 
 # Alias para compatibilidad con código existente
+# Eventualmente se eliminarán, manteniéndolas por ahora para compatibilidad
 handle_service_error = handle_errors
-
-# Versión simplificada por mantener compatibilidad
-handle_service_error_simple = handle_errors
-
-def handle_config_error(func: Func) -> Func:
-    """
-    Decorador específico para manejar errores de configuración.
-    Captura excepciones y las convierte en ConfigurationError cuando corresponde.
-    
-    Args:
-        func: Función a decorar
-        
-    Returns:
-        Función decorada
-    """
-    @wraps(func)
-    async def wrapper(*args, **kwargs):
-        try:
-            return await func(*args, **kwargs)
-        except ConfigurationError:
-            # Ya es un ConfigurationError, dejar pasar
-            raise
-        except KeyError as e:
-            # Error típico al intentar acceder a una configuración inexistente
-            context = get_full_context()
-            context.update({"missing_key": str(e)})
-            logger.error(f"Configuración faltante: {str(e)}", extra=context)
-            raise ConfigurationError(
-                message=f"Configuración faltante: {str(e)}",
-                error_code=ErrorCode.MISSING_CONFIGURATION.value,
-                context=context
-            )
-        except (ValueError, TypeError) as e:
-            # Error típico de configuración inválida
-            context = get_full_context()
-            logger.error(f"Configuración inválida: {str(e)}", extra=context)
-            raise ConfigurationError(
-                message=f"Configuración inválida: {str(e)}",
-                error_code=ErrorCode.INVALID_CONFIGURATION.value,
-                status_code=400,
-                context=context
-            )
-        except Exception as e:
-            # Otras excepciones se convierten en error genérico
-            context = get_full_context()
-            logger.error(f"Error de configuración: {str(e)}", extra=context, exc_info=True)
-            raise ConfigurationError(
-                message=f"Error de configuración: {str(e)}",
-                context=context
-            )
-    return wrapper
+handle_service_error_simple = lambda func: handle_errors(error_type="simple", convert_exceptions=True, log_traceback=False)(func)
+handle_config_error = lambda func: handle_errors(error_type="config")(func)

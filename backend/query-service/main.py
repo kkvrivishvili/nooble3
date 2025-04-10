@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 
 from common.config import get_settings
-from common.errors import setup_error_handling, handle_service_error_simple, ServiceError
+from common.errors import setup_error_handling, handle_errors, ServiceError
 from common.utils.logging import init_logging
 from common.context import Context
 from common.db.supabase import init_supabase
