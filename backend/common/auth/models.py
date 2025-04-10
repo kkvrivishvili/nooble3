@@ -7,6 +7,7 @@ import logging
 
 from ..models.base import TenantInfo
 from ..errors import ServiceError, ErrorCode
+from ..config.tiers import get_available_llm_models, get_available_embedding_models
 
 logger = logging.getLogger(__name__)
 
@@ -21,9 +22,7 @@ def get_allowed_models_for_tier(tier: str, model_type: str = "llm") -> list:
     Returns:
         list: Lista de IDs de modelos permitidos
     """
-    from ..config.tiers import get_available_llm_models, get_available_embedding_models
-    
-    # Usamos las funciones de tiers.py que ya no dependen de settings
+    # Usamos las funciones del módulo tiers
     if model_type == "llm":
         return get_available_llm_models(tier)
     elif model_type == "embedding":
@@ -64,11 +63,19 @@ async def validate_model_access(tenant_info: TenantInfo, model_id: str, model_ty
         "allowed_models": allowed_models
     }
     
-    # Log de advertencia con contexto enriquecido
     logger.warning(
         f"Modelo {model_id} no permitido para tenant {tenant_info.tenant_id} en tier {tier}",
         extra=error_context
     )
+    
+    # Si hay modelos permitidos, usamos el primero como alternativa
+    if allowed_models:
+        default_model = allowed_models[0]
+        logger.info(
+            f"Usando modelo alternativo {default_model} en lugar de {model_id} para tier {tier}",
+            extra=error_context
+        )
+        return default_model
     
     # Lanzar excepción con información detallada
     raise ServiceError(

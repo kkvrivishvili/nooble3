@@ -307,3 +307,23 @@ def should_use_mock_config() -> bool:
     except Exception as e:
         logger.warning(f"Usando mock por excepción al verificar Supabase: {str(e)}")
         return True
+
+
+"""
+NOTA IMPORTANTE: SEPARACIÓN DE RESPONSABILIDADES
+
+Este archivo contiene SOLO configuraciones y datos relacionados con los tiers
+de suscripción, así como funciones simples para acceder a esos datos.
+
+Las funciones relacionadas con los tiers se encuentran en sus respectivos módulos 
+según sus responsabilidades:
+
+1. Validación de acceso a modelos por tier:
+   - Usar: from common.auth.models import validate_model_access
+
+2. Tracking de uso de tokens:
+   - Usar: from common.tracking import track_token_usage, track_embedding_usage
+
+Esta separación evita dependencias circulares y respeta el principio
+de responsabilidad única.
+"""
