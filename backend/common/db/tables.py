@@ -6,7 +6,6 @@ import logging
 from typing import Dict, Any, List, Optional, Set, Union
 
 from .supabase import get_supabase_client
-from ..config.settings import get_settings
 from ..context import with_context, Context
 from ..errors.exceptions import DatabaseError
 

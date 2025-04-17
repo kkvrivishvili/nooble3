@@ -14,27 +14,13 @@ from ..context.vars import get_current_tenant_id, get_full_context
 from ..cache.manager import CacheManager
 from ..errors.exceptions import DatabaseError, ConfigurationError, ServiceError, ErrorCode
 from ..errors.handlers import handle_errors
-from ..config.settings import get_settings
-
-# IMPORTANTE: Estas funciones deben importarse directamente desde common.auth.tenant
-# Se importan aquí solo para uso interno del módulo
-from ..auth.tenant import is_tenant_active, is_tenant_active_sync
 
 logger = logging.getLogger(__name__)
 
-# Utilizar settings para configuración cuando sea posible
-try:
-    settings = get_settings()
-    SUPABASE_URL = settings.supabase_url
-    SUPABASE_KEY = settings.supabase_key
-    SUPABASE_SERVICE_KEY = settings.supabase_service_key
-    SUPABASE_TABLE_PREFIX = settings.supabase_table_prefix
-except Exception:
-    # Si get_settings() no está disponible durante la inicialización, usar variables de entorno
-    SUPABASE_URL = os.getenv("SUPABASE_URL", "")
-    SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
-    SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
-    SUPABASE_TABLE_PREFIX = os.getenv("SUPABASE_TABLE_PREFIX", "")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
+SUPABASE_TABLE_PREFIX = os.getenv("SUPABASE_TABLE_PREFIX", "")
 
 @lru_cache
 def get_supabase_client(use_service_role: bool = True) -> Client:

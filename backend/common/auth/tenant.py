@@ -5,9 +5,11 @@ Funciones para verificación de tenant y acceso.
 from typing import Dict, Any, Optional
 from fastapi import HTTPException
 import logging
+from os import getenv
 
 from ..models.base import TenantInfo
-from ..db.supabase import get_supabase_client, get_table_name
+from ..db.tables import get_table_name
+from ..db.supabase import get_supabase_client
 
 logger = logging.getLogger(__name__)
 

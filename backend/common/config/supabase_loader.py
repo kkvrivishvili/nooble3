@@ -129,9 +129,11 @@ def apply_tenant_configuration_changes(
             if scope_id:
                 cache_pattern = f"{cache_pattern}:{scope_id}"
         
-        # Limpiar todas las entradas de caché relacionadas
-        from ..cache.redis import delete_pattern
-        delete_pattern(f"{cache_pattern}*")
+        # Limpiar todas las entradas de caché relacionadas usando cache redis
+        import asyncio
+        from ..cache.redis import cache_delete_pattern
+        # Ejecutar eliminación de patrones en Redis
+        asyncio.run(cache_delete_pattern(f"{cache_pattern}*"))
         
         logger.info(f"Configuraciones aplicadas para tenant {tenant_id} en ámbito {scope}")
         return True

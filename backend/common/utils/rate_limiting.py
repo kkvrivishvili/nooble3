@@ -17,7 +17,7 @@ from ..cache.manager import CacheManager
 from ..config.tiers import get_tier_rate_limit
 from ..config.settings import get_settings
 from ..context.vars import get_current_tenant_id, get_full_context
-from ..db.supabase import get_tenant_configurations
+from ..auth.tenant import verify_tenant
 from ..errors.exceptions import ServiceError, ErrorCode, RateLimitExceeded
 from ..errors.handlers import handle_errors
 
@@ -52,14 +52,12 @@ async def check_rate_limit_async(bucket: str) -> bool:
             resource_id=f"bucket:{bucket}"
         )
         
-        # Obtener configuración de límite desde supabase
-        limit_config = await get_tenant_configurations(
-            tenant_id=tenant_id, 
-            scope='rate_limit', 
-            scope_id=bucket
+        # Obtener límite de tasa usando configuración centralizada de tiers
+        tenant_info = await verify_tenant(tenant_id)
+        max_requests = await get_tier_rate_limit(
+            tenant_id, tenant_info.subscription_tier, bucket
         )
         
-        max_requests = limit_config.get('max_requests', 100)
         error_context["max_requests"] = max_requests
         error_context["current_requests"] = int(current or 0)
         
