@@ -1,6 +1,6 @@
-import FastAPI
 import logging
 
+from fastapi import FastAPI
 from .agents import router as agents_router
 from .chat import router as chat_router
 from .conversations import router as conversations_router
