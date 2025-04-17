@@ -8,7 +8,7 @@ para acceder a información de contexto. Para validación, utilizar el decorador
 
 import logging
 from contextvars import ContextVar
-from typing import Optional
+from typing import Optional, Dict
 
 from common.errors import ServiceError, ErrorCode
 
@@ -107,6 +107,17 @@ def set_current_collection_id(collection_id: Optional[str]) -> None:
         current_collection_id.set(None)
     else:
         current_collection_id.set(str(collection_id))
+
+def get_full_context() -> Dict[str, Optional[str]]:
+    """
+    Obtiene un diccionario con todas las variables de contexto actuales.
+    """
+    return {
+        "tenant_id": get_current_tenant_id(),
+        "agent_id": get_current_agent_id(),
+        "conversation_id": get_current_conversation_id(),
+        "collection_id": get_current_collection_id(),
+    }
 
 # Alias para compatibilidad (NOTA: Estas funciones están obsoletas, usar @with_context)
 def get_required_tenant_id() -> str:
