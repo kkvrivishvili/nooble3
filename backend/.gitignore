@@ -93,7 +93,6 @@ instance/
 *.pth
 *.onnx
 *.bin
-models/
 large_data/
 vector_stores/
 *.faiss

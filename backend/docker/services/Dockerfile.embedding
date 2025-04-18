@@ -2,48 +2,46 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# Instalar dependencias base críticas
-RUN pip install --upgrade pip
+# Instalar dependencias del sistema
+RUN apt-get update && apt-get install -y \
+    curl \
+    netcat-traditional \
+    netcat-openbsd \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copiar requirements.txt para instalar dependencias
+# Instalar dependencias de Python
 COPY embedding-service/requirements.txt ./embedding-service/requirements.txt
+RUN pip install --no-cache-dir -U pip && \
+    pip install --no-cache-dir -r ./embedding-service/requirements.txt
 
-# Instalar dependencias desde requirements.txt
-RUN pip install -r ./embedding-service/requirements.txt
-
-# Copiar código de la aplicación
-COPY embedding-service/ ./embedding-service/
+# Copiar código común y específico
 COPY common/ ./common/
-COPY .env.example ./.env.example
+COPY embedding-service/ ./embedding-service/
+COPY .env.example ./.env
 
-# Instalar curl para health checks
-RUN apt-get update && apt-get install -y curl && apt-get clean
+# Hacer ejecutables los scripts
+RUN chmod +x /app/common/init_ollama.sh /app/common/wait-for-it.sh
 
-# Hacer que el script de inicialización sea ejecutable
-RUN chmod +x /app/common/init_ollama.sh
-
-# Variables mínimas de identificación del servicio
+# Configurar variables de entorno
 ENV PYTHONPATH=/app
 ENV SERVICE_NAME=embedding-service
-
-# Variables mínimas para modo de prueba (pueden ser sobreescritas por config.py o .env)
 ENV CONFIG_ENVIRONMENT=development
 ENV TENANT_ID=default
 ENV LOAD_CONFIG_FROM_SUPABASE=false
+ENV OLLAMA_HOST=ollama
+ENV OLLAMA_PORT=11434
+ENV OLLAMA_PULL_MODELS=true
 
-# Variables de credenciales (estas deben ser sobreescritas en producción)
-ENV SUPABASE_URL=https://example.supabase.co
-ENV SUPABASE_KEY=dummy-key-for-testing
-ENV OPENAI_API_KEY=sk-dummy-key-for-testing
-
-# Puerto en el que se ejecutará el servicio (definido en config.py)
+# Puerto para el servicio
 EXPOSE 8001
 
 # Directorio de trabajo para el servicio
 WORKDIR /app/embedding-service
 
-# Health check para K8s
-HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 CMD curl -f http://localhost:8001/status || exit 1
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD curl -f http://localhost:8001/health || exit 1
 
 # Comando para ejecutar el servicio
-CMD /app/common/init_ollama.sh && uvicorn embedding_service:app --host 0.0.0.0 --port 8001
+CMD ["/app/common/init_ollama.sh", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"]

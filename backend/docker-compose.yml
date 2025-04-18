@@ -8,6 +8,11 @@ services:
     volumes:
       - redis-data:/data
     restart: always
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
   ollama:
     image: ollama/ollama:latest
@@ -16,11 +21,7 @@ services:
     volumes:
       - ollama-data:/root/.ollama
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 40s
+      disable: true  # deshabilitado por problemas de disponibilidad intermitente
     restart: always
 
   embedding-service:
@@ -57,54 +58,14 @@ services:
       
       # Variables de configuración general
       - LOG_LEVEL=INFO
-      - USE_OLLAMA=true
-      - DEFAULT_OLLAMA_EMBEDDING_MODEL=nomic-embed-text
-      - DEFAULT_OLLAMA_LLM_MODEL=llama3.2:1b
+      - USE_OLLAMA=${USE_OLLAMA:-true}
+      - DEFAULT_OLLAMA_EMBEDDING_MODEL=${DEFAULT_OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+      - DEFAULT_OLLAMA_LLM_MODEL=${DEFAULT_OLLAMA_LLM_MODEL:-llama3:1b}
     depends_on:
-      - redis
-      - ollama
-
-  ingestion-service:
-    build:
-      context: .
-      dockerfile: docker/services/Dockerfile.ingestion
-    restart: always
-    ports:
-      - "8004:8004"
-    volumes:
-      - ./common:/app/common
-      - ./ingestion-service:/app/ingestion-service
-    dns:
-      - 8.8.8.8
-      - 1.1.1.1
-    environment:
-      # Variables de credenciales
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - SUPABASE_URL=${SUPABASE_URL:-https://example.supabase.co}
-      - SUPABASE_KEY=${SUPABASE_KEY:-dummy-key-for-testing}
-      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY:-dummy-service-key-for-testing}
-      
-      # Variables de identificación del servicio
-      - SERVICE_NAME=ingestion-service
-      
-      # Variables de conexión con servicios
-      - REDIS_URL=redis://redis:6379/0
-      - EMBEDDING_SERVICE_URL=http://embedding-service:8001
-      - OLLAMA_API_URL=http://ollama:11434
-      
-      # Variables de configuración multi-tenant
-      - TENANT_ID=default
-      - CONFIG_ENVIRONMENT=development
-      - LOAD_CONFIG_FROM_SUPABASE=false
-      
-      # Variables de configuración general
-      - LOG_LEVEL=INFO
-      - USE_OLLAMA=true
-      - DEFAULT_OLLAMA_EMBEDDING_MODEL=nomic-embed-text
-      - DEFAULT_OLLAMA_LLM_MODEL=llama3.2:1b
-    depends_on:
-      - embedding-service
-      - ollama
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_started
 
   query-service:
     build:
@@ -141,12 +102,16 @@ services:
       
       # Variables de configuración general
       - LOG_LEVEL=INFO
-      - USE_OLLAMA=true
-      - DEFAULT_OLLAMA_EMBEDDING_MODEL=nomic-embed-text
-      - DEFAULT_OLLAMA_LLM_MODEL=llama3.2:1b
+      - USE_OLLAMA=${USE_OLLAMA:-true}
+      - DEFAULT_OLLAMA_EMBEDDING_MODEL=${DEFAULT_OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+      - DEFAULT_OLLAMA_LLM_MODEL=${DEFAULT_OLLAMA_LLM_MODEL:-llama3:1b}
     depends_on:
-      - embedding-service
-      - ollama
+      redis:
+        condition: service_healthy
+      embedding-service:
+        condition: service_started
+      ollama:
+        condition: service_started
 
   agent-service:
     build:
@@ -184,28 +149,30 @@ services:
       
       # Variables de configuración general
       - LOG_LEVEL=INFO
-      - USE_OLLAMA=true
-      - DEFAULT_OLLAMA_EMBEDDING_MODEL=nomic-embed-text
-      - DEFAULT_OLLAMA_LLM_MODEL=llama3.2:1b
+      - USE_OLLAMA=${USE_OLLAMA:-true}
+      - DEFAULT_OLLAMA_EMBEDDING_MODEL=${DEFAULT_OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+      - DEFAULT_OLLAMA_LLM_MODEL=${DEFAULT_OLLAMA_LLM_MODEL:-llama3:1b}
+      - JOB_LOCK_EXPIRE_SECONDS=600
     depends_on:
-      - embedding-service
-      - query-service
-      - ollama
+      redis:
+        condition: service_healthy
+      embedding-service:
+        condition: service_started
+      query-service:
+        condition: service_started
+      ollama:
+        condition: service_started
 
-  test-service:
+  ingestion-service:
     build:
       context: .
-      dockerfile: test-service/Dockerfile
+      dockerfile: docker/services/Dockerfile.ingestion
     restart: always
     ports:
-      - "8005:8005"
+      - "8000:8000"
     volumes:
       - ./common:/app/common
-      - ./test-service:/app/test-service
-      - ./embedding-service/tests:/app/embedding-service/tests
-      - ./query-service/tests:/app/query-service/tests
-      - ./ingestion-service/tests:/app/ingestion-service/tests
-      - ./agent-service/tests:/app/agent-service/tests
+      - ./ingestion-service:/app/ingestion-service
     dns:
       - 8.8.8.8
       - 1.1.1.1
@@ -217,15 +184,14 @@ services:
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY:-dummy-service-key-for-testing}
       
       # Variables de identificación del servicio
-      - SERVICE_NAME=test-service
+      - SERVICE_NAME=ingestion-service
       
       # Variables de conexión con servicios
       - REDIS_URL=redis://redis:6379/0
       - EMBEDDING_SERVICE_URL=http://embedding-service:8001
       - QUERY_SERVICE_URL=http://query-service:8002
-      - INGESTION_SERVICE_URL=http://ingestion-service:8004
-      - AGENT_SERVICE_URL=http://agent-service:8003
       - OLLAMA_API_URL=http://ollama:11434
+      - JOB_LOCK_EXPIRE_SECONDS=600
       
       # Variables de configuración multi-tenant
       - TENANT_ID=default
@@ -234,15 +200,16 @@ services:
       
       # Variables de configuración general
       - LOG_LEVEL=INFO
-      - PYTEST_RUNNING=true
-      - TEST_MODE=integration
+      - USE_OLLAMA=${USE_OLLAMA:-true}
+      - DEFAULT_OLLAMA_EMBEDDING_MODEL=${DEFAULT_OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+      - DEFAULT_OLLAMA_LLM_MODEL=${DEFAULT_OLLAMA_LLM_MODEL:-llama3:1b}
     depends_on:
-      - embedding-service
-      - query-service
-      - ingestion-service
-      - agent-service
-      - redis
-      - ollama
+      redis:
+        condition: service_healthy
+      embedding-service:
+        condition: service_started
+      ollama:
+        condition: service_started
 
 volumes:
   redis-data:
