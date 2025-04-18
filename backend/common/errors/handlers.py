@@ -15,7 +15,6 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import ValidationError
 
 from .exceptions import ServiceError, ConfigurationError, ErrorCode, ERROR_CODES
-from ..context.vars import get_full_context
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +33,10 @@ def setup_error_handling(app: FastAPI) -> None:
     """
     @app.exception_handler(ServiceError)
     async def service_error_handler(request: Request, exc: ServiceError):
+        from ..context.vars import get_full_context
         # Obtener contexto para logging
-        context_str = ", ".join([f"{k}='{v}'" for k, v in exc.context.items() if v])
+        context = get_full_context()
+        context_str = ", ".join([f"{k}='{v}'" for k, v in context.items() if v])
         
         if context_str:
             logger.error(f"Service error [{context_str}]: {exc.message}")
@@ -49,6 +50,7 @@ def setup_error_handling(app: FastAPI) -> None:
     
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+        from ..context.vars import get_full_context
         # Obtener contexto para logging
         context = get_full_context()
         context_str = ", ".join([f"{k}='{v}'" for k, v in context.items() if v])
@@ -77,6 +79,7 @@ def setup_error_handling(app: FastAPI) -> None:
     
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError):
+        from ..context.vars import get_full_context
         # Obtener contexto para logging
         context = get_full_context()
         context_str = ", ".join([f"{k}='{v}'" for k, v in context.items() if v])
@@ -108,6 +111,7 @@ def setup_error_handling(app: FastAPI) -> None:
     
     @app.exception_handler(Exception)
     async def generic_exception_handler(request: Request, exc: Exception):
+        from ..context.vars import get_full_context
         # Generar ID único para este error
         error_id = f"error_{id(exc)}"
         
@@ -143,9 +147,11 @@ def setup_error_handling(app: FastAPI) -> None:
     # Middleware para logging de peticiones y respuestas
     @app.middleware("http")
     async def log_requests(request: Request, call_next):
+        from ..context.vars import get_full_context
         try:
             # Log request with tenant_id if available in headers
-            tenant_id = request.headers.get("X-Tenant-ID")
+            context = get_full_context()
+            tenant_id = context.get("tenant_id")
             log_prefix = f"[tenant_id={tenant_id}]" if tenant_id else ""
             logger.debug(f"{log_prefix} Request: {request.method} {request.url.path}")
             
@@ -223,6 +229,7 @@ def handle_errors(
                 raise
             except Exception as e:
                 # Obtener contexto actual para enriquecer el error
+                from ..context.vars import get_full_context
                 context = get_full_context()
                 function_name = func.__name__
                 

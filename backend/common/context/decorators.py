@@ -8,13 +8,13 @@ para bloques de código que necesitan mantener información de contexto.
 import logging
 import contextvars
 import functools
+from typing import TypeVar, Callable, Awaitable, Optional, List, Tuple
 
 from .vars import (
     current_tenant_id, current_agent_id, current_conversation_id, current_collection_id,
     set_current_tenant_id, set_current_agent_id, set_current_conversation_id, set_current_collection_id,
     reset_context, get_full_context
 )
-
 from ..errors.exceptions import ServiceError, ErrorCode
 
 logger = logging.getLogger(__name__)
@@ -119,35 +119,13 @@ class Context:
     
     def _validate_tenant(self, tenant_id: str) -> None:
         """Valida que el tenant_id sea válido (no None, no "default")"""
-        if not tenant_id or tenant_id == "default":
-            # Crear un contexto de error enriquecido
-            error_context = {
-                "tenant_id": tenant_id,
-                "context": get_full_context(),
-                "service": "unknown"
-            }
-            
-            # Intentar obtener el nombre del servicio
-            try:
-                from ..config.settings import get_settings
-                settings = get_settings()
-                error_context["service"] = getattr(settings, "service_name", "unknown")
-            except (ImportError, AttributeError):
-                pass
-                
-            logger.error("Intento de acceso con tenant_id inválido o default", extra=error_context)
-            
-            raise ServiceError(
-                message="Se requiere un tenant válido para esta operación",
-                error_code=ErrorCode.TENANT_REQUIRED.value,
-                status_code=403,
-                context=error_context
-            )
+        from .validator import validate_tenant_id
+        validate_tenant_id(tenant_id)
     
     def _validate_current_tenant(self) -> None:
         """Valida el tenant_id del contexto actual"""
-        tenant_id = current_tenant_id.get()
-        self._validate_tenant(tenant_id)
+        from .validator import validate_current_tenant
+        validate_current_tenant()
     
     def get_tenant_id(self) -> str:
         """

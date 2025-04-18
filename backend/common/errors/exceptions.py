@@ -7,8 +7,6 @@ from typing import Dict, Any, Optional
 from enum import Enum
 from fastapi import HTTPException, status
 
-from ..context.vars import get_full_context
-
 logger = logging.getLogger(__name__)
 
 class ErrorCode(Enum):
@@ -183,7 +181,11 @@ class ServiceError(Exception):
         # Si error_code es un Enum, extraer el valor
         self.error_code = error_code.value if isinstance(error_code, ErrorCode) else error_code
         self.details = details or {}
-        self.context = context or get_full_context()
+        if context:
+            self.context = context
+        else:
+            from ..context.vars import get_full_context
+            self.context = get_full_context()
         
         # Buscar la definición del error para obtener código y estado
         error_info = ERROR_CODES.get(self.error_code, ERROR_CODES[ErrorCode.GENERAL_ERROR.value])

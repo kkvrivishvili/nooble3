@@ -8,8 +8,7 @@ import logging
 import uuid
 from typing import Dict, Any, List, Optional, AsyncGenerator
 
-from ..cache.contextual import AgentMemory, build_cache_key, cache_get, cache_set
-from ..cache.redis import generate_hash
+from ..cache.manager import CacheManager, generate_hash, AgentMemory
 from ..context.vars import get_current_tenant_id, get_current_agent_id, get_current_conversation_id
 
 logger = logging.getLogger(__name__)
@@ -68,18 +67,14 @@ async def stream_llm_response(
     
     # 1. Verificar en caché si hay una respuesta previa para esta consulta exacta
     if use_cache:
-        cache_key = build_cache_key(
-            key_type="query",
-            resource_id=generate_hash(prompt),
+        resource_id = generate_hash(prompt)
+        cached_response = await CacheManager.get(
+            data_type="query",
+            resource_id=resource_id,
             tenant_id=tenant_id,
-            user_id=user_id,
-            session_id=session_id,
             agent_id=agent_id,
-            collection_ids=collection_ids,
             conversation_id=conversation_id
         )
-        
-        cached_response = await cache_get(cache_key)
         if cached_response and not tools:  # No reutilizar caché si hay herramientas
             # Simular streaming para respuesta cacheada
             for chunk in cached_response.split():
@@ -218,17 +213,16 @@ async def stream_llm_response(
     
     # 6. Guardar respuesta completa en caché
     if use_cache:
-        cache_key = build_cache_key(
-            key_type="query",
-            resource_id=generate_hash(prompt),
+        resource_id = generate_hash(prompt)
+        await CacheManager.set(
+            data_type="query",
+            resource_id=resource_id,
+            value=full_response,
             tenant_id=tenant_id,
-            user_id=user_id,
-            session_id=session_id,
             agent_id=agent_id,
-            collection_ids=collection_ids,
-            conversation_id=conversation_id
+            conversation_id=conversation_id,
+            ttl=3600
         )
-        await cache_set(cache_key, full_response, ttl=3600)
     
     # 7. Registrar mensaje en la memoria del agente
     await memory.add_message({

@@ -321,6 +321,10 @@ async def get_settings() -> Settings:
     # Actualizar timestamp de última recarga
     _settings_last_refresh[tenant_id] = current_time
     
+    # Import tiers dynamically to break circular import
+    from .tiers import TierSettings
+    _ = TierSettings  # ensure module loads when needed
+    
     return settings
 
 

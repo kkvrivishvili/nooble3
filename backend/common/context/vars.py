@@ -7,8 +7,9 @@ para acceder a información de contexto. Para validación, utilizar el decorador
 """
 
 import logging
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 from typing import Optional, Dict
+import warnings
 
 from common.errors import ServiceError, ErrorCode
 
@@ -119,21 +120,35 @@ def get_full_context() -> Dict[str, Optional[str]]:
         "collection_id": get_current_collection_id(),
     }
 
+def reset_context(token: Token, name: str) -> None:
+    """Restaura el valor previo de la variable de contexto según el token y nombre."""
+    var_map = {
+        "tenant_id": current_tenant_id,
+        "agent_id": current_agent_id,
+        "conversation_id": current_conversation_id,
+        "collection_id": current_collection_id
+    }
+    var = var_map.get(name)
+    if var and token:
+        var.reset(token)
+
 # Alias para compatibilidad (NOTA: Estas funciones están obsoletas, usar @with_context)
 def get_required_tenant_id() -> str:
     """
     FUNCIÓN OBSOLETA: Utilizar el decorador @with_context(tenant=True) y ctx.get_tenant_id() en su lugar.
-    
-    Esta función está mantenida por compatibilidad y redirige a Context para validación.
     """
-    from .decorators import Context
-    return Context.validate_tenant_id(current_tenant_id.get())
+    warnings.warn(
+        "get_required_tenant_id is deprecated, use @with_context(tenant=True) instead", 
+        DeprecationWarning, stacklevel=2)
+    from .validator import validate_current_tenant
+    return validate_current_tenant()
 
 def validate_tenant_context(tenant_id: str) -> str:
     """
     FUNCIÓN OBSOLETA: Utilizar el decorador @with_context(tenant=True) y ctx.get_tenant_id() en su lugar.
-    
-    Esta función está mantenida por compatibilidad y redirige a Context para validación.
     """
-    from .decorators import Context
-    return Context.validate_tenant_id(tenant_id)
+    warnings.warn(
+        "validate_tenant_context is deprecated, use @with_context(tenant=True) instead", 
+        DeprecationWarning, stacklevel=2)
+    from .validator import validate_tenant_id
+    return validate_tenant_id(tenant_id)

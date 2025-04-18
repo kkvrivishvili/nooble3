@@ -3,8 +3,9 @@ import time
 import json
 from typing import Dict, Any, List, Optional, Set, Union
 import asyncio
+import hashlib
+import redis.asyncio as redis
 
-from .redis import get_redis_client, generate_hash
 from ..context.vars import get_current_tenant_id, get_current_agent_id
 from ..context.vars import get_current_conversation_id, get_current_collection_id
 
@@ -19,6 +20,36 @@ MEMORY_CACHE_MAX_SIZE = 1000  # Número máximo de entradas
 MEMORY_CACHE_CLEANUP_PERCENT = 0.2  # Porcentaje de entradas a eliminar (20%)
 
 _settings_ttl = 300  # TTL máximo 5 min (300 s)
+
+_redis_client = None
+
+async def get_redis_client() -> Optional[Any]:
+    """Obtiene un cliente Redis compartido para CacheManager"""
+    global _redis_client
+    if _redis_client is None:
+        from ..config.settings import get_settings
+        settings = get_settings()
+        pool = redis.ConnectionPool.from_url(
+            settings.redis_url,
+            max_connections=getattr(settings, 'redis_max_connections', 10),
+            decode_responses=True
+        )
+        client = redis.Redis(connection_pool=pool)
+        try:
+            await client.ping()
+            logger.info("Redis conectado exitosamente en CacheManager")
+            _redis_client = client
+        except Exception as e:
+            logger.warning(f"Redis connection failed: {str(e)} - running without cache.")
+            return None
+    return _redis_client
+
+def generate_hash(data: Any) -> str:
+    """Genera un hash MD5 para cualquier tipo de dato"""
+    if isinstance(data, str):
+        return hashlib.md5(data.encode()).hexdigest()
+    else:
+        return hashlib.md5(json.dumps(data).encode()).hexdigest()
 
 class CacheManager:
     """
@@ -678,62 +709,42 @@ class CacheManager:
     async def get_agent_response(
         agent_id: str,
         query: str,
-        tenant_id: Optional[str] = None,
-        conversation_id: Optional[str] = None
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Obtiene una respuesta de agente de la caché.
-        
-        Args:
-            agent_id: ID del agente
-            query: Consulta del usuario (se hasheará)
-            tenant_id, conversation_id: Contexto opcional
-            
-        Returns:
-            Optional[Dict[str, Any]]: Respuesta del agente o None
-        """
-        query_hash = generate_hash(query)
-        
+        tenant_id: str,
+        conversation_id: Optional[str] = None,
+        use_memory: bool = True
+    ) -> Optional[Any]:
+        """Obtiene la respuesta de un agente desde caché multinivel"""
+        key = generate_hash(query)
         return await CacheManager.get(
             data_type="agent_response",
-            resource_id=query_hash,
+            resource_id=key,
             tenant_id=tenant_id,
             agent_id=agent_id,
-            conversation_id=conversation_id
+            conversation_id=conversation_id,
+            use_memory=use_memory
         )
     
     @staticmethod
     async def set_agent_response(
         agent_id: str,
         query: str,
-        response: Dict[str, Any],
-        tenant_id: Optional[str] = None,
+        response: Any,
+        tenant_id: str,
         conversation_id: Optional[str] = None,
-        ttl: int = 1800  # 30 minutos
+        ttl: int = _settings_ttl,
+        use_memory: bool = True
     ) -> bool:
-        """
-        Almacena una respuesta de agente en la caché.
-        
-        Args:
-            agent_id: ID del agente
-            query: Consulta del usuario (se hasheará)
-            response: Respuesta a almacenar
-            tenant_id, conversation_id: Contexto opcional
-            ttl: Tiempo de vida en segundos
-            
-        Returns:
-            bool: True si se guardó correctamente
-        """
-        query_hash = generate_hash(query)
-        
+        """Guarda la respuesta de un agente en caché multinivel"""
+        key = generate_hash(query)
         return await CacheManager.set(
             data_type="agent_response",
-            resource_id=query_hash,
+            resource_id=key,
             value=response,
             tenant_id=tenant_id,
             agent_id=agent_id,
             conversation_id=conversation_id,
-            ttl=ttl
+            ttl=ttl,
+            use_memory=use_memory
         )
     
     # --- AGENT CONFIGURATIONS ---
@@ -741,49 +752,34 @@ class CacheManager:
     @staticmethod
     async def get_agent_config(
         agent_id: str,
-        tenant_id: Optional[str] = None
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Obtiene la configuración de un agente de la caché.
-        
-        Args:
-            agent_id: ID del agente
-            tenant_id: ID del tenant
-            
-        Returns:
-            Optional[Dict[str, Any]]: Configuración del agente o None
-        """
+        tenant_id: str,
+        use_memory: bool = True
+    ) -> Optional[Any]:
+        """Obtiene configuración de agente específica de caché multinivel."""
         return await CacheManager.get(
             data_type="agent_config",
             resource_id=agent_id,
-            tenant_id=tenant_id
+            tenant_id=tenant_id,
+            use_memory=use_memory,
+            search_hierarchy=False
         )
     
     @staticmethod
     async def set_agent_config(
         agent_id: str,
-        config: Dict[str, Any],
-        tenant_id: Optional[str] = None,
-        ttl: int = 300  # 5 minutos
+        config: Any,
+        tenant_id: str,
+        ttl: int = _settings_ttl,
+        use_memory: bool = True
     ) -> bool:
-        """
-        Almacena la configuración de un agente en la caché.
-        
-        Args:
-            agent_id: ID del agente
-            config: Configuración a almacenar
-            tenant_id: ID del tenant
-            ttl: Tiempo de vida en segundos
-            
-        Returns:
-            bool: True si se guardó correctamente
-        """
+        """Guarda configuración de agente en caché multinivel."""
         return await CacheManager.set(
             data_type="agent_config",
             resource_id=agent_id,
             value=config,
             tenant_id=tenant_id,
-            ttl=ttl
+            ttl=ttl,
+            use_memory=use_memory
         )
     
     # --- CONVERSATION HISTORY ---
@@ -841,3 +837,15 @@ class CacheManager:
             conversation_id=conversation_id,
             ttl=ttl
         )
+
+class AgentMemory:
+    """Stub de memoria de agente para compatibilidad, previo a refactor."""
+    def __init__(self, tenant_id: str, agent_id: str, conversation_id: str,
+                 user_id: Optional[str] = None, session_id: Optional[str] = None):
+        pass
+    async def register_collection(self, collection_id: str) -> None:
+        pass
+    async def get_conversation_history(self) -> List[Any]:
+        return []
+    async def add_message(self, message: Any) -> None:
+        pass
