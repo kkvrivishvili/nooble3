@@ -101,8 +101,8 @@ async def execute_agent(
     logger.info(f"Ejecutando agente {agent_id} con query: {query[:50]}...")
     start_time = time.time()
     
-    # Crear contexto de memoria con ContextManager
-    context_manager = ContextManager(
+    # Obtener o crear ContextManager único para este contexto
+    context_manager = ContextManager.get_or_create(
         tenant_id=tenant_id,
         agent_id=agent_id,
         conversation_id=conversation_id,
@@ -333,9 +333,9 @@ async def stream_agent_response(
     context_manager: ContextManager = None
 ) -> AsyncGenerator[str, None]:
     """Genera una respuesta en streaming para un agente."""
-    # Reusar ContextManager existente o crear uno nuevo
+    # Reutilizar instancia existente o crear nueva única
     if context_manager is None:
-        context_manager = ContextManager(
+        context_manager = ContextManager.get_or_create(
             tenant_id=tenant_id,
             agent_id=agent_id,
             conversation_id=conversation_id,

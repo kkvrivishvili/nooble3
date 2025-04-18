@@ -42,6 +42,27 @@ class ContextManager:
         self._collections = set()
         self._tools = {}
     
+    # Registro de instancias para reutilización basada en claves de contexto
+    _registry: Dict[Tuple[Optional[str], Optional[str], Optional[str], Optional[str], Optional[str]], "ContextManager"] = {}
+    
+    @classmethod
+    def get_or_create(
+        cls,
+        tenant_id: str,
+        agent_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        session_id: Optional[str] = None
+    ) -> "ContextManager":
+        """
+        Retorna una instancia única de ContextManager para el conjunto de IDs dado.
+        Si no existe, la crea y la registra.
+        """
+        key = (tenant_id, agent_id, conversation_id, user_id, session_id)
+        if key not in cls._registry:
+            cls._registry[key] = cls(tenant_id, agent_id, conversation_id, user_id, session_id)
+        return cls._registry[key]
+    
     @property
     async def memory(self) -> AgentMemory:
         """
