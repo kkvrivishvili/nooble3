@@ -21,7 +21,7 @@ from common.errors import (
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
 from common.llm.token_counters import count_tokens
-from common.tracking import track_token_usage
+from common.tracking import track_token_usage, track_usage
 from common.llm.streaming import stream_llm_response
 from common.cache.manager import CacheManager
 
@@ -231,13 +231,16 @@ async def execute_agent(
         total_tokens = input_tokens + output_tokens
         
         # Tracking de tokens async
-        await track_token_usage(
+        await track_usage(
             tenant_id=tenant_id,
-            tokens=total_tokens,
-            model=model_name,
-            agent_id=agent_id,
-            conversation_id=conversation_id,
-            token_type="llm"
+            operation="tokens",
+            metadata={
+                "tokens": total_tokens,
+                "model": model_name,
+                "agent_id": agent_id,
+                "conversation_id": conversation_id,
+                "token_type": "llm"
+            }
         )
         
         # Extraer tools usadas
@@ -368,12 +371,15 @@ async def stream_agent_response(
         )
         
         # Contabilizar tokens (en background)
-        await track_token_usage(
+        await track_usage(
             tenant_id=tenant_id,
-            tokens=len(full_response.split()) * 2,  # Estimación básica
-            model=agent_config.get("llm_model", settings.default_llm_model),
-            agent_id=agent_id,
-            conversation_id=conversation_id
+            operation="tokens",
+            metadata={
+                "tokens": len(full_response.split()) * 2,  # Estimación básica
+                "model": agent_config.get("llm_model", settings.default_llm_model),
+                "agent_id": agent_id,
+                "conversation_id": conversation_id
+            }
         )
     except ServiceError as service_error:
         # Errores de servicio estandarizados

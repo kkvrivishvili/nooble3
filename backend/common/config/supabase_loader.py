@@ -122,18 +122,14 @@ def apply_tenant_configuration_changes(
         from .settings import invalidate_settings_cache
         invalidate_settings_cache(tenant_id)
         
-        # Crear patrón de caché para limpiar
-        cache_pattern = f"tenant_config:{tenant_id}:{environment}"
-        if scope != "tenant":
-            cache_pattern = f"{cache_pattern}:{scope}"
-            if scope_id:
-                cache_pattern = f"{cache_pattern}:{scope_id}"
-        
-        # Limpiar todas las entradas de caché relacionadas usando cache redis
+        # Invalidar configuración en CacheManager
         import asyncio
-        from ..cache.redis import cache_delete_pattern
-        # Ejecutar eliminación de patrones en Redis
-        asyncio.run(cache_delete_pattern(f"{cache_pattern}*"))
+        from ..cache.manager import CacheManager
+        # Ejecutar invalidación de caché de configuraciones para este tenant
+        asyncio.run(CacheManager.invalidate_cache(
+            scope='config',
+            tenant_id=tenant_id
+        ))
         
         logger.info(f"Configuraciones aplicadas para tenant {tenant_id} en ámbito {scope}")
         return True

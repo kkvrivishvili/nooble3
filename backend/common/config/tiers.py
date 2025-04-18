@@ -4,6 +4,7 @@ Definiciones de niveles, límites y configuraciones específicas por tier.
 
 from typing import Dict, Any, List, Optional
 import logging
+from ..errors.handlers import handle_errors
 
 logger = logging.getLogger(__name__)
 
@@ -11,7 +12,7 @@ logger = logging.getLogger(__name__)
 # Estos son los valores por defecto para cada tier
 default_tier_limits = {
     "free": {
-        "max_docs": 20,
+        "max_docs": 20, 
         "max_knowledge_bases": 1,
         "has_advanced_rag": False,
         "max_tokens_per_month": 100000,
@@ -77,17 +78,6 @@ service_multipliers = {
     "ingestion": 0.3,    # Muy restrictivo para ingesta de documentos
     "collection": 0.5    # Restrictivo para operaciones de colección
 }
-
-def handle_errors(func):
-    def wrapper(*args, **kwargs):
-        try:
-            return func(*args, **kwargs)
-        except Exception as e:
-            from ..errors.exceptions import ServiceError, ErrorCode
-            error_message = f"Error en la función {func.__name__}: {str(e)}"
-            logger.error(error_message, exc_info=True)
-            raise ServiceError(ErrorCode.INTERNAL_ERROR, error_message)
-    return wrapper
 
 @handle_errors
 async def get_tier_rate_limit(tenant_id: str, tier: str, service_name: Optional[str] = None) -> int:

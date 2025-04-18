@@ -17,7 +17,7 @@ from common.errors import (
 )
 from common.context import with_context, set_current_collection_id, get_current_tenant_id, get_current_collection_id, set_current_context_value
 from common.auth import verify_tenant, validate_model_access, RoleType, get_allowed_models_for_tier
-from common.tracking import track_query
+from common.tracking import track_usage
 from common.config.settings import get_settings
 
 from services.query_engine import create_query_engine, process_query_with_sources
@@ -101,14 +101,17 @@ async def query_collection(
         processing_time = time.time() - start_time
         
         # Registrar uso de tokens para facturación
-        await track_query(
+        await track_usage(
             tenant_id=tenant_info.tenant_id,
-            operation_type="query",
-            model=result.get("model", request.llm_model),
-            tokens_in=result.get("tokens_in", 0),
-            tokens_out=result.get("tokens_out", 0),
-            agent_id=None,
-            conversation_id=None
+            operation="query",
+            metadata={
+                "operation_type": "query",
+                "model": result.get("model", request.llm_model),
+                "tokens_in": result.get("tokens_in", 0),
+                "tokens_out": result.get("tokens_out", 0),
+                "agent_id": None,
+                "conversation_id": None
+            }
         )
         
         # Construir respuesta

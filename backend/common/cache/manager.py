@@ -2,6 +2,7 @@ import logging
 import time
 import json
 from typing import Dict, Any, List, Optional, Set, Union
+import asyncio
 
 from .redis import get_redis_client, generate_hash
 from ..context.vars import get_current_tenant_id, get_current_agent_id
@@ -26,6 +27,8 @@ class CacheManager:
     - Especializaciones para todos los tipos de datos de la plataforma
     - Invalidación selectiva por contexto
     """
+    
+    _lock = asyncio.Lock()
     
     @staticmethod
     def _build_key(
@@ -412,6 +415,88 @@ class CacheManager:
         except Exception as e:
             logger.warning(f"Error al invalidar caché con patrón {pattern}: {e}")
             return len(keys_to_delete)
+    
+    @staticmethod
+    async def increment_counter(
+        scope: str,
+        resource_id: str,
+        tokens: int = 0,
+        tenant_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        collection_id: Optional[str] = None,
+        token_type: str = "llm"
+    ) -> bool:
+        """
+        Incrementa un contador de tokens de forma atómica usando CacheManager.
+        """
+        tenant_id = tenant_id or get_current_tenant_id()
+        key = f"{scope}:{resource_id}"
+        async with CacheManager._lock:
+            current = await CacheManager.get(
+                token_type, key,
+                tenant_id, agent_id, conversation_id, collection_id,
+                use_memory=False, search_hierarchy=False
+            ) or 0
+            await CacheManager.set(
+                token_type, key, current + tokens,
+                tenant_id, agent_id, conversation_id, collection_id,
+                ttl=0, use_memory=False
+            )
+        return True
+
+    @staticmethod
+    async def get_counter(
+        scope: str,
+        resource_id: str,
+        tenant_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        collection_id: Optional[str] = None,
+        token_type: str = "llm"
+    ) -> int:
+        """
+        Obtiene el valor del contador de tokens.
+        """
+        tenant_id = tenant_id or get_current_tenant_id()
+        key = f"{scope}:{resource_id}"
+        value = await CacheManager.get(
+            token_type, key,
+            tenant_id, agent_id, conversation_id, collection_id,
+            use_memory=False, search_hierarchy=False
+        )
+        return int(value) if value else 0
+
+    @staticmethod
+    async def invalidate_cache(
+        scope: str,
+        tenant_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        collection_id: Optional[str] = None
+    ) -> int:
+        """
+        Invalida la caché en memoria y Redis para un ámbito/contexto dado.
+        """
+        tenant_id = tenant_id or get_current_tenant_id()
+        pattern_parts = [tenant_id, scope]
+        if agent_id: pattern_parts.append(f"agent:{agent_id}")
+        if conversation_id: pattern_parts.append(f"conv:{conversation_id}")
+        if collection_id: pattern_parts.append(f"coll:{collection_id}")
+        pattern = ":".join(pattern_parts)
+        # Eliminar claves en Redis
+        redis_client = await get_redis_client()
+        keys = await redis_client.keys(f"{pattern}*")
+        deleted = 0
+        if keys:
+            deleted += await redis_client.delete(*keys)
+        # Eliminar de caché en memoria
+        to_delete = [k for k in _memory_cache if k.startswith(pattern)]
+        for k in to_delete:
+            _memory_cache.pop(k, None)
+            _memory_expiry.pop(k, None)
+            deleted += 1
+        return deleted
     
     # === API ESPECIALIZADA PARA CASOS DE USO ESPECÍFICOS ===
     
