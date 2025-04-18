@@ -231,15 +231,19 @@ class CachedEmbeddingProvider:
         result: List[Optional[List[float]]] = [None] * len(texts)
         
         # Verificar caché para todos los textos
-        try:
-            cached_embeddings = await CacheManager.get_embeddings_batch(
-                texts=texts,
-                model_name=self.model_name,
-                tenant_id=tenant_id
-            )
-        except Exception as cache_err:
-            logger.debug(f"Error al obtener embeddings de caché: {str(cache_err)}")
-            cached_embeddings = {}
+        cached_embeddings = {}
+        for i, text in enumerate(texts):
+            try:
+                val = await CacheManager.get_embedding(
+                    text=text,
+                    model_name=self.model_name,
+                    tenant_id=tenant_id,
+                    agent_id=ctx.get_agent_id()
+                )
+                if val:
+                    cached_embeddings[i] = val
+            except Exception as cache_err:
+                logger.debug(f"Error al obtener embedding de caché para texto {i}: {str(cache_err)}")
         
         # Identificar textos no cacheados que necesitan procesamiento
         texts_to_process = []

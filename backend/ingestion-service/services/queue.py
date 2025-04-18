@@ -220,11 +220,11 @@ async def check_stuck_jobs():
                                 logger.warning(f"Detectado trabajo estancado {job_id} para tenant {tenant_id}. Última actualización hace {current_time - updated_timestamp} segundos.")
                                 
                                 # Liberar explícitamente cualquier bloqueo antiguo que pudiera existir
-                                await CacheManager.delete(
-                                    data_type="system",
-                                    resource_id=lock_key,
-                                    tenant_id=tenant_id
-                                )
+                                try:
+                                    redis_client = await get_redis_client()
+                                    await redis_client.delete(lock_key)
+                                except Exception as err:
+                                    logger.debug(f"Error liberando lock Redis para job {job_id}: {err}")
                                 
                                 await update_processing_job(
                                     job_id=job_id,
@@ -276,11 +276,11 @@ async def check_stuck_jobs():
                                 logger.warning(f"Trabajo {job_id} excede el tiempo máximo por un margen excesivo. Forzando liberación.")
                                 
                                 # Forzar liberación del bloqueo
-                                await CacheManager.delete(
-                                    data_type="system",
-                                    resource_id=lock_key,
-                                    tenant_id=tenant_id
-                                )
+                                try:
+                                    redis_client = await get_redis_client()
+                                    await redis_client.delete(lock_key)
+                                except Exception as err:
+                                    logger.debug(f"Error liberando lock Redis forzado para job {job_id}: {err}")
                                 
                                 await update_processing_job(
                                     job_id=job_id,

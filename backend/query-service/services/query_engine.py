@@ -150,8 +150,7 @@ async def process_query_with_sources(
                 tenant_id=tenant_id,
                 agent_id=agent_id,
                 similarity_top_k=similarity_top_k,
-                response_mode=response_mode,
-                ttl=3600
+                response_mode=response_mode
             )
         except Exception as cache_set_err:
             logger.debug(f"Error guardando resultado de consulta en caché: {str(cache_set_err)}")
