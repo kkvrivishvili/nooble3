@@ -531,6 +531,43 @@ class CacheManager:
             deleted += 1
         return deleted
     
+    @staticmethod
+    async def rpush(
+        list_name: str,
+        value: Any,
+        tenant_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        collection_id: Optional[str] = None
+    ) -> int:
+        """
+        Agrega un valor a una lista de Redis (cola) para procesamiento de trabajos.
+        """
+        redis_client = await get_redis_client()
+        if not redis_client:
+            return 0
+        try:
+            return await redis_client.rpush(list_name, value)
+        except Exception as e:
+            logger.warning(f"Error al hacer rpush en Redis lista {list_name}: {e}")
+            return 0
+
+    @staticmethod
+    async def lpop(
+        queue_name: str
+    ) -> Optional[Any]:
+        """
+        Extrae (pop izquierdo) un valor de una lista de Redis (cola) para procesamiento de trabajos.
+        """
+        redis_client = await get_redis_client()
+        if not redis_client:
+            return None
+        try:
+            return await redis_client.lpop(queue_name)
+        except Exception as e:
+            logger.warning(f"Error al hacer lpop en Redis lista {queue_name}: {e}")
+            return None
+
     # === API ESPECIALIZADA PARA CASOS DE USO ESPECÍFICOS ===
     
     # --- EMBEDDINGS ---

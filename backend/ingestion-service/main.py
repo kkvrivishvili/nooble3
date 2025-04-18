@@ -22,10 +22,8 @@ from common.utils.logging import init_logging
 from common.context import Context
 from common.context.vars import get_current_tenant_id
 from common.db.supabase import init_supabase
-from common.cache.manager import CacheManager
+from common.cache.manager import CacheManager, get_redis_client
 from common.swagger import configure_swagger_ui
-from common.cache.redis import get_redis_client
-from common.utils.rate_limiting import setup_rate_limiting
 
 # Evitar importación duplicada
 from routes import register_routes
