@@ -4,7 +4,7 @@ from typing import Optional, List
 from fastapi import APIRouter, Depends, Path, Query
 
 from common.models import TenantInfo, ConversationListResponse, MessageListResponse, DeleteConversationResponse, ChatMessage
-from common.errors import ServiceError, handle_service_error_simple
+from common.errors import handle_service_error_simple, AgentNotFoundError, ConversationError
 from common.context import with_context
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
@@ -15,8 +15,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 @router.get("", response_model=ConversationListResponse)
-@handle_service_error_simple
 @with_context(tenant=True)
+@handle_service_error_simple
 async def list_conversations(
     agent_id: Optional[str] = None,
     tenant_info: TenantInfo = Depends(verify_tenant)
@@ -46,10 +46,9 @@ async def list_conversations(
             # Verificar que el agente exista y pertenezca al tenant
             agent_result = await supabase.table(get_table_name("agent_configs")).select("agent_id").eq("agent_id", agent_id).eq("tenant_id", tenant_id).execute()
             if not agent_result.data:
-                raise ServiceError(
+                raise AgentNotFoundError(
                     message=f"Agent {agent_id} not found or not accessible",
-                    status_code=404,
-                    error_code="AGENT_NOT_FOUND"
+                    details={"tenant_id": tenant_id, "agent_id": agent_id}
                 )
         
         # Ejecutar la consulta ordenando por fecha de actualización descendente
@@ -89,20 +88,18 @@ async def list_conversations(
             count=len(conversations_list)
         )
         
-    except ServiceError:
-        # Re-lanzar ServiceError para que sea manejado por el decorador
+    except ConversationError:
         raise
     except Exception as e:
         logger.error(f"Error listando conversaciones: {str(e)}")
-        raise ServiceError(
+        raise ConversationError(
             message="Error al listar conversaciones",
-            status_code=500,
-            error_code="LIST_FAILED"
+            details={"tenant_id": tenant_id}
         )
 
 @router.get("/{conversation_id}/messages", response_model=MessageListResponse)
-@handle_service_error_simple
 @with_context(tenant=True, conversation=True)
+@handle_service_error_simple
 async def get_conversation_messages(
     conversation_id: str,
     limit: Optional[int] = Query(None, description="Número máximo de mensajes a devolver"), 
@@ -137,10 +134,9 @@ async def get_conversation_messages(
         conversation_result = await supabase.table(get_table_name("conversations")).select("*").eq("id", conversation_id).eq("tenant_id", tenant_id).execute()
         
         if not conversation_result.data or len(conversation_result.data) == 0:
-            raise ServiceError(
+            raise ConversationError(
                 message=f"Conversación {conversation_id} no encontrada o no pertenece al tenant",
-                error_code="conversation_not_found",
-                status_code=404
+                details={"tenant_id": tenant_id, "conversation_id": conversation_id}
             )
         
         # Obtener los mensajes de la conversación
@@ -175,20 +171,18 @@ async def get_conversation_messages(
             offset=offset
         )
         
-    except ServiceError:
-        # Re-lanzar ServiceError para que sea manejado por el decorador
+    except ConversationError:
         raise
     except Exception as e:
         logger.error(f"Error obteniendo mensajes: {str(e)}")
-        raise ServiceError(
+        raise ConversationError(
             message="Error al obtener mensajes de la conversación",
-            status_code=500,
-            error_code="FETCH_FAILED"
+            details={"tenant_id": tenant_id, "conversation_id": conversation_id}
         )
 
 @router.delete("/{conversation_id}", response_model=DeleteConversationResponse)
-@handle_service_error_simple
 @with_context(tenant=True, conversation=True)
+@handle_service_error_simple
 async def delete_conversation(
     conversation_id: str,
     tenant_info: TenantInfo = Depends(verify_tenant)
@@ -276,8 +270,8 @@ async def delete_conversation(
         )
 
 @router.post("/{conversation_id}/end", response_model=DeleteConversationResponse)
-@handle_service_error_simple
 @with_context(tenant=True, conversation=True)
+@handle_service_error_simple
 async def end_conversation(
     conversation_id: str,
     tenant_info: TenantInfo = Depends(verify_tenant)

@@ -6,7 +6,7 @@ import re
 from fastapi import APIRouter, Depends, Path, Query, HTTPException
 
 from common.models import TenantInfo, AgentConfig, AgentRequest, AgentResponse, AgentListResponse, DeleteAgentResponse
-from common.errors import ServiceError, handle_service_error_simple, InvalidAgentIdError, ErrorCode, AgentNotFoundError, AgentExecutionError
+from common.errors import handle_service_error_simple, InvalidAgentIdError, AgentNotFoundError, AgentAlreadyExistsError, AgentSetupError, ErrorCode, AgentExecutionError
 from common.context import with_context
 from common.config import get_settings, invalidate_settings_cache
 from common.db.supabase import get_supabase_client
@@ -19,8 +19,8 @@ router = APIRouter()
 settings = get_settings()
 
 @router.post("", response_model=AgentResponse)
-@handle_service_error_simple
 @with_context(tenant=True)
+@handle_service_error_simple
 async def create_agent(
     request: AgentRequest, 
     tenant_info: TenantInfo = Depends(verify_tenant)
@@ -78,14 +78,13 @@ async def create_agent(
         if result.error:
             logger.error(f"Error creando agente para tenant '{tenant_id}': {result.error}")
             if "duplicate key" in str(result.error):
-                raise ServiceError(
+                raise AgentAlreadyExistsError(
                     message="Agent ya existe",
-                    error_code=ErrorCode.AGENT_ALREADY_EXISTS,
-                    status_code=409
+                    details={"tenant_id": tenant_id}
                 ) from result.error
-            raise ServiceError(
+            raise AgentSetupError(
                 message="Error creando agente",
-                error_code=ErrorCode.AGENT_SETUP_ERROR
+                details={"tenant_id": tenant_id}
             ) from result.error
         
         # Obtener el agente creado
@@ -122,19 +121,18 @@ async def create_agent(
     
     except Exception as e:
         if "duplicate key" in str(e):
-            raise ServiceError(
+            raise AgentAlreadyExistsError(
                 message="Agent ya existe",
-                error_code=ErrorCode.AGENT_ALREADY_EXISTS,
-                status_code=409
+                details={"tenant_id": tenant_id}
             ) from e
-        raise ServiceError(
+        raise AgentSetupError(
             message="Error creando agente",
-            error_code=ErrorCode.AGENT_SETUP_ERROR
+            details={"tenant_id": tenant_id}
         ) from e
 
 @router.get("/{agent_id}", response_model=AgentResponse)
-@handle_service_error_simple
 @with_context(tenant=True, agent=True)
+@handle_service_error_simple
 async def get_agent(
     agent_id: str, 
     tenant_info: TenantInfo = Depends(verify_tenant)
@@ -161,10 +159,9 @@ async def get_agent(
         
     if not result.data:
         logger.warning(f"Intento de acceso a agente no existente: {agent_id} por tenant {tenant_id}")
-        raise ServiceError(
+        raise AgentNotFoundError(
             message=f"Agent with ID {agent_id} not found for this tenant",
-            status_code=404,
-            error_code="agent_not_found"
+            details={"tenant_id": tenant_id, "agent_id": agent_id}
         )
     
     agent_data = result.data
@@ -260,10 +257,9 @@ async def update_agent(
     
     if not agent_check.data:
         logger.warning(f"Intento de actualizar agente no existente: {agent_id} por tenant {tenant_id}")
-        raise ServiceError(
+        raise AgentNotFoundError(
             message=f"Agent with ID {agent_id} not found for this tenant",
-            status_code=404,
-            error_code="agent_not_found"
+            details={"tenant_id": tenant_id, "agent_id": agent_id}
         )
     
     # Validar acceso al modelo si ha cambiado
@@ -365,10 +361,9 @@ async def delete_agent(
         agent_result = await supabase.table(get_table_name("agent_configs")).select("*").eq("agent_id", agent_id).eq("tenant_id", tenant_id).execute()
         
         if not agent_result.data:
-            raise ServiceError(
-                message=f"Agent {agent_id} not found or not accessible",
-                status_code=404,
-                error_code="AGENT_NOT_FOUND"
+            raise AgentNotFoundError(
+                message=f"Agent with ID {agent_id} not found for this tenant",
+                details={"tenant_id": tenant_id, "agent_id": agent_id}
             )
         
         # Eliminar conversaciones asociadas al agente

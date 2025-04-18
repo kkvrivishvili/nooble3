@@ -32,8 +32,8 @@ settings = get_settings()
     summary="Consultar colección",
     description="Realiza una consulta RAG sobre una colección específica"
 )
-@handle_service_error_simple
 @with_context(tenant=True, collection=True)
+@handle_service_error_simple
 async def query_collection(
     collection_id: str,
     request: QueryRequest,
@@ -147,8 +147,8 @@ async def query_collection(
     description="Realiza una consulta RAG (para compatibilidad con versiones anteriores)",
     deprecated=True
 )
-@handle_service_error_simple
 @with_context(tenant=True, collection=True)
+@handle_service_error_simple
 async def legacy_query_endpoint(
     request: QueryRequest,
     tenant_info: TenantInfo = Depends(verify_tenant)

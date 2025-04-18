@@ -4,7 +4,7 @@ from typing import Optional
 from fastapi import APIRouter, Query, Depends
 
 from common.models import TenantInfo, CacheClearResponse
-from common.errors import ServiceError, handle_service_error_simple
+from common.errors import handle_service_error_simple, ValidationError
 from common.auth import verify_tenant, get_auth_info
 from common.config import get_settings, invalidate_settings_cache
 from common.cache.manager import CacheManager
@@ -68,10 +68,9 @@ async def clear_config_cache(
             # Global invalidation (no specific tenant authenticated)
             if scope:
                 # No permitimos invalidación global por ámbito sin tenant específico
-                raise ServiceError(
+                raise ValidationError(
                     message="Invalidación global por ámbito requiere autenticación de tenant",
-                    status_code=400,
-                    error_code="INVALID_REQUEST"
+                    details={"scope": scope}
                 )
             else:
                 logger.info("Invalidando caché de configuración globalmente")

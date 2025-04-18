@@ -11,8 +11,7 @@ from common.models.base import TenantInfo
 from common.auth import verify_tenant, get_allowed_models_for_tier
 from common.context import with_context, get_current_tenant_id, get_current_collection_id
 from common.errors import (
-    ErrorCode, ServiceError, EmbeddingGenerationError, 
-    TextTooLargeError, RateLimitExceeded, handle_errors
+    handle_service_error_simple, ValidationError, EmbeddingGenerationError, RateLimitExceeded
 )
 from common.config.settings import get_settings
 from common.tracking import track_embedding_usage, track_token_usage
@@ -32,12 +31,8 @@ settings = get_settings()
 logger = logging.getLogger(__name__)
 
 @router.post("/embeddings", response_model=EmbeddingResponse)
-@handle_errors(error_type="simple", log_traceback=False, error_map={
-    EmbeddingGenerationError: ("EMBEDDING_GENERATION_ERROR", 500),
-    TextTooLargeError: ("TEXT_TOO_LARGE", 413),
-    RateLimitExceeded: ("RATE_LIMIT_EXCEEDED", 429)
-})
 @with_context(tenant=True, agent=True, conversation=True, collection=True)
+@handle_service_error_simple
 async def generate_embeddings(
     request: EmbeddingRequest,
     tenant_info: TenantInfo = Depends(verify_tenant)
@@ -57,7 +52,7 @@ async def generate_embeddings(
     # Obtener textos a procesar
     texts = request.texts
     if not texts:
-        raise InvalidEmbeddingParamsError(
+        raise ValidationError(
             message="No se proporcionaron textos para generar embeddings",
             details={"tenant_id": tenant_id}
         )
@@ -125,12 +120,8 @@ async def generate_embeddings(
         )
 
 @router.post("/embeddings/batch", response_model=BatchEmbeddingResponse)
-@handle_errors(error_type="simple", log_traceback=False, error_map={
-    EmbeddingGenerationError: ("EMBEDDING_GENERATION_ERROR", 500),
-    TextTooLargeError: ("TEXT_TOO_LARGE", 413),
-    RateLimitExceeded: ("RATE_LIMIT_EXCEEDED", 429)
-})
 @with_context(tenant=True, agent=True, conversation=True, collection=True)
+@handle_service_error_simple
 async def batch_generate_embeddings(
     request: BatchEmbeddingRequest,
     tenant_info: TenantInfo = Depends(verify_tenant)
@@ -152,7 +143,7 @@ async def batch_generate_embeddings(
     
     # Verificar que hay items para procesar
     if not request.items:
-        raise InvalidEmbeddingParamsError(
+        raise ValidationError(
             message="No se proporcionaron items para generar embeddings",
             details={"tenant_id": tenant_id}
         )
@@ -261,11 +252,7 @@ async def batch_generate_embeddings(
 
 # Endpoint simplificado para uso interno por los servicios de query y agent
 @router.post("/internal/embed", tags=["Internal"])
-@handle_errors(error_type="simple", log_traceback=False, error_map={
-    EmbeddingGenerationError: ("EMBEDDING_GENERATION_ERROR", 500),
-    TextTooLargeError: ("TEXT_TOO_LARGE", 413),
-    RateLimitExceeded: ("RATE_LIMIT_EXCEEDED", 429)
-})
+@handle_service_error_simple
 @with_context(tenant=True, agent=True, conversation=True, collection=True)
 async def internal_embed(
     texts: List[str] = Body(..., description="Textos para generar embeddings"),

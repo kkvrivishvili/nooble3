@@ -98,8 +98,7 @@ from .exceptions import (
 )
 
 from .handlers import (
-    setup_error_handling, handle_service_error, handle_service_error_simple,
-    handle_errors
+    setup_error_handling, handle_service_error_simple, handle_service_error_internal, handle_errors
 )
 
 from .responses import (
@@ -114,8 +113,7 @@ __all__ = [
     'EmbeddingError', 'DocumentProcessingError', 'CollectionError', 'ConversationError',
     
     # Manejadores
-    'setup_error_handling', 'handle_service_error', 'handle_service_error_simple',
-    'handle_errors',
+    'setup_error_handling', 'handle_service_error_simple', 'handle_service_error_internal', 'handle_errors',
     
     # Utilidades
     'create_error_response', 'format_error_response', 'sanitize_content'

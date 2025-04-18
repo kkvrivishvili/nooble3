@@ -7,7 +7,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Query, Path
 from fastapi.responses import StreamingResponse
 
 from common.models import TenantInfo, ChatRequest, ChatResponse, ChatMessage
-from common.errors import ServiceError, handle_service_error_simple
+from common.errors import handle_service_error_simple, ConversationError
 from common.context import with_context, ContextManager, set_current_conversation_id
 from common.auth import verify_tenant
 from common.db.rpc import create_conversation, add_chat_history
@@ -21,8 +21,8 @@ router = APIRouter()
 
 
 @router.post("/agents/{agent_id}/chat", response_model=ChatResponse)
-@handle_service_error_simple
 @with_context(tenant=True, agent=True, conversation=True)
+@handle_service_error_simple
 async def chat_with_agent(
     agent_id: str,
     request: ChatRequest,
@@ -61,10 +61,9 @@ async def chat_with_agent(
             )
             
             if not conversation_data:
-                raise ServiceError(
+                raise ConversationError(
                     message="Error creating conversation",
-                    status_code=500,
-                    error_code="conversation_creation_failed"
+                    details={"tenant_id": tenant_id, "agent_id": agent_id}
                 )
             
             # Actualizar conversation_id en el contexto
@@ -76,14 +75,13 @@ async def chat_with_agent(
             
             logger.info(f"Creada nueva conversación {conversation_id} para tenant {tenant_id}, agent {agent_id}")
         except Exception as e:
-            if isinstance(e, ServiceError):
+            if isinstance(e, ConversationError):
                 raise e
             logger.error(f"Error creating conversation: {str(e)}")
-            raise ServiceError(
+            raise ConversationError(
                 message=f"Error creating conversation: {str(e)}",
-                status_code=500,
-                error_code="conversation_creation_failed"
-            )
+                details={"tenant_id": tenant_id, "agent_id": agent_id}
+            ) from e
     
     # Procesar la solicitud según el modo (streaming o normal)
     if request.stream:

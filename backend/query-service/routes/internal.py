@@ -54,8 +54,8 @@ class InternalSearchRequest(BaseModel):
     summary="Consulta RAG interna",
     description="Endpoint para uso exclusivo del Agent Service"
 )
-@handle_service_error_simple
 @with_context(tenant=True, collection=True, agent=True, conversation=True)
+@handle_service_error_simple
 async def internal_query(
     request: InternalQueryRequest = Body(...)
 ):
@@ -214,8 +214,8 @@ async def internal_query(
     summary="Búsqueda interna para otros servicios",
     description="Endpoint para búsqueda rápida entre documentos, para uso exclusivo de otros servicios"
 )
-@handle_service_error_simple
 @with_context(tenant=True, collection=True, agent=True, conversation=True)
+@handle_service_error_simple
 async def internal_search(
     request: InternalSearchRequest = Body(...)
 ):

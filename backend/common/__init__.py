@@ -11,7 +11,7 @@ from .models import TenantInfo, HealthResponse
 from .utils import rate_limiting
 from .db import get_supabase_client
 from .tracking import track_token_usage, track_embedding_usage
-from .errors import setup_error_handling, handle_service_error_simple
+from .errors import setup_error_handling, handle_service_error_simple, handle_service_error_internal
 
 # Aliases para mantener compatibilidad hacia atrás
 from .auth import verify_tenant as verify_tenant
@@ -25,6 +25,7 @@ from .tracking import track_token_usage as track_token_usage
 from .tracking import track_embedding_usage as track_embedding_usage
 from .errors import setup_error_handling as setup_error_handling
 from .errors import handle_service_error_simple as handle_service_error_simple
+from .errors import handle_service_error_internal as handle_service_error_internal
 
 # Exportar todos los símbolos importantes para mantener compatibilidad
 __all__ = [
@@ -39,4 +40,5 @@ __all__ = [
     'track_embedding_usage',
     'setup_error_handling',
     'handle_service_error_simple',
+    'handle_service_error_internal',
 ]

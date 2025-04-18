@@ -32,8 +32,8 @@ logger = logging.getLogger(__name__)
     summary="Listar colecciones",
     description="Obtiene la lista de colecciones disponibles para el tenant"
 )
-@handle_service_error_simple
 @with_context(tenant=True)
+@handle_service_error_simple
 async def list_collections(
     tenant_info: TenantInfo = Depends(verify_tenant)
 ):
@@ -84,8 +84,8 @@ async def list_collections(
     summary="Crear colección",
     description="Crea una nueva colección para organizar documentos"
 )
-@handle_service_error_simple
 @with_context(tenant=True)
+@handle_service_error_simple
 async def create_collection(
     name: str,
     description: Optional[str] = None,
@@ -151,8 +151,8 @@ async def create_collection(
     summary="Actualizar colección",
     description="Modifica una colección existente"
 )
-@handle_service_error_simple
 @with_context(tenant=True, collection=True)
+@handle_service_error_simple
 async def update_collection(
     collection_id: str,
     name: str,
@@ -241,8 +241,8 @@ async def update_collection(
     summary="Eliminar colección",
     description="Elimina una colección y todos sus documentos"
 )
-@handle_service_error_simple
 @with_context(tenant=True, collection=True)
+@handle_service_error_simple
 async def delete_collection(
     collection_id: str,
     tenant_info: TenantInfo = Depends(verify_tenant)
@@ -320,8 +320,8 @@ async def delete_collection(
     summary="Estadísticas de colección",
     description="Obtiene estadísticas detalladas de una colección"
 )
-@handle_service_error_simple
 @with_context(tenant=True, collection=True)
+@handle_service_error_simple
 async def get_collection_stats(
     collection_id: str,
     tenant_info: TenantInfo = Depends(verify_tenant)

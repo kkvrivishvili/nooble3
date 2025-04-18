@@ -205,10 +205,13 @@ class ServiceError(Exception):
             Dict: Representación del error como diccionario
         """
         error_response = {
-            "message": self.message,
-            "code": self.error_code,
-            "error_number": self.error_number,
-            "details": self.details
+            "success": False,
+            "error": {
+                "code": self.error_code,
+                "error_number": self.error_number,
+                "message": self.message,
+                "details": self.details
+            }
         }
         
         # Incluir cierta información de contexto que sea útil para debugging
@@ -219,7 +222,7 @@ class ServiceError(Exception):
                 if k in ["tenant_id", "agent_id", "collection_id", "conversation_id", "request_id"]
             }
             if safe_context:
-                error_response["context"] = safe_context
+                error_response["error"]["context"] = safe_context
         
         return error_response
     

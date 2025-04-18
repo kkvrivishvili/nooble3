@@ -63,14 +63,15 @@ def setup_error_handling(app: FastAPI) -> None:
         # Convertir a formato consistente
         error_response = {
             "success": False,
-            "error": "HTTP_ERROR",
-            "error_number": 1000 + exc.status_code,  # Generar número de error basado en el código HTTP
-            "message": str(exc.detail)
+            "error": {
+                "code": "HTTP_ERROR",
+                "error_number": 1000 + exc.status_code,
+                "message": str(exc.detail)
+            }
         }
-        
-        # Añadir contexto si existe
+        # Añadir contexto anidado si existe
         if any(v for v in context.values()):
-            error_response["context"] = {k: v for k, v in context.items() if v}
+            error_response["error"]["context"] = {k: v for k, v in context.items() if v}
         
         return JSONResponse(
             status_code=exc.status_code,
@@ -92,17 +93,18 @@ def setup_error_handling(app: FastAPI) -> None:
         # Construir respuesta con formato de error estándar
         error_response = {
             "success": False,
-            "error": "VALIDATION_ERROR",
-            "error_number": ERROR_CODES["VALIDATION_ERROR"]["code"],
-            "message": "Datos de entrada inválidos",
-            "details": {
-                "errors": exc.errors()
+            "error": {
+                "code": "VALIDATION_ERROR",
+                "error_number": ERROR_CODES["VALIDATION_ERROR"]["code"],
+                "message": "Datos de entrada inválidos",
+                "details": {
+                    "errors": exc.errors()
+                }
             }
         }
-        
-        # Añadir contexto si existe
+        # Añadir contexto anidado si existe
         if any(v for v in context.values()):
-            error_response["context"] = {k: v for k, v in context.items() if v}
+            error_response["error"]["context"] = {k: v for k, v in context.items() if v}
         
         return JSONResponse(
             status_code=422,
@@ -129,15 +131,16 @@ def setup_error_handling(app: FastAPI) -> None:
         # Construir respuesta estándar
         error_response = {
             "success": False,
-            "error": "GENERAL_ERROR",
-            "error_number": ERROR_CODES["GENERAL_ERROR"]["code"],
-            "message": "Error interno del servidor",
-            "error_id": error_id
+            "error": {
+                "code": "GENERAL_ERROR",
+                "error_number": ERROR_CODES["GENERAL_ERROR"]["code"],
+                "message": "Error interno del servidor",
+                "error_id": error_id
+            }
         }
-        
-        # Añadir contexto si existe
+        # Añadir contexto anidado si existe
         if any(v for v in context.values()):
-            error_response["context"] = {k: v for k, v in context.items() if v}
+            error_response["error"]["context"] = {k: v for k, v in context.items() if v}
         
         return JSONResponse(
             status_code=500,
@@ -325,4 +328,8 @@ def handle_errors(
     
     return decorator
 
-# Los alias de compatibilidad han sido eliminados según la migración completa al decorador unificado
+# Aliases para decoración estandarizada de endpoints
+handle_service_error_simple = handle_errors(error_type="simple")  # Para endpoints públicos
+handle_service_error_internal = handle_errors(error_type="service")  # Para endpoints internos
+# Mantener alias antiguo para compatibilidad
+handle_service_error = handle_service_error_simple

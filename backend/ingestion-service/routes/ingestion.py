@@ -13,8 +13,7 @@ from pydantic import BaseModel, Field
 
 from common.models import TenantInfo, FileUploadResponse, BatchJobResponse
 from common.errors import (
-    ServiceError, handle_errors, ErrorCode,
-    DocumentProcessingError, ValidationError
+    handle_service_error_simple, DocumentProcessingError, ValidationError
 )
 from common.context import with_context
 from common.context.vars import get_current_tenant_id, get_current_collection_id
@@ -46,8 +45,8 @@ class DocumentUploadMetadata(BaseModel):
     summary="Cargar documento",
     description="Carga un documento para procesamiento y generación de embeddings"
 )
-@handle_errors(error_type="simple", log_traceback=False)
 @with_context(tenant=True, collection=True)
+@handle_service_error_simple
 async def upload_document(
     file: UploadFile = File(...),
     tenant_info: TenantInfo = Depends(verify_tenant),
@@ -72,7 +71,6 @@ async def upload_document(
         
     Raises:
         DocumentProcessingError: Si hay un error en el procesamiento
-        ServiceError: Si hay otros errores de servicio
     """
     tenant_id = tenant_info.tenant_id
     
@@ -103,11 +101,9 @@ async def upload_document(
             )
         except Exception as storage_err:
             logger.error(f"Error al subir a Storage: {str(storage_err)}", extra=error_context)
-            raise ServiceError(
+            raise DocumentProcessingError(
                 message="Error al almacenar el archivo",
-                error_code="STORAGE_ERROR",
-                status_code=500,
-                context={**error_context}
+                details=error_context
             )
         
         # 3. Encolar procesamiento
@@ -121,11 +117,9 @@ async def upload_document(
             )
         except Exception as queue_err:
             logger.error(f"Error al encolar trabajo: {str(queue_err)}", extra=error_context)
-            raise ServiceError(
+            raise DocumentProcessingError(
                 message="Error al encolar el procesamiento",
-                error_code="QUEUE_ERROR",
-                status_code=500,
-                context={**error_context, "document_id": document_id}
+                details={**error_context, "document_id": document_id}
             )
         
         return FileUploadResponse(
@@ -145,10 +139,6 @@ async def upload_document(
         # Error de procesamiento ya tiene el formato correcto
         logger.error(f"Error de procesamiento: {doc_err.message}", extra=doc_err.context)
         raise
-    except ServiceError as svc_err:
-        # Error de servicio ya tiene el formato correcto
-        logger.error(f"Error de servicio: {svc_err.message}", extra=svc_err.context)
-        raise
     except Exception as e:
         # Capturar errores inesperados
         error_context["error_type"] = type(e).__name__
@@ -157,9 +147,7 @@ async def upload_document(
         
         raise DocumentProcessingError(
             message=f"Error al cargar documento: {str(e)}",
-            error_code="DOCUMENT_UPLOAD_ERROR",
-            status_code=500,
-            context=error_context
+            details=error_context
         )
 
 class UrlIngestionRequest(BaseModel):
@@ -175,8 +163,8 @@ class UrlIngestionRequest(BaseModel):
     summary="Ingerir contenido de URL",
     description="Procesa y genera embeddings para el contenido de una URL"
 )
-@handle_errors(error_type="simple", log_traceback=False)
 @with_context(tenant=True, collection=True)
+@handle_service_error_simple
 async def ingest_url(
     request: UrlIngestionRequest,
     tenant_info: TenantInfo = Depends(verify_tenant)
@@ -192,9 +180,6 @@ async def ingest_url(
         FileUploadResponse: Resultado de la operación
     """
     tenant_id = tenant_info.tenant_id
-    
-    # Verificar cuotas del tenant
-    # await check_tenant_quotas(tenant_info)
     
     try:
         # Validar URL
@@ -226,9 +211,9 @@ async def ingest_url(
         result = await supabase.table(get_table_name("documents")).insert(document_metadata).execute()
         
         if result.error:
-            raise ServiceError(
+            raise DocumentProcessingError(
                 message=f"Error guardando metadatos del documento URL: {result.error}",
-                error_code="DOCUMENT_METADATA_ERROR"
+                details={"tenant_id": tenant_id, "url": request.url}
             )
         
         # Encolamos el trabajo de procesamiento
@@ -252,8 +237,8 @@ async def ingest_url(
         
     except Exception as e:
         logger.error(f"Error al procesar URL: {str(e)}")
-        if isinstance(e, ServiceError):
-            raise e
+        if isinstance(e, DocumentProcessingError):
+            raise
         raise DocumentProcessingError(
             message=f"Error al procesar URL: {str(e)}",
             details={"url": request.url}
@@ -272,8 +257,8 @@ class TextIngestionRequest(BaseModel):
     summary="Ingerir texto plano",
     description="Procesa y genera embeddings para texto plano"
 )
-@handle_errors(error_type="simple", log_traceback=False)
 @with_context(tenant=True, collection=True)
+@handle_service_error_simple
 async def ingest_text(
     request: TextIngestionRequest,
     tenant_info: TenantInfo = Depends(verify_tenant)
@@ -289,9 +274,6 @@ async def ingest_text(
         FileUploadResponse: Resultado de la operación
     """
     tenant_id = tenant_info.tenant_id
-    
-    # Verificar cuotas del tenant
-    # await check_tenant_quotas(tenant_info)
     
     try:
         # Validar texto
@@ -323,9 +305,9 @@ async def ingest_text(
         result = await supabase.table(get_table_name("documents")).insert(document_metadata).execute()
         
         if result.error:
-            raise ServiceError(
+            raise DocumentProcessingError(
                 message=f"Error guardando metadatos del documento de texto: {result.error}",
-                error_code="DOCUMENT_METADATA_ERROR"
+                details={"tenant_id": tenant_id}
             )
         
         # Encolamos el trabajo de procesamiento
@@ -349,11 +331,11 @@ async def ingest_text(
         
     except Exception as e:
         logger.error(f"Error al procesar texto: {str(e)}")
-        if isinstance(e, ServiceError):
-            raise e
+        if isinstance(e, DocumentProcessingError):
+            raise
         raise DocumentProcessingError(
             message=f"Error al procesar texto: {str(e)}",
-            details={"text_length": len(request.text) if hasattr(request, "text") else 0}
+            details={"text_length": len(request.text)}
         )
 
 class BatchUrlsRequest(BaseModel):
@@ -368,7 +350,7 @@ class BatchUrlsRequest(BaseModel):
     summary="Procesar lote de URLs",
     description="Procesa un lote de URLs en segundo plano"
 )
-@handle_errors(error_type="simple", log_traceback=False)
+@handle_service_error_simple
 @with_context(tenant=True, collection=True)
 async def batch_process_urls(
     request: BatchUrlsRequest,
@@ -385,9 +367,6 @@ async def batch_process_urls(
         BatchJobResponse: ID del trabajo por lotes y estadísticas
     """
     tenant_id = tenant_info.tenant_id
-    
-    # Verificar cuotas del tenant
-    # await check_tenant_quotas(tenant_info)
     
     try:
         # Validar URLs
@@ -456,8 +435,8 @@ async def batch_process_urls(
         
     except Exception as e:
         logger.error(f"Error al procesar lote de URLs: {str(e)}")
-        if isinstance(e, ServiceError):
-            raise e
+        if isinstance(e, DocumentProcessingError):
+            raise
         raise DocumentProcessingError(
             message=f"Error al procesar lote de URLs: {str(e)}",
             details={"urls_count": len(request.urls) if hasattr(request, "urls") else 0}

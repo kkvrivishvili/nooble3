@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Query, Path, HTTPException
 
 from common.models import TenantInfo, DocumentListResponse, DocumentDetailResponse, DeleteDocumentResponse
 from common.errors import (
-    ServiceError, handle_errors, ErrorCode,
+    ServiceError, handle_service_error_simple, ErrorCode,
     DocumentProcessingError, NotFoundError
 )
 from common.context import with_context
@@ -26,11 +26,8 @@ logger = logging.getLogger(__name__)
     summary="Listar documentos",
     description="Obtiene la lista de documentos para un tenant o colección específica"
 )
-@handle_errors(error_type="simple", log_traceback=False, error_map={
-    NotFoundError: ("NOT_FOUND", 404),
-    DocumentProcessingError: ("DOCUMENT_PROCESSING_ERROR", 500)
-})
 @with_context(tenant=True, collection=True)
+@handle_service_error_simple
 async def list_documents(
     collection_id: Optional[str] = Query(None, description="Filtrar por ID de colección"),
     status: Optional[str] = Query(None, description="Filtrar por estado (pending, processing, completed, failed)"),
@@ -122,11 +119,8 @@ async def list_documents(
     summary="Obtener documento",
     description="Obtiene detalles de un documento específico"
 )
-@handle_errors(error_type="simple", log_traceback=False, error_map={
-    NotFoundError: ("NOT_FOUND", 404),
-    DocumentProcessingError: ("DOCUMENT_PROCESSING_ERROR", 500)
-})
 @with_context(tenant=True)
+@handle_service_error_simple
 async def get_document(
     document_id: str = Path(..., description="ID del documento"),
     tenant_info: TenantInfo = Depends(verify_tenant)
@@ -226,11 +220,8 @@ async def get_document(
     summary="Eliminar documento",
     description="Elimina un documento y todos sus chunks"
 )
-@handle_errors(error_type="simple", log_traceback=False, error_map={
-    NotFoundError: ("NOT_FOUND", 404),
-    DocumentProcessingError: ("DOCUMENT_PROCESSING_ERROR", 500)
-})
 @with_context(tenant=True)
+@handle_service_error_simple
 async def delete_document(
     document_id: str = Path(..., description="ID del documento a eliminar"),
     tenant_info: TenantInfo = Depends(verify_tenant)

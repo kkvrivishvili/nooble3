@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Query, Path
 
 from common.models import TenantInfo, JobListResponse, JobDetailResponse, JobUpdateResponse
 from common.errors import (
-    ServiceError, handle_errors, ErrorCode,
+    ServiceError, handle_service_error_simple, ErrorCode,
     NotFoundError
 )
 from common.context import with_context
@@ -28,10 +28,8 @@ logger = logging.getLogger(__name__)
     summary="Listar trabajos",
     description="Obtiene la lista de trabajos de procesamiento"
 )
-@handle_errors(error_type="simple", log_traceback=False, error_map={
-    NotFoundError: ("NOT_FOUND", 404)
-})
 @with_context(tenant=True)
+@handle_service_error_simple
 async def list_jobs(
     status: Optional[str] = Query(None, description="Filtrar por estado (pending, processing, completed, failed)"),
     batch_id: Optional[str] = Query(None, description="Filtrar por ID de lote"),
@@ -131,10 +129,8 @@ async def list_jobs(
     summary="Obtener trabajo",
     description="Obtiene detalles de un trabajo específico"
 )
-@handle_errors(error_type="simple", log_traceback=False, error_map={
-    NotFoundError: ("NOT_FOUND", 404)
-})
 @with_context(tenant=True)
+@handle_service_error_simple
 async def get_job(
     job_id: str = Path(..., description="ID del trabajo"),
     tenant_info: TenantInfo = Depends(verify_tenant)
@@ -209,10 +205,8 @@ async def get_job(
     summary="Reintentar trabajo",
     description="Reintenta un trabajo fallido"
 )
-@handle_errors(error_type="simple", log_traceback=False, error_map={
-    NotFoundError: ("NOT_FOUND", 404)
-})
 @with_context(tenant=True)
+@handle_service_error_simple
 async def retry_job(
     job_id: str = Path(..., description="ID del trabajo a reintentar"),
     tenant_info: TenantInfo = Depends(verify_tenant)
@@ -262,10 +256,8 @@ async def retry_job(
     summary="Cancelar trabajo",
     description="Cancela un trabajo pendiente o en ejecución"
 )
-@handle_errors(error_type="simple", log_traceback=False, error_map={
-    NotFoundError: ("NOT_FOUND", 404)
-})
 @with_context(tenant=True)
+@handle_service_error_simple
 async def cancel_job_endpoint(
     job_id: str = Path(..., description="ID del trabajo a cancelar"),
     tenant_info: TenantInfo = Depends(verify_tenant)
@@ -320,7 +312,7 @@ from typing import Dict
 from fastapi import APIRouter, Query, Depends
 
 from common.models import TenantInfo, JobsStatsResponse
-from common.errors import ServiceError, handle_errors, ErrorCode
+from common.errors import ServiceError, handle_service_error_simple, ErrorCode
 from common.context import with_context
 from common.auth import verify_tenant
 from common.db.supabase import get_supabase_client
@@ -335,10 +327,8 @@ logger = logging.getLogger(__name__)
     summary="Estadísticas de procesamiento",
     description="Obtiene estadísticas de procesamiento de documentos"
 )
-@handle_errors(error_type="simple", log_traceback=False, error_map={
-    NotFoundError: ("NOT_FOUND", 404)
-})
 @with_context(tenant=True)
+@handle_service_error_simple
 async def get_jobs_stats(
     time_period: str = Query("day", description="Periodo de tiempo (hour, day, week, month)"),
     tenant_info: TenantInfo = Depends(verify_tenant)
