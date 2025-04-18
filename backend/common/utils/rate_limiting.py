@@ -49,7 +49,7 @@ async def check_rate_limit_async(bucket: str) -> bool:
         current = await CacheManager.get(
             tenant_id=tenant_id,
             data_type="rate_limit",
-            resource_id=f"bucket:{bucket}"
+            resource_id=f"{tenant_id}:bucket:{bucket}"
         )
         
         # Obtener límite de tasa usando configuración centralizada de tiers

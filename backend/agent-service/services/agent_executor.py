@@ -339,6 +339,8 @@ async def stream_agent_response(
         
         # Crear un StreamingCallbackHandler
         streaming_handler = StreamingCallbackHandler()
+        # Modelo para conteo de tokens
+        model_name = agent_config.get("llm_model", settings.default_llm_model)
         
         # Variables para acumular la respuesta completa
         full_response = ""
@@ -350,7 +352,7 @@ async def stream_agent_response(
             tenant_id=tenant_id,
             agent_id=agent_id,
             conversation_id=conversation_id,
-            model_name=agent_config.get("llm_model", settings.default_llm_model),
+            model_name=model_name,
             system_prompt=agent_config.get("system_prompt"),
             use_cache=True,
             stream_handler=streaming_handler
@@ -370,13 +372,13 @@ async def stream_agent_response(
             metadata={"streaming": True, "message_id": message_id}
         )
         
-        # Contabilizar tokens (en background)
+        # Contabilizar tokens correctamente (en background)
         await track_usage(
             tenant_id=tenant_id,
             operation="tokens",
             metadata={
-                "tokens": len(full_response.split()) * 2,  # Estimación básica
-                "model": agent_config.get("llm_model", settings.default_llm_model),
+                "tokens": count_tokens(full_response, model_name=model_name),
+                "model": model_name,
                 "agent_id": agent_id,
                 "conversation_id": conversation_id
             }

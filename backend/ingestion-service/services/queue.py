@@ -29,7 +29,7 @@ settings = get_settings()
 INGESTION_QUEUE = "ingestion_queue"
 JOB_PREFIX = "job:"
 JOB_STATUS_PREFIX = "job_status:"
-JOB_LOCK_PREFIX = "job_lock:"  # Prefijo para los bloqueos de trabajos
+JOB_LOCK_PREFIX = "job_lock"  # Prefijo para los bloqueos de trabajos
 JOB_LOCK_EXPIRY = 600  # 10 minutos en segundos (tiempo máximo para procesar un trabajo)
 
 async def initialize_queue():
@@ -180,7 +180,7 @@ async def check_stuck_jobs():
             document_id = job.get("document_id")
             
             # NUEVO: Verificar si existe un bloqueo para este trabajo
-            lock_key = f"{JOB_LOCK_PREFIX}{job_id}"
+            lock_key = f"{JOB_LOCK_PREFIX}:{job_id}"
             # Verificar bloqueo usando CacheManager.get en lugar de exists
             val = await CacheManager.get(
                 data_type="system",

@@ -8,7 +8,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain.chains.query_constructor.base import QueryConstructorChain
 from langchain.schema import Document
 from langchain.retrievers import RetrieverQueryEngine
-from llamaindex.callbacks import LlamaDebugHandler
+from llama_index.callbacks import LlamaDebugHandler
 
 from common.config import get_settings
 from common.context import with_context

@@ -18,6 +18,8 @@ _memory_expiry: Dict[str, float] = {}
 MEMORY_CACHE_MAX_SIZE = 1000  # Número máximo de entradas
 MEMORY_CACHE_CLEANUP_PERCENT = 0.2  # Porcentaje de entradas a eliminar (20%)
 
+_settings_ttl = 300  # TTL máximo 5 min (300 s)
+
 class CacheManager:
     """
     Sistema de caché unificado para la plataforma Linktree AI.
@@ -198,7 +200,7 @@ class CacheManager:
         agent_id: Optional[str] = None,
         conversation_id: Optional[str] = None,
         collection_id: Optional[str] = None,
-        ttl: int = 3600,
+        ttl: int = _settings_ttl,
         use_memory: bool = True
     ) -> bool:
         """
