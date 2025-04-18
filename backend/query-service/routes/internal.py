@@ -16,7 +16,7 @@ from common.errors import (
     RetrievalError, GenerationError, InvalidQueryParamsError,
     EmbeddingGenerationError, EmbeddingModelError, TextTooLargeError
 )
-from common.context import with_context, get_current_tenant_id, set_current_collection_id
+from common.context import with_context, get_current_tenant_id
 from common.auth import verify_tenant, validate_model_access
 from common.tracking import track_query
 
@@ -79,7 +79,6 @@ async def internal_query(
         }
     """
     # Establecer contexto explícitamente basado en la solicitud
-    set_current_collection_id(request.collection_id)
     tenant_id = request.tenant_id
     
     # Obtener tiempo de inicio para medición
@@ -236,9 +235,6 @@ async def internal_search(
     # Validar tenant
     tenant_id = request.tenant_id
     tenant_info = await verify_tenant(tenant_id)
-    
-    # Establecer ID de colección en el contexto
-    set_current_collection_id(request.collection_id)
     
     try:
         # Crear motor de consulta

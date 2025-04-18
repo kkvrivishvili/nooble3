@@ -353,174 +353,179 @@ async def process_next_job(ctx: Context = None) -> bool:
         url = job.get("url")            # URL si es ingestión web
         text_content = job.get("text_content")  # Contenido texto si es directo
         
-        # Crear contexto para logging y errores
-        context = {
-            "job_id": job_id,
-            "tenant_id": tenant_id,
-            "document_id": document_id,
-            "collection_id": collection_id
-        }
-        
-        # Validar que el tenant sea válido para procesar trabajos
-        if tenant_id is None:
-            tenant_id = ctx.get_tenant_id()
-        
-        # Adquirir un lock para este trabajo con Redis SET NX
-        lock_key = f"{JOB_LOCK_PREFIX}:{job_id}"
-        redis_client = await get_redis_client()
-        lock_acquired = await redis_client.set(lock_key, "1", ex=job_lock_expire_seconds, nx=True)
-        
-        if not lock_acquired:
-            logger.warning(
-                f"Lock no adquirido para job_id={job_id}, otro worker podría estar procesándolo", 
-                extra=context
-            )
-            return True  # Consideramos el trabajo como procesado y seguimos
-        
-        # Validar que tenemos la información necesaria según el tipo de fuente
-        source_type = None
-        if file_key:
-            source_type = "file"
-        elif url:
-            source_type = "url"
-        elif text_content:
-            source_type = "text"
-        else:
-            error_msg = "Fuente de documento no especificada (se requiere file_key, url o text_content)"
-            logger.error(error_msg, extra=context)
-            
-            await update_processing_job(
-                job_id=job_id,
-                tenant_id=tenant_id,
-                status="failed",
-                error=error_msg
-            )
-            
-            if document_id:
-                await update_document_status(
-                    document_id=document_id,
-                    tenant_id=tenant_id,
-                    status="failed",
-                    metadata={"error": error_msg}
-                )
-                
-            # No lanzamos excepción para permitir que el finally libere el lock
-            return False
-        
-        context["source_type"] = source_type
-        
-        # Validar que tenemos la información básica necesaria
-        if not document_id or not collection_id:
-            missing = []
-            if not document_id:
-                missing.append("document_id")
-            if not collection_id:
-                missing.append("collection_id")
-                
-            error_msg = f"Campos requeridos faltantes: {', '.join(missing)}"
-            logger.error(error_msg, extra=context)
-            
-            await update_processing_job(
-                job_id=job_id,
-                tenant_id=tenant_id,
-                status="failed",
-                error=error_msg
-            )
-            
-            if document_id:
-                await update_document_status(
-                    document_id=document_id,
-                    tenant_id=tenant_id,
-                    status="failed",
-                    metadata={"error": error_msg}
-                )
-                
-            # No lanzamos excepción para permitir que el finally libere el lock
-            return False
-            
-        # Actualizar el estado del trabajo a "processing"
-        await update_processing_job(
-            job_id=job_id,
+        # Propagar contexto del trabajo para logging y errores
+        async with Context(
             tenant_id=tenant_id,
-            status="processing"
-        )
-
-        # Procesar según el tipo de fuente
-        processed_text = None
-        
-        if source_type == "file":
-            # Procesamiento de archivo almacenado
-            processed_text = await process_file_from_storage(
-                tenant_id=tenant_id,
-                collection_id=collection_id,
-                file_key=file_key
-            )
-        elif source_type == "url":
-            # Aquí iría el procesamiento para URL (pendiente de implementar)
-            raise ServiceError(
-                message="Procesamiento de URL no implementado",
-                error_code="NOT_IMPLEMENTED",
-                status_code=501,
-                context=context
-            )
-        elif source_type == "text":
-            # El texto ya está disponible
-            processed_text = text_content
-        
-        # Verificar que tenemos texto procesado
-        if not processed_text:
-            error_msg = f"No se pudo extraer texto de la fuente tipo {source_type}"
-            logger.error(error_msg, extra=context)
+            collection_id=collection_id
+        ):
+            # Crear contexto para logging y errores
+            context = {
+                "job_id": job_id,
+                "tenant_id": tenant_id,
+                "document_id": document_id,
+                "collection_id": collection_id
+            }
             
+            # Validar que el tenant sea válido para procesar trabajos
+            if tenant_id is None:
+                tenant_id = ctx.get_tenant_id()
+            
+            # Adquirir un lock para este trabajo
+            lock_key = f"{JOB_LOCK_PREFIX}:{job_id}"
+            redis_client = await get_redis_client()
+            lock_acquired = await redis_client.set(lock_key, "1", ex=job_lock_expire_seconds, nx=True)
+            
+            if not lock_acquired:
+                logger.warning(
+                    f"Lock no adquirido para job_id={job_id}, otro worker podría estar procesándolo", 
+                    extra=context
+                )
+                return True  # Consideramos el trabajo como procesado y seguimos
+            
+            # Validar que tenemos la información necesaria según el tipo de fuente
+            source_type = None
+            if file_key:
+                source_type = "file"
+            elif url:
+                source_type = "url"
+            elif text_content:
+                source_type = "text"
+            else:
+                error_msg = "Fuente de documento no especificada (se requiere file_key, url o text_content)"
+                logger.error(error_msg, extra=context)
+                
+                await update_processing_job(
+                    job_id=job_id,
+                    tenant_id=tenant_id,
+                    status="failed",
+                    error=error_msg
+                )
+                
+                if document_id:
+                    await update_document_status(
+                        document_id=document_id,
+                        tenant_id=tenant_id,
+                        status="failed",
+                        metadata={"error": error_msg}
+                    )
+                    
+                # No lanzamos excepción para permitir que el finally libere el lock
+                return False
+            
+            context["source_type"] = source_type
+            
+            # Validar que tenemos la información básica necesaria
+            if not document_id or not collection_id:
+                missing = []
+                if not document_id:
+                    missing.append("document_id")
+                if not collection_id:
+                    missing.append("collection_id")
+                    
+                error_msg = f"Campos requeridos faltantes: {', '.join(missing)}"
+                logger.error(error_msg, extra=context)
+                
+                await update_processing_job(
+                    job_id=job_id,
+                    tenant_id=tenant_id,
+                    status="failed",
+                    error=error_msg
+                )
+                
+                if document_id:
+                    await update_document_status(
+                        document_id=document_id,
+                        tenant_id=tenant_id,
+                        status="failed",
+                        metadata={"error": error_msg}
+                    )
+                    
+                # No lanzamos excepción para permitir que el finally libere el lock
+                return False
+                
+            # Actualizar el estado del trabajo a "processing"
             await update_processing_job(
                 job_id=job_id,
                 tenant_id=tenant_id,
-                status="failed",
-                error=error_msg
+                status="processing"
+            )
+
+            # Procesar según el tipo de fuente
+            processed_text = None
+            
+            if source_type == "file":
+                # Procesamiento de archivo almacenado
+                processed_text = await process_file_from_storage(
+                    tenant_id=tenant_id,
+                    collection_id=collection_id,
+                    file_key=file_key
+                )
+            elif source_type == "url":
+                # Aquí iría el procesamiento para URL (pendiente de implementar)
+                raise ServiceError(
+                    message="Procesamiento de URL no implementado",
+                    error_code="NOT_IMPLEMENTED",
+                    status_code=501,
+                    context=context
+                )
+            elif source_type == "text":
+                # El texto ya está disponible
+                processed_text = text_content
+            
+            # Verificar que tenemos texto procesado
+            if not processed_text:
+                error_msg = f"No se pudo extraer texto de la fuente tipo {source_type}"
+                logger.error(error_msg, extra=context)
+                
+                await update_processing_job(
+                    job_id=job_id,
+                    tenant_id=tenant_id,
+                    status="failed",
+                    error=error_msg
+                )
+                
+                await update_document_status(
+                    document_id=document_id,
+                    tenant_id=tenant_id,
+                    status="failed",
+                    metadata={"error": error_msg}
+                )
+                
+                return False
+
+            # Dividir en chunks y generar embeddings
+            chunks = await split_document_intelligently(
+                text=processed_text,
+                document_id=document_id,
+                metadata={"tenant_id": tenant_id, "collection_id": collection_id}
             )
             
+            await process_and_store_chunks(
+                chunks=chunks,
+                document_id=document_id,
+                tenant_id=tenant_id,
+                collection_id=collection_id
+            )
+
+            # Actualizar estados
+            await update_processing_job(
+                job_id=job_id,
+                tenant_id=tenant_id,
+                status="completed"
+            )
+
             await update_document_status(
                 document_id=document_id,
                 tenant_id=tenant_id,
-                status="failed",
-                metadata={"error": error_msg}
+                status="processed",
+                metadata={"chunks_count": len(chunks)}
             )
+
+            # Limpiar recursos de caché asociados al trabajo
+            if job_id and tenant_id:
+                await _cleanup_job_resources(job_id, tenant_id)
             
-            return False
-
-        # Dividir en chunks y generar embeddings
-        chunks = await split_document_intelligently(
-            text=processed_text,
-            document_id=document_id,
-            metadata={"tenant_id": tenant_id, "collection_id": collection_id}
-        )
-        
-        await process_and_store_chunks(
-            chunks=chunks,
-            document_id=document_id,
-            tenant_id=tenant_id,
-            collection_id=collection_id
-        )
-
-        # Actualizar estados
-        await update_processing_job(
-            job_id=job_id,
-            tenant_id=tenant_id,
-            status="completed"
-        )
-
-        await update_document_status(
-            document_id=document_id,
-            tenant_id=tenant_id,
-            status="processed",
-            metadata={"chunks_count": len(chunks)}
-        )
-
-        # Limpiar recursos de caché asociados al trabajo
-        if job_id and tenant_id:
-            await _cleanup_job_resources(job_id, tenant_id)
-        
-        return True
+            return True
     except Exception as e:
         error_context = {
             "job_id": job_id,

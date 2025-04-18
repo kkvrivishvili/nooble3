@@ -15,7 +15,7 @@ from common.errors import (
     QueryProcessingError, CollectionNotFoundError, 
     InvalidQueryParamsError, RetrievalError, GenerationError
 )
-from common.context import with_context, set_current_collection_id, get_current_tenant_id, get_current_collection_id, set_current_context_value
+from common.context import with_context, set_current_tenant_id, get_current_tenant_id, get_current_collection_id, set_current_context_value
 from common.auth import verify_tenant, validate_model_access, RoleType, get_allowed_models_for_tier
 from common.tracking import track_usage
 from common.config.settings import get_settings
@@ -57,9 +57,6 @@ async def query_collection(
     Returns:
         QueryResponse: Respuesta generada con fuentes y metadatos
     """
-    # Establecer collection_id en el contexto
-    set_current_collection_id(collection_id)
-    
     # Forzar el collection_id de la ruta en la solicitud
     request.collection_id = collection_id
     

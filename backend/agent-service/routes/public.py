@@ -8,7 +8,7 @@ from fastapi.responses import StreamingResponse
 
 from common.models import PublicChatRequest, ChatResponse, ChatMessage
 from common.errors import ServiceError, handle_service_error_simple
-from common.context import with_context, run_public_context
+from common.context import with_context, Context
 from common.db.rpc import create_conversation, add_chat_history
 from common.tracking import track_query
 from common.config import get_settings
@@ -24,11 +24,13 @@ settings = get_settings()
 
 @router.post("/public/{tenant_slug}/chat/{agent_id}", response_model=ChatResponse, tags=["Chat"])
 @handle_service_error_simple
+@with_context(tenant=True, agent=True, conversation=True, validate_tenant=False)
 async def public_chat_with_agent(
     tenant_slug: str,
     agent_id: str,
     request: PublicChatRequest,
-    background_tasks: BackgroundTasks
+    background_tasks: BackgroundTasks,
+    ctx: Context = None
 ) -> ChatResponse:
     """Procesa una solicitud de chat pública sin requerir autenticación."""
     # Verificar tenant público
@@ -141,10 +143,5 @@ async def public_chat_with_agent(
             context=request.context
         )
     
-    # Ejecutar con el contexto adecuado
-    return await run_public_context(
-        _process_public_chat(),
-        tenant_id=tenant_info.tenant_id,
-        agent_id=agent_id,
-        conversation_id=session_id
-    )
+    # Ejecutar lógica con contexto proporcionado por el decorador
+    return await _process_public_chat()

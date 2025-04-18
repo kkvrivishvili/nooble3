@@ -199,7 +199,8 @@ def with_context(
         async def wrapper(*args, **kwargs) -> Any:
             # Extrae parámetros de contexto a propagar
             context_params = {
-                "validate_tenant": validate_tenant
+                # Standardizar validación de tenant: siempre validar cuando tenant=True
+                "validate_tenant": tenant
             }
             
             if tenant:

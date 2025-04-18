@@ -329,17 +329,19 @@ async def stream_agent_response(
     conversation_id: str,
     query: str,
     user_id: Optional[str] = None,
-    session_id: Optional[str] = None
+    session_id: Optional[str] = None,
+    context_manager: ContextManager = None
 ) -> AsyncGenerator[str, None]:
     """Genera una respuesta en streaming para un agente."""
-    # Crear ContextManager
-    context_manager = ContextManager(
-        tenant_id=tenant_id,
-        agent_id=agent_id, 
-        conversation_id=conversation_id,
-        user_id=user_id,
-        session_id=session_id
-    )
+    # Reusar ContextManager existente o crear uno nuevo
+    if context_manager is None:
+        context_manager = ContextManager(
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            session_id=session_id
+        )
     
     try:
         # Registrar mensaje del usuario

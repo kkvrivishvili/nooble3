@@ -19,7 +19,7 @@ from common.errors import (
     CollectionNotFoundError, InvalidQueryParamsError, 
     QueryProcessingError, RetrievalError
 )
-from common.context import with_context, set_current_collection_id
+from common.context import with_context
 from common.auth import verify_tenant
 from common.db.supabase import get_supabase_client, get_tenant_collections, get_table_name
 
@@ -174,8 +174,7 @@ async def update_collection(
         CollectionUpdateResponse: Datos actualizados
     """
     try:
-        # Establecer collection_id en el contexto
-        set_current_collection_id(collection_id)
+        # (Decorador already sets collection_id)
         
         # Verificar que la colección exista y pertenezca al tenant
         supabase = get_supabase_client()
@@ -259,8 +258,7 @@ async def delete_collection(
         DeleteCollectionResponse: Resultado de la eliminación
     """
     try:
-        # Establecer collection_id en el contexto
-        set_current_collection_id(collection_id)
+        # (Decorador already sets collection_id)
         
         supabase = get_supabase_client()
         
@@ -339,8 +337,7 @@ async def get_collection_stats(
         CollectionStatsResponse: Estadísticas de la colección
     """
     try:
-        # Establecer collection_id en el contexto
-        set_current_collection_id(collection_id)
+        # (Decorador already sets collection_id)
         
         supabase = get_supabase_client()
         
