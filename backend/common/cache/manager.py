@@ -5,6 +5,7 @@ from typing import Dict, Any, List, Optional, Set, Union
 import asyncio
 import hashlib
 import redis.asyncio as redis
+import logging
 
 from ..context.vars import get_current_tenant_id, get_current_agent_id
 from ..context.vars import get_current_conversation_id, get_current_collection_id
@@ -429,7 +430,7 @@ class CacheManager:
         
         # 3. Eliminar usando scan + delete para evitar bloqueos
         try:
-            cursor = b"0"
+            cursor = "0"
             deleted_count = 0
             
             while cursor:
@@ -438,7 +439,7 @@ class CacheManager:
                 if keys:
                     deleted_count += await redis_client.delete(*keys)
                     
-                if cursor == b"0":
+                if cursor == "0":
                     break
             
             total_deleted = len(keys_to_delete) + deleted_count
