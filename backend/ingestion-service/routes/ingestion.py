@@ -140,11 +140,13 @@ async def upload_document(
         logger.error(f"Error de procesamiento: {doc_err.message}", extra=doc_err.context)
         raise
     except Exception as e:
-        # Capturar errores inesperados
-        error_context["error_type"] = type(e).__name__
-        error_context["traceback"] = traceback.format_exc()
+        # Capturar errores inesperados con contexto mejorado
+        error_context.update({
+            "error_type": type(e).__name__,
+            "operation": "upload_document",
+            "traceback": traceback.format_exc()
+        })
         logger.error(f"Error inesperado al cargar documento: {str(e)}", extra=error_context, exc_info=True)
-        
         raise DocumentProcessingError(
             message=f"Error al cargar documento: {str(e)}",
             details=error_context

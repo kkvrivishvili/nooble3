@@ -294,7 +294,8 @@ async def execute_agent(
     
     except ServiceError as service_error:
         # Manejo específico para errores de servicio estandarizados
-        logger.error(f"ServiceError en ejecución de agente: {service_error.message}")
+        context = {"agent_id": agent_id, "tenant_id": tenant_id, "operation": "execute_agent"}
+        logger.error(f"ServiceError en ejecución de agente: {service_error.message}", extra=context, exc_info=True)
         processing_time = time.time() - start_time
         agent_response = {
             "error": service_error.message,
@@ -304,13 +305,15 @@ async def execute_agent(
         return agent_response
     except Exception as e:
         # Convertir excepciones generales a AgentExecutionError
-        logger.error(f"Error en ejecución de agente: {str(e)}")
+        context = {"agent_id": agent_id, "tenant_id": tenant_id, "operation": "execute_agent"}
+        logger.error(f"Error en ejecución de agente: {str(e)}", extra=context, exc_info=True)
         processing_time = time.time() - start_time
         
         # Usar la clase específica para errores de ejecución de agente
+        error_context = {"agent_id": agent_id, "tenant_id": tenant_id, "operation": "execute_agent", "error_type": type(e).__name__}
         error = AgentExecutionError(
             message=f"Error al ejecutar el agente: {str(e)}",
-            details={"agent_id": agent_id, "tenant_id": tenant_id}
+            details=error_context
         )
         
         agent_response = {
@@ -399,7 +402,8 @@ async def stream_agent_response(
     except ServiceError as service_error:
         # Errores de servicio estandarizados
         error_message = f"Error: {service_error.message}"
-        logger.error(f"ServiceError en streaming: {service_error.message}")
+        context = {"agent_id": agent_id, "tenant_id": tenant_id, "operation": "stream_agent_response"}
+        logger.error(f"ServiceError en streaming: {service_error.message}", extra=context, exc_info=True)
         
         # Registrar error en la memoria del agente
         try:
@@ -414,7 +418,8 @@ async def stream_agent_response(
     except Exception as e:
         # Cualquier otra excepción
         error_message = f"Error: {str(e)}"
-        logger.error(f"Error en streaming de agente: {str(e)}")
+        context = {"agent_id": agent_id, "tenant_id": tenant_id, "operation": "stream_agent_response"}
+        logger.error(f"Error en streaming de agente: {str(e)}", extra=context, exc_info=True)
         
         # Registrar error en la memoria del agente
         try:

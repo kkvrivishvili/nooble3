@@ -109,14 +109,17 @@ async def generate_embeddings(
         )
         
     except Exception as e:
-        logger.error(f"Error generando embeddings: {str(e)}", exc_info=True)
+        error_details = {
+            "model": model_name,
+            "tenant_id": tenant_id,
+            "texts_count": len(texts),
+            "operation": "generate_embeddings",
+            "error_type": type(e).__name__
+        }
+        logger.error(f"Error generando embeddings: {str(e)}", extra=error_details, exc_info=True)
         raise EmbeddingGenerationError(
             message=f"Error generando embeddings: {str(e)}",
-            details={
-                "model": model_name,
-                "tenant_id": tenant_id,
-                "texts_count": len(texts)
-            }
+            details=error_details
         )
 
 @router.post("/embeddings/batch", response_model=BatchEmbeddingResponse)
@@ -240,20 +243,23 @@ async def batch_generate_embeddings(
         )
         
     except Exception as e:
-        logger.error(f"Error generando embeddings batch: {str(e)}", exc_info=True)
+        error_details = {
+            "model": model_name,
+            "tenant_id": tenant_id,
+            "texts_count": len(texts),
+            "operation": "batch_generate_embeddings",
+            "error_type": type(e).__name__
+        }
+        logger.error(f"Error generando embeddings batch: {str(e)}", extra=error_details, exc_info=True)
         raise EmbeddingGenerationError(
             message=f"Error generando embeddings batch: {str(e)}",
-            details={
-                "model": model_name,
-                "tenant_id": tenant_id,
-                "texts_count": len(texts)
-            }
+            details=error_details
         )
 
 # Endpoint simplificado para uso interno por los servicios de query y agent
 @router.post("/internal/embed", tags=["Internal"])
-@handle_service_error_simple
 @with_context(tenant=True, agent=True, conversation=True, collection=True)
+@handle_service_error_simple
 async def internal_embed(
     texts: List[str] = Body(..., description="Textos para generar embeddings"),
     model: Optional[str] = Body(None, description="Modelo de embedding"),

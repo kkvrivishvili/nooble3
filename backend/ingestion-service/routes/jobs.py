@@ -191,12 +191,14 @@ async def get_job(
         )
         
     except Exception as e:
-        logger.error(f"Error obteniendo trabajo: {str(e)}")
+        error_details = {"job_id": job_id, "tenant_id": tenant_id, "operation": "get_job"}
+        logger.error(f"Error obteniendo trabajo: {str(e)}", extra=error_details, exc_info=True)
         if isinstance(e, ServiceError):
             raise e
         raise ServiceError(
             message=f"Error al obtener trabajo: {str(e)}",
-            error_code="JOB_FETCH_ERROR"
+            error_code="JOB_FETCH_ERROR",
+            details=error_details
         )
 
 @router.post(

@@ -41,9 +41,8 @@ async def create_agent(
             # Guardar información sobre el downgrade para incluirla en la respuesta
             request.metadata = request.metadata or {}
             request.metadata["model_downgraded"] = True
-    else:
-        # Usar modelo predeterminado
-        model_name = settings.default_llm_model
+        else:
+            model_name = agent_check.data["llm_model"]
     
     # Generar ID para el nuevo agente
     agent_id = str(uuid.uuid4())
@@ -120,14 +119,16 @@ async def create_agent(
         return response
     
     except Exception as e:
+        error_context = {"tenant_id": tenant_id, "operation": "create_agent", "error_type": type(e).__name__}
+        logger.error(f"Error creando agente: {str(e)}", extra=error_context, exc_info=True)
         if "duplicate key" in str(e):
             raise AgentAlreadyExistsError(
                 message="Agent ya existe",
-                details={"tenant_id": tenant_id}
+                details=error_context
             ) from e
         raise AgentSetupError(
             message="Error creando agente",
-            details={"tenant_id": tenant_id}
+            details=error_context
         ) from e
 
 @router.get("/{agent_id}", response_model=AgentResponse)
@@ -191,8 +192,8 @@ async def get_agent(
     )
 
 @router.get("", response_model=AgentListResponse)
-@handle_service_error_simple
 @with_context(tenant=True)
+@handle_service_error_simple
 async def list_agents(
     tenant_info: TenantInfo = Depends(verify_tenant)
 ) -> AgentListResponse:
@@ -235,8 +236,8 @@ async def list_agents(
     )
 
 @router.put("/{agent_id}", response_model=AgentResponse)
-@handle_service_error_simple
 @with_context(tenant=True, agent=True)
+@handle_service_error_simple
 async def update_agent(
     agent_id: str, 
     request: AgentRequest, 
@@ -339,14 +340,17 @@ async def update_agent(
         )
     
     except Exception as e:
+        error_context = {"agent_id": agent_id, "tenant_id": tenant_id, "operation": "update_agent", "error_type": type(e).__name__}
+        logger.error(f"Error actualizando agente: {str(e)}", extra=error_context, exc_info=True)
         raise ServiceError(
             message="Error actualizando agente",
-            error_code=ErrorCode.AGENT_UPDATE_ERROR
+            error_code=ErrorCode.AGENT_UPDATE_ERROR,
+            details=error_context
         ) from e
 
 @router.delete("/{agent_id}", response_model=DeleteAgentResponse)
-@handle_service_error_simple
 @with_context(tenant=True, agent=True)
+@handle_service_error_simple
 async def delete_agent(
     agent_id: str, 
     tenant_info: TenantInfo = Depends(verify_tenant)
@@ -401,13 +405,12 @@ async def delete_agent(
             conversations_deleted=conversations_count
         )
         
-    except ServiceError:
-        # Re-lanzar ServiceError para que sea manejado por el decorador
-        raise
     except Exception as e:
-        logger.error(f"Error deleting agent: {str(e)}")
+        error_context = {"agent_id": agent_id, "tenant_id": tenant_id, "operation": "delete_agent", "error_type": type(e).__name__}
+        logger.error(f"Error al eliminar agente: {str(e)}", extra=error_context, exc_info=True)
         raise ServiceError(
             message="Error al eliminar el agente",
             status_code=500,
-            error_code="DELETE_FAILED"
-        )
+            error_code="DELETE_FAILED",
+            details=error_context
+        ) from e
