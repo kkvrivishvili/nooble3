@@ -502,6 +502,35 @@ class CacheManager:
         return int(value) if value else 0
 
     @staticmethod
+    async def ttl(
+        data_type: str,
+        resource_id: str,
+        tenant_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        collection_id: Optional[str] = None
+    ) -> int:
+        """
+        Obtiene el TTL de un valor en Redis.
+        """
+        tenant_id = tenant_id or get_current_tenant_id()
+        agent_id = agent_id or get_current_agent_id()
+        conversation_id = conversation_id or get_current_conversation_id()
+        collection_id = collection_id or get_current_collection_id()
+        key = CacheManager._build_key(
+            data_type, resource_id, tenant_id, agent_id, conversation_id, collection_id
+        )
+        redis_client = await get_redis_client()
+        if not redis_client:
+            return -1
+        try:
+            ttl_value = await redis_client.ttl(key)
+            return ttl_value if ttl_value is not None else -1
+        except Exception as e:
+            logger.warning(f"Error al obtener TTL de Redis con clave {key}: {e}")
+            return -1
+
+    @staticmethod
     async def invalidate_cache(
         scope: str,
         tenant_id: Optional[str] = None,
@@ -741,21 +770,68 @@ class CacheManager:
             ttl=ttl
         )
     
+    # --- AGENT CONFIGURATIONS ---
+    
+    @staticmethod
+    async def get_agent_config(
+        agent_id: str,
+        tenant_id: Optional[str] = None,
+        use_memory: bool = True
+    ) -> Optional[Any]:
+        """
+        Obtiene la configuración del agente desde cache.
+        """
+        tenant_id = tenant_id or get_current_tenant_id()
+        resource_id = f"agent_config:{agent_id}"
+        return await CacheManager.get(
+            data_type="agent_config",
+            resource_id=resource_id,
+            tenant_id=tenant_id,
+            use_memory=use_memory
+        )
+
+    @staticmethod
+    async def set_agent_config(
+        agent_id: str,
+        config: Any,
+        tenant_id: Optional[str] = None,
+        ttl: int = _settings_ttl,
+        use_memory: bool = True
+    ) -> bool:
+        """
+        Guarda la configuración del agente en cache.
+        """
+        tenant_id = tenant_id or get_current_tenant_id()
+        resource_id = f"agent_config:{agent_id}"
+        return await CacheManager.set(
+            data_type="agent_config",
+            resource_id=resource_id,
+            value=config,
+            tenant_id=tenant_id,
+            ttl=ttl,
+            use_memory=use_memory
+        )
+
     # --- AGENT RESPONSES ---
     
     @staticmethod
     async def get_agent_response(
         agent_id: str,
         query: str,
-        tenant_id: str,
+        tenant_id: Optional[str] = None,
         conversation_id: Optional[str] = None,
         use_memory: bool = True
     ) -> Optional[Any]:
-        """Obtiene la respuesta de un agente desde caché multinivel"""
-        key = generate_hash(query)
+        """
+        Obtiene una respuesta de agente cacheada.
+        """
+        tenant_id = tenant_id or get_current_tenant_id()
+        conversation_id = conversation_id or get_current_conversation_id()
+        query_hash = generate_hash(query)
+        resource_id = f"{agent_id}:{conversation_id}:{query_hash}"
         return await CacheManager.get(
             data_type="agent_response",
-            resource_id=key,
+            resource_id=resource_id,
             tenant_id=tenant_id,
             agent_id=agent_id,
             conversation_id=conversation_id,
@@ -767,55 +843,25 @@ class CacheManager:
         agent_id: str,
         query: str,
         response: Any,
-        tenant_id: str,
+        tenant_id: Optional[str] = None,
         conversation_id: Optional[str] = None,
         ttl: int = _settings_ttl,
         use_memory: bool = True
     ) -> bool:
-        """Guarda la respuesta de un agente en caché multinivel"""
-        key = generate_hash(query)
+        """
+        Guarda una respuesta de agente en cache.
+        """
+        tenant_id = tenant_id or get_current_tenant_id()
+        conversation_id = conversation_id or get_current_conversation_id()
+        query_hash = generate_hash(query)
+        resource_id = f"{agent_id}:{conversation_id}:{query_hash}"
         return await CacheManager.set(
             data_type="agent_response",
-            resource_id=key,
+            resource_id=resource_id,
             value=response,
             tenant_id=tenant_id,
             agent_id=agent_id,
             conversation_id=conversation_id,
-            ttl=ttl,
-            use_memory=use_memory
-        )
-    
-    # --- AGENT CONFIGURATIONS ---
-    
-    @staticmethod
-    async def get_agent_config(
-        agent_id: str,
-        tenant_id: str,
-        use_memory: bool = True
-    ) -> Optional[Any]:
-        """Obtiene configuración de agente específica de caché multinivel."""
-        return await CacheManager.get(
-            data_type="agent_config",
-            resource_id=agent_id,
-            tenant_id=tenant_id,
-            use_memory=use_memory,
-            search_hierarchy=False
-        )
-    
-    @staticmethod
-    async def set_agent_config(
-        agent_id: str,
-        config: Any,
-        tenant_id: str,
-        ttl: int = _settings_ttl,
-        use_memory: bool = True
-    ) -> bool:
-        """Guarda configuración de agente en caché multinivel."""
-        return await CacheManager.set(
-            data_type="agent_config",
-            resource_id=agent_id,
-            value=config,
-            tenant_id=tenant_id,
             ttl=ttl,
             use_memory=use_memory
         )

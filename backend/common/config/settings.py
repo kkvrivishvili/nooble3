@@ -74,6 +74,8 @@ class Settings(BaseSettings):
     
     # =========== Configuración de LLM ===========
     default_llm_model: str = Field("gpt-3.5-turbo", description="Modelo LLM por defecto")
+    default_openai_llm_model: str = Field("gpt-3.5-turbo", description="Modelo LLM de OpenAI predeterminado")
+    default_ollama_llm_model: str = Field("llama3", description="Modelo LLM de Ollama predeterminado")
     agent_default_temperature: float = Field(0.7, description="Temperatura para LLM")
     max_tokens_per_response: int = Field(2048, description="Máximo de tokens por respuesta")
     system_prompt_template: str = Field("Eres un asistente AI llamado {agent_name}. {agent_instructions}", description="Plantilla para prompt de sistema")
@@ -81,6 +83,8 @@ class Settings(BaseSettings):
     
     # =========== Configuración de Embeddings ===========
     default_embedding_model: str = Field("text-embedding-3-small", description="Modelo de embeddings por defecto")
+    default_openai_embedding_model: str = Field("text-embedding-3-small", description="Modelo de embeddings de OpenAI predeterminado")
+    default_ollama_embedding_model: str = Field("nomic-embed-text", description="Modelo de embeddings de Ollama predeterminado")
     embedding_cache_enabled: bool = Field(True, description="Habilitar caché de embeddings")
     embedding_batch_size: int = Field(100, description="Tamaño de lote para embeddings")
     max_embedding_batch_size: int = Field(200, description="Tamaño máximo de lote para embeddings")
