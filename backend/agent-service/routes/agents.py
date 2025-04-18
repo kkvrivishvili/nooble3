@@ -12,8 +12,7 @@ from common.config import get_settings, invalidate_settings_cache
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
 from common.auth import verify_tenant, validate_model_access, get_allowed_models_for_tier
-from common.cache.manager import CacheManager
-from common.cache.contextual import invalidate_settings_cache
+from common.cache.manager import CacheManager, TTL_MEDIUM
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -114,6 +113,8 @@ async def create_agent(
             updated_at=created_agent.get("updated_at")
         )
         
+        # Guardar en caché config de agente
+        await CacheManager.set_agent_config(created_agent["agent_id"], created_agent, tenant_id, TTL_MEDIUM)
         # Invalidar caché de configuraciones para este tenant
         invalidate_settings_cache(tenant_id)
         
@@ -141,9 +142,16 @@ async def get_agent(
     """Obtiene la configuración de un agente existente."""
     tenant_id = tenant_info.tenant_id
     
+    # Intentar cache primero
+    try:
+        cached = await CacheManager.get_agent_config(agent_id, tenant_id)
+        if cached:
+            return AgentResponse(**cached)
+    except Exception:
+        pass
+    
     # Obtener agente desde Supabase
     supabase = get_supabase_client()
-    
     result = await supabase.table(get_table_name("agent_configs")) \
         .select("*") \
         .eq("tenant_id", tenant_id) \
@@ -160,6 +168,9 @@ async def get_agent(
         )
     
     agent_data = result.data
+    
+    # Guardar en caché
+    await CacheManager.set_agent_config(agent_id, agent_data, tenant_id, TTL_MEDIUM)
     
     return AgentResponse(
         success=True,
@@ -191,37 +202,40 @@ async def list_agents(
     """Lista todos los agentes disponibles para el tenant actual."""
     tenant_id = tenant_info.tenant_id
     
+    # Intentar cache de lista
     try:
-        supabase = get_supabase_client()
-        result = await supabase.table(get_table_name("agent_configs")).select("*").eq("tenant_id", tenant_id).order("created_at", desc=True).execute()
-        
-        agents_list = []
-        for agent_data in result.data:
-            agent_summary = {
-                "agent_id": agent_data["agent_id"],
-                "name": agent_data["name"],
-                "description": agent_data.get("description", ""),
-                "model": agent_data.get("llm_model", "gpt-3.5-turbo"),
-                "is_public": agent_data.get("is_public", False),
-                "created_at": agent_data.get("created_at"),
-                "updated_at": agent_data.get("updated_at")
-            }
-            agents_list.append(agent_summary)
-        
-        return AgentListResponse(
-            success=True,
-            message="Agentes obtenidos exitosamente",
-            agents=agents_list,
-            count=len(agents_list)
-        )
-        
-    except Exception as e:
-        logger.error(f"Error listing agents: {str(e)}")
-        raise ServiceError(
-            message="Error al listar agentes",
-            status_code=500,
-            error_code="LIST_FAILED"
-        )
+        users = await CacheManager.get("agent_list", tenant_id, tenant_id=tenant_id)
+        if users is not None:
+            return AgentListResponse(success=True, agents=users)
+    except Exception:
+        pass
+    
+    # Listar desde Supabase
+    supabase = get_supabase_client()
+    result = await supabase.table(get_table_name("agent_configs")).select("*").eq("tenant_id", tenant_id).order("created_at", desc=True).execute()
+    
+    agents_list = []
+    for agent_data in result.data:
+        agent_summary = {
+            "agent_id": agent_data["agent_id"],
+            "name": agent_data["name"],
+            "description": agent_data.get("description", ""),
+            "model": agent_data.get("llm_model", "gpt-3.5-turbo"),
+            "is_public": agent_data.get("is_public", False),
+            "created_at": agent_data.get("created_at"),
+            "updated_at": agent_data.get("updated_at")
+        }
+        agents_list.append(agent_summary)
+    
+    # Guardar en caché la lista
+    await CacheManager.set("agent_list", tenant_id, agents_list, tenant_id=tenant_id)
+    
+    return AgentListResponse(
+        success=True,
+        message="Agentes obtenidos exitosamente",
+        agents=agents_list,
+        count=len(agents_list)
+    )
 
 @router.put("/{agent_id}", response_model=AgentResponse)
 @handle_service_error_simple
@@ -299,10 +313,12 @@ async def update_agent(
         # Preparar respuesta
         updated_agent = result.data[0] if result.data else {**agent_check.data, **update_data}
         
-        # Invalidar caché del agente
-        await CacheManager.invalidate_agent_complete(tenant_id, agent_id)
+        # Eliminar cache de este agente y lista
+        await CacheManager.delete(data_type="agent_config", resource_id=agent_id, tenant_id=tenant_id)
+        await CacheManager.delete(data_type="agent_list", resource_id=tenant_id, tenant_id=tenant_id)
+        await CacheManager.invalidate(data_type="agent_response", resource_id=agent_id, tenant_id=tenant_id)
         
-        # También invalidar caché de configuraciones para este tenant
+        # Invalidar caché de configuraciones para este tenant
         invalidate_settings_cache(tenant_id)
         
         return AgentResponse(
@@ -374,8 +390,10 @@ async def delete_agent(
                 error_code="DELETE_FAILED"
             )
         
-        # Invalidar todas las entradas de caché para este agente
-        await CacheManager.invalidate_agent_complete(tenant_id, agent_id)
+        # Eliminar cache de este agente y lista
+        await CacheManager.delete(data_type="agent_config", resource_id=agent_id, tenant_id=tenant_id)
+        await CacheManager.delete(data_type="agent_list", resource_id=tenant_id, tenant_id=tenant_id)
+        await CacheManager.invalidate(data_type="agent_response", resource_id=agent_id, tenant_id=tenant_id)
         
         # Invalidar caché de configuraciones para este tenant
         invalidate_settings_cache(tenant_id)

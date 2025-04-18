@@ -7,8 +7,7 @@ from common.models import TenantInfo, CacheClearResponse
 from common.errors import ServiceError, handle_service_error_simple
 from common.auth import verify_tenant, get_auth_info
 from common.config import get_settings, invalidate_settings_cache
-from common.cache.redis import delete_pattern
-from common.cache.counters import invalidate_tenant_cache
+from common.cache.manager import CacheManager
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -48,14 +47,9 @@ async def clear_config_cache(
                 # Invalidar caché de configuraciones
                 invalidate_settings_cache(actual_tenant_id)
                 
-                # Limpiar caché Redis
-                pattern_used = f"tenant_config:{actual_tenant_id}:{environment}:{scope}"
-                if scope_id:
-                    pattern_used += f":{scope_id}"
-                pattern_used += ":*"
-                
-                # Eliminación de patrón
-                keys_cleaned_count = await delete_pattern(pattern_used)
+                # Invalidación de caché usando CacheManager
+                await CacheManager.invalidate_cache(scope="tenant", tenant_id=actual_tenant_id)
+                keys_cleaned_count = -1
                 
                 scope_msg = f"ámbito {scope}" + (f" (ID: {scope_id})" if scope_id else "")
                 message = f"Caché de configuraciones invalidado para tenant {actual_tenant_id} en {scope_msg}"
@@ -65,9 +59,9 @@ async def clear_config_cache(
                 # Invalidar caché de settings
                 invalidate_settings_cache(actual_tenant_id)
                 
-                # Eliminar caché de Redis
-                pattern_used = f"tenant_config:{actual_tenant_id}:*"
-                keys_cleaned_count = await delete_pattern(pattern_used)
+                # Invalidación de caché completa de tenant
+                await CacheManager.invalidate_cache(scope="tenant", tenant_id=actual_tenant_id)
+                keys_cleaned_count = -1
                 
                 message = f"Caché de configuraciones invalidado para tenant {actual_tenant_id}"
         else:
@@ -84,9 +78,9 @@ async def clear_config_cache(
                 # Invalidar caché global
                 invalidate_settings_cache()
                 
-                # Eliminar caché de Redis global
-                pattern_used = "tenant_config:*"
-                keys_cleaned_count = await delete_pattern(pattern_used)
+                # Invalidación de caché global
+                await CacheManager.invalidate_cache(scope="global")
+                keys_cleaned_count = -1
                 
                 message = "Caché de configuraciones invalidado globalmente"
 
@@ -134,12 +128,12 @@ async def clear_tenant_cache(
     
     try:
         # Invalidar toda la caché del tenant
-        keys_deleted = await invalidate_tenant_cache(tenant_id)
+        await CacheManager.invalidate_cache(scope="tenant", tenant_id=tenant_id)
         
         return CacheClearResponse(
             success=True,
             message=f"Caché del tenant {tenant_id} invalidada exitosamente",
-            keys_deleted=keys_deleted,
+            keys_deleted=-1,
             metadata={
                 "tenant_id": tenant_id
             }

@@ -57,10 +57,10 @@ async def update_document_status(
         cache_key = f"document:{tenant_id}:{document_id}"
         try:
             # Intentar actualizar en caché para futuras consultas
-            await CacheManager.invalidate(
-                tenant_id=tenant_id,
+            await CacheManager.delete(
                 data_type="document",
-                resource_id=document_id
+                resource_id=document_id,
+                tenant_id=tenant_id
             )
         except Exception as cache_error:
             # No fallar si hay error de caché, solo registrar
@@ -130,7 +130,6 @@ async def update_processing_job(
             
             # Guardar/actualizar el estado en caché para consultas rápidas
             await CacheManager.set(
-                tenant_id=tenant_id,
                 data_type="job_status",
                 resource_id=str(job_id),
                 value={
@@ -139,6 +138,7 @@ async def update_processing_job(
                     "error": error,
                     "stats": processing_stats
                 },
+                tenant_id=tenant_id,
                 ttl=86400  # 24 horas
             )
             
@@ -168,6 +168,7 @@ async def invalidate_vector_store_cache(tenant_id: str, collection_id: str) -> b
         await CacheManager.invalidate(
             tenant_id=tenant_id,
             data_type="query_result",
+            resource_id=collection_id,
             collection_id=collection_id
         )
         
@@ -175,6 +176,7 @@ async def invalidate_vector_store_cache(tenant_id: str, collection_id: str) -> b
         await CacheManager.invalidate(
             tenant_id=tenant_id,
             data_type="vector_store",
+            resource_id=collection_id,
             collection_id=collection_id
         )
         
@@ -200,9 +202,9 @@ async def get_document_with_cache(document_id: str, tenant_id: str) -> Optional[
     try:
         # Primero intentar obtener de la caché
         cached_doc = await CacheManager.get(
-            tenant_id=tenant_id,
             data_type="document",
-            resource_id=document_id
+            resource_id=document_id,
+            tenant_id=tenant_id
         )
         
         if cached_doc:
@@ -227,11 +229,11 @@ async def get_document_with_cache(document_id: str, tenant_id: str) -> Optional[
         if document:
             # Guardar en caché para futuras consultas
             await CacheManager.set(
-                tenant_id=tenant_id,
                 data_type="document",
                 resource_id=document_id,
                 value=document,
-                ttl=3600  # 1 hora
+                tenant_id=tenant_id,
+                ttl=3600
             )
             
         return document

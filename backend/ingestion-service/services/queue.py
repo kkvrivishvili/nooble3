@@ -9,7 +9,7 @@ import uuid
 import asyncio
 from typing import Dict, Any, Optional, List
 
-from common.cache.manager import CacheManager
+from common.cache.manager import CacheManager, get_redis_client
 from common.errors import ServiceError, DocumentProcessingError
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
@@ -150,7 +150,11 @@ async def queue_document_processing_job(
             
         # Encolar el trabajo en Redis para procesamiento con manejo de errores
         try:
-            await CacheManager.rpush(INGESTION_QUEUE, json.dumps(job_data))
+            await CacheManager.rpush(
+                INGESTION_QUEUE,
+                json.dumps(job_data),
+                tenant_id=tenant_id
+            )
         except Exception as cache_err:
             logger.warning(f"Error al encolar en Redis: {str(cache_err)}")
             
@@ -194,7 +198,8 @@ async def check_stuck_jobs():
             # Verificar bloqueo usando CacheManager.get en lugar de exists
             val = await CacheManager.get(
                 data_type="system",
-                resource_id=lock_key
+                resource_id=lock_key,
+                tenant_id=tenant_id
             )
             lock_exists = val is not None
             
@@ -217,7 +222,8 @@ async def check_stuck_jobs():
                                 # Liberar explícitamente cualquier bloqueo antiguo que pudiera existir
                                 await CacheManager.delete(
                                     data_type="system",
-                                    resource_id=lock_key
+                                    resource_id=lock_key,
+                                    tenant_id=tenant_id
                                 )
                                 
                                 await update_processing_job(
@@ -272,7 +278,8 @@ async def check_stuck_jobs():
                                 # Forzar liberación del bloqueo
                                 await CacheManager.delete(
                                     data_type="system",
-                                    resource_id=lock_key
+                                    resource_id=lock_key,
+                                    tenant_id=tenant_id
                                 )
                                 
                                 await update_processing_job(
@@ -358,9 +365,10 @@ async def process_next_job(ctx: Context = None) -> bool:
         if tenant_id is None:
             tenant_id = ctx.get_tenant_id()
         
-        # Adquirir un lock para este trabajo
+        # Adquirir un lock para este trabajo con Redis SET NX
         lock_key = f"{JOB_LOCK_PREFIX}:{job_id}"
-        lock_acquired = await CacheManager.set_nx(lock_key, "1", job_lock_expire_seconds)
+        redis_client = await get_redis_client()
+        lock_acquired = await redis_client.set(lock_key, "1", ex=job_lock_expire_seconds, nx=True)
         
         if not lock_acquired:
             logger.warning(
@@ -558,14 +566,14 @@ async def process_next_job(ctx: Context = None) -> bool:
         # Garantizar que el lock se libere en cualquier circunstancia
         if lock_acquired and lock_key:
             try:
-                await CacheManager.delete(lock_key)
-                logger.debug(f"Lock liberado para job_id={job_id}", 
-                           extra={"job_id": job_id})
+                await CacheManager.delete(
+                    data_type="system",
+                    resource_id=lock_key,
+                    tenant_id=tenant_id
+                )
+                logger.debug(f"Lock liberado para job_id={job_id}", extra={"job_id": job_id})
             except Exception as unlock_error:
-                # Si falla la liberación del lock, registrarlo
-                logger.error(f"Error liberando lock: {str(unlock_error)}", 
-                           extra={"job_id": job_id, "lock_key": lock_key}, 
-                           exc_info=True)
+                logger.error(f"Error liberando lock para job_id={job_id}: {str(unlock_error)}")
 
 async def _cleanup_job_resources(job_id: str, tenant_id: str):
     """
