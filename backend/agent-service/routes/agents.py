@@ -12,8 +12,8 @@ from common.config import get_settings, invalidate_settings_cache
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
 from common.auth import verify_tenant, validate_model_access, get_allowed_models_for_tier
-from common.cache.counters import invalidate_agent_cache
-from common.cache.contextual import invalidate_cache_hierarchy
+from common.cache.manager import CacheManager
+from common.cache.contextual import invalidate_settings_cache
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -300,7 +300,7 @@ async def update_agent(
         updated_agent = result.data[0] if result.data else {**agent_check.data, **update_data}
         
         # Invalidar caché del agente
-        await invalidate_agent_cache(tenant_id, agent_id)
+        await CacheManager.invalidate_agent_complete(tenant_id, agent_id)
         
         # También invalidar caché de configuraciones para este tenant
         invalidate_settings_cache(tenant_id)
@@ -374,8 +374,8 @@ async def delete_agent(
                 error_code="DELETE_FAILED"
             )
         
-        # Invalidar toda la caché relacionada con este agente
-        await invalidate_agent_cache(tenant_id, agent_id)
+        # Invalidar todas las entradas de caché para este agente
+        await CacheManager.invalidate_agent_complete(tenant_id, agent_id)
         
         # Invalidar caché de configuraciones para este tenant
         invalidate_settings_cache(tenant_id)

@@ -9,8 +9,8 @@ from fastapi import APIRouter
 from common.models import HealthResponse
 from common.errors import handle_errors
 from common.config import get_settings
-from common.cache.redis import get_redis_client
 from common.db.supabase import get_supabase_client, get_table_name
+from common.cache.manager import CacheManager
 
 from llama_index.embeddings.openai import OpenAIEmbedding
 
@@ -27,9 +27,16 @@ async def get_service_status() -> HealthResponse:
     Este endpoint proporciona información detallada sobre el estado operativo 
     del servicio de embeddings y sus componentes dependientes.
     """
-    # Verificar Redis
-    redis_client = await get_redis_client()
-    redis_status = "available" if redis_client and await redis_client.ping() else "unavailable"
+    # Verificar sistema de caché unificado
+    cache_status = "unavailable"
+    try:
+        await CacheManager.get(
+            data_type="system",
+            resource_id="health_check"
+        )
+        cache_status = "available"
+    except Exception as e:
+        logger.warning(f"Cache no disponible: {e}")
     
     # Verificar Supabase
     supabase_status = "available"
@@ -58,7 +65,7 @@ async def get_service_status() -> HealthResponse:
     
     # Determinar estado general
     components = {
-        "redis": redis_status,
+        "cache": cache_status,
         "supabase": supabase_status,
     }
     

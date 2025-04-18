@@ -25,15 +25,15 @@ async def get_service_status() -> HealthResponse:
     Este endpoint proporciona información detallada sobre el estado operativo 
     del servicio de ingesta y sus componentes dependientes.
     """
-    # Verificar Redis usando CacheManager
-    redis_status = "unavailable"
+    # Verificar sistema de caché unificado
+    cache_status = "unavailable"
     try:
         # Intentar una operación simple con CacheManager
         await CacheManager.get(
             data_type="system",
             resource_id="health_check"
         )
-        redis_status = "available"
+        cache_status = "available"
     except Exception as e:
         logger.warning(f"Cache no disponible: {str(e)}")
     
@@ -60,21 +60,21 @@ async def get_service_status() -> HealthResponse:
         logger.warning(f"Error verificando servicio de embeddings: {str(e)}")
         embedding_service_status = "unavailable"
     
-    # Determinar estado general - necesitamos Redis y Supabase
+    # Determinar estado general - necesitamos cache y Supabase
     components = {
-        "redis": redis_status,
+        "cache": cache_status,
         "supabase": supabase_status,
         "embedding_service": embedding_service_status
     }
     
-    is_healthy = (redis_status == "available" and 
+    is_healthy = (cache_status == "available" and 
                  supabase_status == "available")
     
     # Si el servicio de embeddings está caído, todavía podemos funcionar parcialmente
     status = "healthy" if is_healthy else "degraded"
     
-    # Si no tenemos Redis, estamos en estado crítico y no podemos procesar
-    if redis_status == "unavailable":
+    # Si no tenemos caché, estamos en estado crítico y no podemos procesar
+    if cache_status == "unavailable":
         status = "critical"
     
     return HealthResponse(

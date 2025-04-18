@@ -21,7 +21,7 @@ from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
 from common.llm.token_counters import count_tokens
 from common.tracking import track_token_usage, track_usage
-from common.cache.manager import CacheManager
+from common.cache.manager import CacheManager, TTL_MEDIUM
 from common.utils.stream import stream_llm_response
 
 from services.callbacks import AgentCallbackHandler, StreamingCallbackHandler
@@ -270,15 +270,14 @@ async def execute_agent(
         }
         
         # Guardar en caché para futuras consultas idénticas
-        # (solo si no es streaming y la respuesta no es un error)
         if not streaming and "error" not in agent_response:
             await CacheManager.set_agent_response(
                 agent_id=agent_id,
-                query=query,  # La función se encarga de generar el hash
+                query=query,
                 response=agent_response,
                 tenant_id=tenant_id,
                 conversation_id=conversation_id,
-                ttl=1800
+                ttl=TTL_MEDIUM
             )
     
     except ServiceError as service_error:

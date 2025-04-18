@@ -28,9 +28,18 @@ def register_routes(app: FastAPI):
         """Verifica el estado del servicio y sus dependencias."""
         from common.config import get_settings
         from common.db.supabase import get_supabase_client
+        from common.cache.manager import CacheManager
         from main import http_client
         
         settings = get_settings()
+        
+        # Verificar sistema de caché unificado
+        cache_status = "unavailable"
+        try:
+            await CacheManager.get(data_type="system", resource_id="health_check")
+            cache_status = "available"
+        except Exception as e:
+            logger.warning(f"Cache no disponible: {str(e)}")
         
         # Verificar Supabase
         supabase_status = "available"
@@ -67,9 +76,8 @@ def register_routes(app: FastAPI):
             logger.warning(f"Servicio de embeddings no disponible: {str(e)}")
             embedding_service_status = "unavailable"
         
-        # Determinar estado general - disponible si Supabase está disponible y al menos
-        # uno de los servicios dependientes está disponible o degradado
-        critical_services_ok = supabase_status == "available"
+        # Determinar estado general - cache y Supabase deben estar disponibles, y al menos un servicio dependiente
+        critical_services_ok = cache_status == "available" and supabase_status == "available"
         dependent_services_ok = (query_service_status in ["available", "degraded"] or 
                                 embedding_service_status in ["available", "degraded"])
         
@@ -79,6 +87,7 @@ def register_routes(app: FastAPI):
             success=True,
             status=overall_status,
             components={
+                "cache": cache_status,
                 "supabase": supabase_status,
                 "query_service": query_service_status,
                 "embedding_service": embedding_service_status

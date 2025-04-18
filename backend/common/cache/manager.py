@@ -5,7 +5,6 @@ from typing import Dict, Any, List, Optional, Set, Union
 import asyncio
 import hashlib
 import redis.asyncio as redis
-import logging
 
 from ..context.vars import get_current_tenant_id, get_current_agent_id
 from ..context.vars import get_current_conversation_id, get_current_collection_id
@@ -20,7 +19,10 @@ _memory_expiry: Dict[str, float] = {}
 MEMORY_CACHE_MAX_SIZE = 1000  # Número máximo de entradas
 MEMORY_CACHE_CLEANUP_PERCENT = 0.2  # Porcentaje de entradas a eliminar (20%)
 
-_settings_ttl = 300  # TTL máximo 5 min (300 s)
+TTL_SHORT = 300       # 5 minutos (configuraciones, datos volátiles)
+TTL_MEDIUM = 3600     # 1 hora (resultados de consulta, datos moderadamente estables)
+TTL_LONG = 86400      # 24 horas (embeddings, datos altamente estables)
+TTL_PERMANENT = 0     # Sin expiración (datos persistentes)
 
 _redis_client = None
 
@@ -63,6 +65,21 @@ class CacheManager:
     """
     
     _lock = asyncio.Lock()
+    
+    @staticmethod
+    async def initialize() -> bool:
+        """
+        Inicializa y verifica la conexión a Redis.
+        """
+        try:
+            redis_client = await get_redis_client()
+            if redis_client and await redis_client.ping():
+                logger.info("CacheManager initialized successfully")
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Error inicializando caché: {str(e)}")
+            return False
     
     @staticmethod
     def _build_key(
@@ -232,7 +249,7 @@ class CacheManager:
         agent_id: Optional[str] = None,
         conversation_id: Optional[str] = None,
         collection_id: Optional[str] = None,
-        ttl: int = _settings_ttl,
+        ttl: int = TTL_MEDIUM,
         use_memory: bool = True
     ) -> bool:
         """
@@ -280,7 +297,7 @@ class CacheManager:
                 
             # Guardar en memoria para acceso rápido
             if use_memory:
-                CacheManager._add_to_memory_cache(key, value)
+                CacheManager._add_to_memory_cache(key, value, ttl)
                 
             return True
         except Exception as e:
@@ -288,29 +305,20 @@ class CacheManager:
             return False
             
     @staticmethod
-    def _add_to_memory_cache(key: str, value: Any) -> None:
+    def _add_to_memory_cache(key: str, value: Any, ttl: int = TTL_MEDIUM):
         """
-        Agrega un valor a la caché en memoria, eliminando entradas antiguas si es necesario.
+        Añade una entrada a la caché en memoria con TTL y limpieza de exceso de tamaño.
         """
-        if key in _memory_cache:
-            del _memory_cache[key]
-        if key in _memory_expiry:
-            del _memory_expiry[key]
-        
+        now = time.time()
         _memory_cache[key] = value
-        _memory_expiry[key] = time.time() + min(300, 3600)  # 5 minutos o menos
-        
-        # Eliminar entradas antiguas si se supera el límite
+        _memory_expiry[key] = now + ttl
         if len(_memory_cache) > MEMORY_CACHE_MAX_SIZE:
-            num_to_delete = int(MEMORY_CACHE_CLEANUP_PERCENT * len(_memory_cache))
-            oldest_keys = sorted(_memory_expiry, key=_memory_expiry.get)[:num_to_delete]
-            
-            for key in oldest_keys:
-                if key in _memory_cache:
-                    del _memory_cache[key]
-                if key in _memory_expiry:
-                    del _memory_expiry[key]
-                    
+            to_remove = int(len(_memory_cache) * MEMORY_CACHE_CLEANUP_PERCENT)
+            sorted_items = sorted(_memory_expiry.items(), key=lambda item: item[1])
+            for k, _ in sorted_items[:to_remove]:
+                _memory_cache.pop(k, None)
+                _memory_expiry.pop(k, None)
+    
     @staticmethod
     async def delete(
         data_type: str,
@@ -358,98 +366,313 @@ class CacheManager:
     @staticmethod
     async def invalidate(
         tenant_id: str,
-        data_type: Optional[str] = None,
+        data_type: str,
+        resource_id: Optional[str] = None,
         agent_id: Optional[str] = None,
         conversation_id: Optional[str] = None,
-        collection_id: Optional[str] = None
+        collection_id: Optional[str] = None,
     ) -> int:
         """
-        Invalida selectivamente la caché según criterios.
-        
-        Args:
-            tenant_id: ID del tenant (obligatorio)
-            data_type, agent_id, etc.: Filtros opcionales
-            
-        Returns:
-            int: Número de claves invalidadas
+        Elimina entradas de caché de Redis y memoria según patrón.
         """
-        # 1. Limpiar memoria
-        keys_to_delete = []
-        for key in list(_memory_cache.keys()):
-            parts = key.split(':')
-            
-            # Verificar tenant_id (siempre debe coincidir)
-            if parts[0] != tenant_id:
-                continue
-                
-            # Verificar data_type si se especifica
-            if data_type is not None and parts[1] != data_type:
-                continue
-                
-            # Verificar componentes contextuales
-            if agent_id is not None and f"agent:{agent_id}" not in key:
-                continue
-                
-            if conversation_id is not None and f"conv:{conversation_id}" not in key:
-                continue
-                
-            if collection_id is not None and f"coll:{collection_id}" not in key:
-                continue
-                
-            keys_to_delete.append(key)
-        
-        # Eliminar de memoria
-        for key in keys_to_delete:
-            if key in _memory_cache:
-                del _memory_cache[key]
-            if key in _memory_expiry:
-                del _memory_expiry[key]
-        
-        # 2. Construir patrón para Redis
+        pattern = CacheManager._build_key(
+            data_type,
+            resource_id or "*",
+            tenant_id,
+            agent_id,
+            conversation_id,
+            collection_id
+        )
         redis_client = await get_redis_client()
         if not redis_client:
-            return len(keys_to_delete)
-            
-        pattern_parts = [tenant_id]
-        
-        if data_type:
-            pattern_parts.append(data_type)
-        else:
-            pattern_parts.append("*")
-        
-        if agent_id:
-            pattern_parts.append(f"*agent:{agent_id}*")
-        
-        if conversation_id:
-            pattern_parts.append(f"*conv:{conversation_id}*")
-        
-        if collection_id:
-            pattern_parts.append(f"*coll:{collection_id}*")
-        
-        pattern = ":".join(pattern_parts)
-        
-        # 3. Eliminar usando scan + delete para evitar bloqueos
+            return 0
+        total_deleted = 0
         try:
-            cursor = "0"
-            deleted_count = 0
-            
-            while cursor:
+            cursor = 0
+            while True:
                 cursor, keys = await redis_client.scan(cursor=cursor, match=pattern, count=100)
-                
                 if keys:
-                    deleted_count += await redis_client.delete(*keys)
-                    
-                if cursor == "0":
+                    await redis_client.delete(*keys)
+                    total_deleted += len(keys)
+                if cursor == 0:
                     break
-            
-            total_deleted = len(keys_to_delete) + deleted_count
-            logger.info(f"Caché invalidada: {len(keys_to_delete)} en memoria, {deleted_count} en Redis")
-            return total_deleted
-            
         except Exception as e:
-            logger.warning(f"Error al invalidar caché con patrón {pattern}: {e}")
-            return len(keys_to_delete)
+            logger.error(f"Error invalidando caché con patrón {pattern}: {e}")
+        to_remove = [k for k in _memory_cache if k.startswith(pattern.rstrip("*"))]
+        for k in to_remove:
+            _memory_cache.pop(k, None)
+            _memory_expiry.pop(k, None)
+        return total_deleted
     
+    @staticmethod
+    async def invalidate_agent_complete(tenant_id: str, agent_id: str) -> int:
+        """
+        Invalida todas las cachés relacionadas con un agente.
+        """
+        total_deleted = 0
+        try:
+            total_deleted += await CacheManager.invalidate(
+                tenant_id=tenant_id,
+                data_type="agent_config",
+                agent_id=agent_id,
+            )
+            total_deleted += await CacheManager.invalidate(
+                tenant_id=tenant_id,
+                data_type="agent_response",
+                agent_id=agent_id,
+            )
+            total_deleted += await CacheManager.invalidate(
+                tenant_id=tenant_id,
+                data_type="conversation_messages",
+                agent_id=agent_id,
+            )
+            total_deleted += await CacheManager.invalidate(
+                tenant_id=tenant_id,
+                data_type="agent_stats",
+                agent_id=agent_id,
+            )
+            logger.info(f"Caché completa de agente {agent_id} invalidada: {total_deleted} entradas")
+        except Exception as e:
+            logger.error(f"Error invalidando caché completa de agente: {str(e)}")
+        return total_deleted
+    
+    @staticmethod
+    async def invalidate_collection_complete(tenant_id: str, collection_id: str) -> int:
+        """
+        Invalida todas las cachés relacionadas con una colección.
+        """
+        total_deleted = 0
+        try:
+            total_deleted += await CacheManager.invalidate(
+                tenant_id=tenant_id,
+                data_type="vector_store",
+                collection_id=collection_id,
+            )
+            total_deleted += await CacheManager.invalidate(
+                tenant_id=tenant_id,
+                data_type="query_result",
+                collection_id=collection_id,
+            )
+            total_deleted += await CacheManager.invalidate(
+                tenant_id=tenant_id,
+                data_type="collection_stats",
+                collection_id=collection_id,
+            )
+            logger.info(f"Caché completa de colección {collection_id} invalidada: {total_deleted} entradas")
+        except Exception as e:
+            logger.error(f"Error invalidando caché completa de colección: {str(e)}")
+        return total_deleted
+    
+    @staticmethod
+    async def get_embedding(text: str, model_name: str, tenant_id: Optional[str] = None, agent_id: Optional[str] = None) -> Optional[List[float]]:
+        """
+        Obtiene un embedding vectorial almacenado en caché.
+        """
+        text_hash = generate_hash(text)
+        resource_id = f"{model_name}:{text_hash}"
+        return await CacheManager.get(
+            data_type="embedding",
+            resource_id=resource_id,
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+        )
+    
+    @staticmethod
+    async def set_embedding(text: str, embedding: List[float], model_name: str, tenant_id: Optional[str] = None, agent_id: Optional[str] = None) -> bool:
+        """
+        Almacena un embedding en la caché con TTL estándar para embeddings.
+        """
+        text_hash = generate_hash(text)
+        resource_id = f"{model_name}:{text_hash}"
+        return await CacheManager.set(
+            data_type="embedding",
+            resource_id=resource_id,
+            value=embedding,
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            ttl=TTL_LONG,
+        )
+    
+    @staticmethod
+    async def get_query_result(query: str, collection_id: str, tenant_id: Optional[str] = None, agent_id: Optional[str] = None, similarity_top_k: int = 4, response_mode: str = "compact") -> Optional[Dict[str, Any]]:
+        """
+        Obtiene el resultado de una consulta de la caché.
+        """
+        params_hash = generate_hash(f"{similarity_top_k}:{response_mode}")
+        query_hash = generate_hash(query)
+        resource_id = f"{query_hash}:{params_hash}"
+        return await CacheManager.get(
+            data_type="query_result",
+            resource_id=resource_id,
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            collection_id=collection_id,
+        )
+    
+    @staticmethod
+    async def set_query_result(query: str, result: Dict[str, Any], collection_id: str, tenant_id: Optional[str] = None, agent_id: Optional[str] = None, similarity_top_k: int = 4, response_mode: str = "compact") -> bool:
+        """
+        Almacena el resultado de una consulta en la caché con TTL estándar para consultas.
+        """
+        params_hash = generate_hash(f"{similarity_top_k}:{response_mode}")
+        query_hash = generate_hash(query)
+        resource_id = f"{query_hash}:{params_hash}"
+        return await CacheManager.set(
+            data_type="query_result",
+            resource_id=resource_id,
+            value=result,
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            collection_id=collection_id,
+            ttl=TTL_MEDIUM,
+        )
+    
+    @staticmethod
+    async def get_agent_config(
+        agent_id: str,
+        tenant_id: Optional[str] = None,
+        use_memory: bool = True
+    ) -> Optional[Any]:
+        """
+        Obtiene la configuración del agente desde cache.
+        """
+        tenant_id = tenant_id or get_current_tenant_id()
+        resource_id = f"agent_config:{agent_id}"
+        return await CacheManager.get(
+            data_type="agent_config",
+            resource_id=resource_id,
+            tenant_id=tenant_id,
+            use_memory=use_memory
+        )
+
+    @staticmethod
+    async def set_agent_config(
+        agent_id: str,
+        config: Any,
+        tenant_id: Optional[str] = None,
+        ttl: int = TTL_MEDIUM,
+        use_memory: bool = True
+    ) -> bool:
+        """
+        Guarda la configuración del agente en cache.
+        """
+        tenant_id = tenant_id or get_current_tenant_id()
+        resource_id = f"agent_config:{agent_id}"
+        return await CacheManager.set(
+            data_type="agent_config",
+            resource_id=resource_id,
+            value=config,
+            tenant_id=tenant_id,
+            ttl=ttl,
+            use_memory=use_memory
+        )
+
+    @staticmethod
+    async def get_agent_response(
+        agent_id: str,
+        query: str,
+        tenant_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        use_memory: bool = True
+    ) -> Optional[Any]:
+        """
+        Obtiene una respuesta de agente cacheada.
+        """
+        tenant_id = tenant_id or get_current_tenant_id()
+        conversation_id = conversation_id or get_current_conversation_id()
+        query_hash = generate_hash(query)
+        resource_id = f"{agent_id}:{conversation_id}:{query_hash}"
+        return await CacheManager.get(
+            data_type="agent_response",
+            resource_id=resource_id,
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+            use_memory=use_memory
+        )
+    
+    @staticmethod
+    async def set_agent_response(
+        agent_id: str,
+        query: str,
+        response: Any,
+        tenant_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        ttl: int = TTL_MEDIUM,
+        use_memory: bool = True
+    ) -> bool:
+        """
+        Guarda una respuesta de agente en cache.
+        """
+        tenant_id = tenant_id or get_current_tenant_id()
+        conversation_id = conversation_id or get_current_conversation_id()
+        query_hash = generate_hash(query)
+        resource_id = f"{agent_id}:{conversation_id}:{query_hash}"
+        return await CacheManager.set(
+            data_type="agent_response",
+            resource_id=resource_id,
+            value=response,
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+            ttl=ttl,
+            use_memory=use_memory
+        )
+    
+    @staticmethod
+    async def get_conversation_messages(
+        conversation_id: str,
+        tenant_id: Optional[str] = None,
+        agent_id: Optional[str] = None
+    ) -> Optional[List[Dict[str, Any]]]:
+        """
+        Obtiene los mensajes de una conversación de la caché.
+        
+        Args:
+            conversation_id: ID de la conversación
+            tenant_id, agent_id: Contexto opcional
+            
+        Returns:
+            Optional[List[Dict[str, Any]]]: Lista de mensajes o None
+        """
+        return await CacheManager.get(
+            data_type="conversation_messages",
+            resource_id=conversation_id,
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            conversation_id=conversation_id
+        )
+    
+    @staticmethod
+    async def set_conversation_messages(
+        conversation_id: str,
+        messages: List[Dict[str, Any]],
+        tenant_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        ttl: int = TTL_MEDIUM
+    ) -> bool:
+        """
+        Almacena los mensajes de una conversación en la caché.
+        
+        Args:
+            conversation_id: ID de la conversación
+            messages: Lista de mensajes a almacenar
+            tenant_id, agent_id: Contexto opcional
+            ttl: Tiempo de vida en segundos
+            
+        Returns:
+            bool: True si se guardó correctamente
+        """
+        return await CacheManager.set(
+            data_type="conversation_messages",
+            resource_id=conversation_id,
+            value=messages,
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+            ttl=ttl
+        )
+
     @staticmethod
     async def increment_counter(
         scope: str,
@@ -597,339 +820,3 @@ class CacheManager:
         except Exception as e:
             logger.warning(f"Error al hacer lpop en Redis lista {queue_name}: {e}")
             return None
-
-    # === API ESPECIALIZADA PARA CASOS DE USO ESPECÍFICOS ===
-    
-    # --- EMBEDDINGS ---
-    
-    @staticmethod
-    async def get_embedding(
-        text: str,
-        model_name: str,
-        tenant_id: Optional[str] = None,
-        agent_id: Optional[str] = None
-    ) -> Optional[List[float]]:
-        """
-        Obtiene un embedding vectorial almacenado en caché.
-        
-        Args:
-            text: Texto original
-            model_name: Nombre del modelo de embedding
-            tenant_id, agent_id: Contexto opcional
-            
-        Returns:
-            Optional[List[float]]: Vector de embedding o None
-        """
-        text_hash = generate_hash(text)
-        resource_id = f"{model_name}:{text_hash}"
-        
-        return await CacheManager.get(
-            data_type="embedding",
-            resource_id=resource_id,
-            tenant_id=tenant_id,
-            agent_id=agent_id
-        )
-    
-    @staticmethod
-    async def get_embeddings_batch(
-        texts: List[str],
-        model_name: str,
-        tenant_id: Optional[str] = None
-    ) -> Dict[int, List[float]]:
-        """
-        Obtiene embeddings para un lote de textos desde la caché.
-        
-        Args:
-            texts: Lista de textos
-            model_name: Nombre del modelo
-            tenant_id: ID del tenant
-            
-        Returns:
-            Dict[int, List[float]]: Diccionario {índice: embedding}
-        """
-        cached_embeddings = {}
-        
-        for i, text in enumerate(texts):
-            if not text.strip():
-                continue
-                
-            embedding = await CacheManager.get_embedding(
-                text, model_name, tenant_id)
-                
-            if embedding:
-                cached_embeddings[i] = embedding
-                
-        return cached_embeddings
-    
-    @staticmethod
-    async def set_embedding(
-        text: str,
-        embedding: List[float],
-        model_name: str,
-        tenant_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
-        ttl: int = 86400  # 24 horas
-    ) -> bool:
-        """
-        Almacena un embedding en la caché.
-        
-        Args:
-            text: Texto original
-            embedding: Vector de embedding
-            model_name: Nombre del modelo
-            tenant_id, agent_id: Contexto opcional
-            ttl: Tiempo de vida en segundos
-            
-        Returns:
-            bool: True si se guardó correctamente
-        """
-        text_hash = generate_hash(text)
-        resource_id = f"{model_name}:{text_hash}"
-        
-        return await CacheManager.set(
-            data_type="embedding",
-            resource_id=resource_id,
-            value=embedding,
-            tenant_id=tenant_id,
-            agent_id=agent_id,
-            ttl=ttl
-        )
-    
-    # --- QUERY RESULTS ---
-    
-    @staticmethod
-    async def get_query_result(
-        query: str,
-        collection_id: str,
-        tenant_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
-        similarity_top_k: int = 4,
-        response_mode: str = "compact"
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Obtiene el resultado de una consulta de la caché.
-        
-        Args:
-            query: Texto de la consulta
-            collection_id: ID de la colección
-            tenant_id, agent_id: Contexto opcional
-            similarity_top_k, response_mode: Parámetros para cache key
-            
-        Returns:
-            Optional[Dict[str, Any]]: Resultado de la consulta o None
-        """
-        # Incluir parámetros en el hash para diferenciar resultados
-        params_hash = generate_hash(f"{similarity_top_k}:{response_mode}")
-        query_hash = generate_hash(query)
-        resource_id = f"{query_hash}:{params_hash}"
-        
-        return await CacheManager.get(
-            data_type="query_result",
-            resource_id=resource_id,
-            tenant_id=tenant_id,
-            agent_id=agent_id,
-            collection_id=collection_id
-        )
-    
-    @staticmethod
-    async def set_query_result(
-        query: str,
-        result: Dict[str, Any],
-        collection_id: str,
-        tenant_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
-        similarity_top_k: int = 4,
-        response_mode: str = "compact",
-        ttl: int = 3600  # 1 hora
-    ) -> bool:
-        """
-        Almacena el resultado de una consulta en la caché.
-        
-        Args:
-            query: Texto de la consulta
-            result: Resultado a almacenar
-            collection_id: ID de la colección
-            tenant_id, agent_id: Contexto opcional
-            similarity_top_k, response_mode: Parámetros para cache key
-            ttl: Tiempo de vida en segundos
-            
-        Returns:
-            bool: True si se guardó correctamente
-        """
-        params_hash = generate_hash(f"{similarity_top_k}:{response_mode}")
-        query_hash = generate_hash(query)
-        resource_id = f"{query_hash}:{params_hash}"
-        
-        return await CacheManager.set(
-            data_type="query_result",
-            resource_id=resource_id,
-            value=result,
-            tenant_id=tenant_id,
-            agent_id=agent_id,
-            collection_id=collection_id,
-            ttl=ttl
-        )
-    
-    # --- AGENT CONFIGURATIONS ---
-    
-    @staticmethod
-    async def get_agent_config(
-        agent_id: str,
-        tenant_id: Optional[str] = None,
-        use_memory: bool = True
-    ) -> Optional[Any]:
-        """
-        Obtiene la configuración del agente desde cache.
-        """
-        tenant_id = tenant_id or get_current_tenant_id()
-        resource_id = f"agent_config:{agent_id}"
-        return await CacheManager.get(
-            data_type="agent_config",
-            resource_id=resource_id,
-            tenant_id=tenant_id,
-            use_memory=use_memory
-        )
-
-    @staticmethod
-    async def set_agent_config(
-        agent_id: str,
-        config: Any,
-        tenant_id: Optional[str] = None,
-        ttl: int = _settings_ttl,
-        use_memory: bool = True
-    ) -> bool:
-        """
-        Guarda la configuración del agente en cache.
-        """
-        tenant_id = tenant_id or get_current_tenant_id()
-        resource_id = f"agent_config:{agent_id}"
-        return await CacheManager.set(
-            data_type="agent_config",
-            resource_id=resource_id,
-            value=config,
-            tenant_id=tenant_id,
-            ttl=ttl,
-            use_memory=use_memory
-        )
-
-    # --- AGENT RESPONSES ---
-    
-    @staticmethod
-    async def get_agent_response(
-        agent_id: str,
-        query: str,
-        tenant_id: Optional[str] = None,
-        conversation_id: Optional[str] = None,
-        use_memory: bool = True
-    ) -> Optional[Any]:
-        """
-        Obtiene una respuesta de agente cacheada.
-        """
-        tenant_id = tenant_id or get_current_tenant_id()
-        conversation_id = conversation_id or get_current_conversation_id()
-        query_hash = generate_hash(query)
-        resource_id = f"{agent_id}:{conversation_id}:{query_hash}"
-        return await CacheManager.get(
-            data_type="agent_response",
-            resource_id=resource_id,
-            tenant_id=tenant_id,
-            agent_id=agent_id,
-            conversation_id=conversation_id,
-            use_memory=use_memory
-        )
-    
-    @staticmethod
-    async def set_agent_response(
-        agent_id: str,
-        query: str,
-        response: Any,
-        tenant_id: Optional[str] = None,
-        conversation_id: Optional[str] = None,
-        ttl: int = _settings_ttl,
-        use_memory: bool = True
-    ) -> bool:
-        """
-        Guarda una respuesta de agente en cache.
-        """
-        tenant_id = tenant_id or get_current_tenant_id()
-        conversation_id = conversation_id or get_current_conversation_id()
-        query_hash = generate_hash(query)
-        resource_id = f"{agent_id}:{conversation_id}:{query_hash}"
-        return await CacheManager.set(
-            data_type="agent_response",
-            resource_id=resource_id,
-            value=response,
-            tenant_id=tenant_id,
-            agent_id=agent_id,
-            conversation_id=conversation_id,
-            ttl=ttl,
-            use_memory=use_memory
-        )
-    
-    # --- CONVERSATION HISTORY ---
-    
-    @staticmethod
-    async def get_conversation_messages(
-        conversation_id: str,
-        tenant_id: Optional[str] = None,
-        agent_id: Optional[str] = None
-    ) -> Optional[List[Dict[str, Any]]]:
-        """
-        Obtiene los mensajes de una conversación de la caché.
-        
-        Args:
-            conversation_id: ID de la conversación
-            tenant_id, agent_id: Contexto opcional
-            
-        Returns:
-            Optional[List[Dict[str, Any]]]: Lista de mensajes o None
-        """
-        return await CacheManager.get(
-            data_type="conversation_messages",
-            resource_id=conversation_id,
-            tenant_id=tenant_id,
-            agent_id=agent_id,
-            conversation_id=conversation_id
-        )
-    
-    @staticmethod
-    async def set_conversation_messages(
-        conversation_id: str,
-        messages: List[Dict[str, Any]],
-        tenant_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
-        ttl: int = 3600  # 1 hora
-    ) -> bool:
-        """
-        Almacena los mensajes de una conversación en la caché.
-        
-        Args:
-            conversation_id: ID de la conversación
-            messages: Lista de mensajes a almacenar
-            tenant_id, agent_id: Contexto opcional
-            ttl: Tiempo de vida en segundos
-            
-        Returns:
-            bool: True si se guardó correctamente
-        """
-        return await CacheManager.set(
-            data_type="conversation_messages",
-            resource_id=conversation_id,
-            value=messages,
-            tenant_id=tenant_id,
-            agent_id=agent_id,
-            conversation_id=conversation_id,
-            ttl=ttl
-        )
-
-class AgentMemory:
-    """Stub de memoria de agente para compatibilidad, previo a refactor."""
-    def __init__(self, tenant_id: str, agent_id: str, conversation_id: str,
-                 user_id: Optional[str] = None, session_id: Optional[str] = None):
-        pass
-    async def register_collection(self, collection_id: str) -> None:
-        pass
-    async def get_conversation_history(self) -> List[Any]:
-        return []
-    async def add_message(self, message: Any) -> None:
-        pass

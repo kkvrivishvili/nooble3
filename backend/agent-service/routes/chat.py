@@ -12,8 +12,7 @@ from common.context import with_context, ContextManager, set_current_conversatio
 from common.auth import verify_tenant
 from common.db.rpc import create_conversation, add_chat_history
 from common.tracking import track_query
-from common.cache.contextual import invalidate_cache_hierarchy
-from common.cache.counters import invalidate_conversation_cache
+from common.cache.manager import CacheManager
 
 from services.agent_executor import execute_agent, stream_agent_response
 
@@ -132,9 +131,17 @@ async def chat_with_agent(
     # Verificar si la conversación está terminando
     if request.metadata and request.metadata.get("end_conversation"):
         background_tasks.add_task(
-            invalidate_conversation_cache,
+            CacheManager.invalidate,
             tenant_id=tenant_id,
+            data_type="agent_response",
             agent_id=agent_id, 
+            conversation_id=conversation_id
+        )
+        background_tasks.add_task(
+            CacheManager.invalidate,
+            tenant_id=tenant_id,
+            data_type="conversation_messages",
+            agent_id=agent_id,
             conversation_id=conversation_id
         )
     
@@ -211,16 +218,16 @@ async def end_conversation(
         .eq("id", conversation_id) \
         .execute()
     
-    # Invalidar caché para esta conversación
-    await invalidate_cache_hierarchy(
+    # Invalidar caché para respuestas y mensajes de esta conversación
+    await CacheManager.invalidate(
         tenant_id=tenant_id,
-        agent_id=agent_id, 
+        data_type="agent_response",
+        agent_id=agent_id,
         conversation_id=conversation_id
     )
-    
-    # También usar la función específica para invalidar caché de conversación
-    await invalidate_conversation_cache(
+    await CacheManager.invalidate(
         tenant_id=tenant_id,
+        data_type="conversation_messages",
         agent_id=agent_id,
         conversation_id=conversation_id
     )

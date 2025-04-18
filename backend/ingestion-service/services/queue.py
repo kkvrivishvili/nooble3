@@ -9,7 +9,7 @@ import uuid
 import asyncio
 from typing import Dict, Any, Optional, List
 
-from common.cache.manager import get_redis_client, CacheManager
+from common.cache.manager import CacheManager
 from common.errors import ServiceError, DocumentProcessingError
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name

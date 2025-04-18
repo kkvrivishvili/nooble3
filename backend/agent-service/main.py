@@ -11,7 +11,7 @@ from common.utils.logging import init_logging
 from common.context import Context
 from common.db.supabase import init_supabase
 from common.swagger import configure_swagger_ui, add_example_to_endpoint
-from common.cache.redis import get_redis_client
+from common.cache.manager import CacheManager
 from common.utils.rate_limiting import setup_rate_limiting
 from common.utils.http import check_service_health
 
@@ -36,12 +36,12 @@ async def lifespan(app: FastAPI):
         # Inicializar Supabase
         init_supabase()
         
-        # Verificar conexión a Redis para caché
-        redis = await get_redis_client()
-        if redis:
-            logger.info("Conexión a Redis establecida correctamente")
+        # Inicializar sistema de caché
+        cache_ready = await CacheManager.initialize()
+        if cache_ready:
+            logger.info("CacheManager inicializado correctamente")
         else:
-            logger.warning("No se pudo conectar a Redis - servicio funcionará sin caché")
+            logger.warning("CacheManager no disponible - servicio funcionará sin caché")
         
         # Inicializar cliente HTTP
         http_client = httpx.AsyncClient(timeout=30.0)

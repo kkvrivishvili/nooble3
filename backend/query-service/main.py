@@ -12,7 +12,7 @@ from common.utils.logging import init_logging
 from common.context import Context
 from common.db.supabase import init_supabase
 from common.swagger import configure_swagger_ui
-from common.cache.redis import get_redis_client
+from common.cache.manager import CacheManager
 from common.utils.rate_limiting import setup_rate_limiting
 
 # Importar rutas
@@ -38,12 +38,13 @@ async def lifespan(app: FastAPI):
         # Inicializar Supabase
         init_supabase()
         
-        # Verificar conexión a Redis para caché
-        redis = await get_redis_client()
-        if redis:
-            logger.info("Conexión a Redis establecida correctamente")
-        else:
-            logger.warning("No se pudo conectar a Redis - servicio funcionará sin caché")
+        # Verificar conexión al sistema de caché unificado
+        try:
+            await CacheManager.get(data_type="system", resource_id="health_check")
+            logger.info("Conexión a Cache establecida correctamente")
+        except Exception as e:
+            logger.warning(f"Cache no disponible: {e}")
+            logger.warning("Servicio funcionará sin caché")
         
         # Establecer contexto de servicio estándar
         async with Context(tenant_id=settings.default_tenant_id):

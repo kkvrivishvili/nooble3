@@ -9,8 +9,7 @@ from common.context import with_context
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
 from common.auth import verify_tenant
-from common.cache.counters import invalidate_conversation_cache
-from common.cache.contextual import invalidate_cache_hierarchy
+from common.cache.manager import CacheManager
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -246,15 +245,15 @@ async def delete_conversation(
             )
         
         # Invalidar caché para esta conversación
-        await invalidate_cache_hierarchy(
+        await CacheManager.invalidate(
             tenant_id=tenant_id,
+            data_type="agent_response",
             agent_id=agent_id,
             conversation_id=conversation_id
         )
-        
-        # También usar la función específica para invalidar caché de conversación
-        await invalidate_conversation_cache(
+        await CacheManager.invalidate(
             tenant_id=tenant_id,
+            data_type="conversation_messages",
             agent_id=agent_id,
             conversation_id=conversation_id
         )
@@ -324,16 +323,16 @@ async def end_conversation(
                 error_code="UPDATE_FAILED"
             )
         
-        # Invalidar caché para esta conversación
-        await invalidate_cache_hierarchy(
+        # Invalidar caché de respuestas y mensajes de esta conversación
+        await CacheManager.invalidate(
             tenant_id=tenant_id,
+            data_type="agent_response",
             agent_id=agent_id,
             conversation_id=conversation_id
         )
-        
-        # También usar la función específica para invalidar caché de conversación
-        await invalidate_conversation_cache(
+        await CacheManager.invalidate(
             tenant_id=tenant_id,
+            data_type="conversation_messages",
             agent_id=agent_id,
             conversation_id=conversation_id
         )

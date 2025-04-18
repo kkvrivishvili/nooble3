@@ -15,7 +15,7 @@ from common.config import get_settings
 from common.utils.http import check_service_health
 
 # Importación para verificación de salud
-from common.cache.redis import get_redis_client
+from common.cache.manager import CacheManager
 from common.db.supabase import get_supabase_client
 
 router = APIRouter()
@@ -44,12 +44,12 @@ async def health_check():
     settings = get_settings()
     
     # Verificar conexiones
-    redis_available = await check_redis_connection()
+    cache_available = await check_cache_connection()
     supabase_available = await check_supabase_connection()
     
     # Determinar estado general
     status = "healthy"
-    if not redis_available or not supabase_available:
+    if not cache_available or not supabase_available:
         status = "degraded"
     
     # Construir respuesta
@@ -58,8 +58,8 @@ async def health_check():
         message="Servicio en funcionamiento",
         status=status,
         components={
-            "redis": "available" if redis_available else "unavailable",
-            "database": "available" if supabase_available else "unavailable",
+            "cache": "available" if cache_available else "unavailable",
+            "supabase": "available" if supabase_available else "unavailable",
         },
         version=settings.service_version
     )
@@ -88,7 +88,7 @@ async def service_status():
     uptime_formatted = str(timedelta(seconds=int(uptime_seconds)))
     
     # Verificar el estado de las dependencias
-    redis_available = await check_redis_connection()
+    cache_available = await check_cache_connection()
     supabase_available = await check_supabase_connection()
     
     # Verificar servicios externos
@@ -96,7 +96,7 @@ async def service_status():
     
     # Determinar el estado general del servicio
     status = "healthy"
-    if not redis_available or not supabase_available:
+    if not cache_available or not supabase_available:
         status = "degraded"
     if not embedding_service_available:
         status = "limited"
@@ -111,31 +111,29 @@ async def service_status():
         uptime_formatted=uptime_formatted,
         status=status,
         components={
-            "redis": "available" if redis_available else "unavailable",
+            "cache": "available" if cache_available else "unavailable",
             "supabase": "available" if supabase_available else "unavailable",
             "embedding_service": "available" if embedding_service_available else "unavailable"
         },
         dependencies={
-            "redis": redis_available,
+            "cache": cache_available,
             "supabase": supabase_available,
             "embedding_service": embedding_service_available
         }
     )
 
-async def check_redis_connection() -> bool:
+async def check_cache_connection() -> bool:
     """
-    Verifica la disponibilidad de la conexión con Redis.
+    Verifica la disponibilidad del sistema de caché unificado.
     
     Returns:
-        bool: True si la conexión está disponible, False en caso contrario
+        bool: True si caché disponible, False en caso contrario
     """
     try:
-        redis_client = await get_redis_client()
-        if not redis_client:
-            return False
-        return await redis_client.ping()
+        await CacheManager.get(data_type="system", resource_id="health_check")
+        return True
     except Exception as e:
-        logger.error(f"Error al verificar conexión con Redis: {str(e)}")
+        logger.error(f"Error al verificar caché: {e}")
         return False
 
 async def check_supabase_connection() -> bool:
