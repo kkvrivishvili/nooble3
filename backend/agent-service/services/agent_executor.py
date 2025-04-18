@@ -8,9 +8,8 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.tools import Tool
 from langchain_core.callbacks import CallbackManager
 from langchain_core.runnables import RunnableConfig
+from langchain_core.agents import AgentExecutor, create_tool_calling_agent
 from langchain_openai import ChatOpenAI
-from langchain.agents import AgentExecutor, create_tool_calling_agent
-
 from common.config import get_settings
 from common.context import ContextManager, with_context
 from common.errors import (
@@ -22,8 +21,8 @@ from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
 from common.llm.token_counters import count_tokens
 from common.tracking import track_token_usage, track_usage
-from common.llm.streaming import stream_llm_response
 from common.cache.manager import CacheManager
+from common.utils.stream import stream_llm_response
 
 from services.callbacks import AgentCallbackHandler, StreamingCallbackHandler
 from services.tools import create_agent_tools
@@ -336,7 +335,7 @@ async def stream_agent_response(
         await context_manager.add_user_message(query)
         
         # Obtener configuración del agente
-        agent_config = await context_manager.get_agent_config()
+        agent_config = await get_agent_config(agent_id, tenant_id)
         
         # Crear un StreamingCallbackHandler
         streaming_handler = StreamingCallbackHandler()
@@ -353,7 +352,8 @@ async def stream_agent_response(
             conversation_id=conversation_id,
             model_name=agent_config.get("llm_model", settings.default_llm_model),
             system_prompt=agent_config.get("system_prompt"),
-            use_cache=True
+            use_cache=True,
+            stream_handler=streaming_handler
         ):
             try:
                 # Acumular respuesta completa

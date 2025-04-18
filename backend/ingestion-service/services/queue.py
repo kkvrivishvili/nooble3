@@ -181,10 +181,12 @@ async def check_stuck_jobs():
             
             # NUEVO: Verificar si existe un bloqueo para este trabajo
             lock_key = f"{JOB_LOCK_PREFIX}{job_id}"
-            lock_exists = await CacheManager.exists(
+            # Verificar bloqueo usando CacheManager.get en lugar de exists
+            val = await CacheManager.get(
                 data_type="system",
                 resource_id=lock_key
             )
+            lock_exists = val is not None
             
             # Si el bloqueo no existe o ha expirado, el trabajo probablemente está estancado
             if not lock_exists:
