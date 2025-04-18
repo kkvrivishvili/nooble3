@@ -76,20 +76,6 @@ async def create_conversation(
                 error_code="CONVERSATION_CREATION_ERROR"
             )
         
-        # Guardar en caché si es posible
-        try:
-            from ..cache.conversation import cache_conversation
-            await cache_conversation(
-                conversation_id=result.data["conversation_id"],
-                agent_id=agent_id,
-                owner_tenant_id=tenant_id,
-                title=title,
-                is_public=False
-            )
-        except ImportError:
-            # No es crítico si la caché no está disponible
-            pass
-        
         return result.data
     except Exception as e:
         if not isinstance(e, ServiceError):
@@ -143,20 +129,6 @@ async def add_chat_message(
                 message=f"Error adding chat message: {result.error.message}",
                 error_code="MESSAGE_CREATION_ERROR"
             )
-        
-        # Almacenar también en caché si está disponible
-        try:
-            from ..cache.conversation import cache_message
-            await cache_message(
-                conversation_id=conversation_id,
-                message_id=result.data["message_id"],
-                role=role,
-                content=content,
-                metadata=metadata
-            )
-        except ImportError:
-            # No es crítico si la caché no está disponible
-            pass
         
         return result.data
     except Exception as e:
@@ -226,33 +198,6 @@ async def add_chat_history(
                 message=f"Error adding chat history: {result.error.message}",
                 error_code="CHAT_HISTORY_CREATION_ERROR" 
             )
-        
-        # Almacenar también en caché de forma individual si está disponible
-        try:
-            from ..cache.conversation import cache_message
-            # Usuario
-            await cache_message(
-                conversation_id=conversation_id,
-                message_id=result.data["user_message_id"],
-                role="user",
-                content=user_message,
-                metadata={"part": "user"}
-            )
-            # Asistente
-            await cache_message(
-                conversation_id=conversation_id,
-                message_id=result.data["assistant_message_id"],
-                role="assistant",
-                content=assistant_message,
-                metadata={
-                    "part": "assistant",
-                    "thinking": thinking,
-                    "tools": tools_used
-                }
-            )
-        except ImportError:
-            # No es crítico si la caché no está disponible
-            pass
         
         return result.data
     except Exception as e:

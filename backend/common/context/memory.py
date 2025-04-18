@@ -8,7 +8,7 @@ import uuid
 import logging
 from typing import Dict, Any, List, Optional, Set, Union
 
-from ..cache.contextual import AgentMemory
+from common.cache.manager import AgentMemory
 
 logger = logging.getLogger(__name__)
 

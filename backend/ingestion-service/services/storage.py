@@ -54,7 +54,6 @@ async def update_document_status(
             return False
         
         # Actualizar caché si se actualizó correctamente
-        cache_key = f"document:{tenant_id}:{document_id}"
         try:
             # Intentar actualizar en caché para futuras consultas
             await CacheManager.delete(
@@ -126,8 +125,6 @@ async def update_processing_job(
         
         # Actualizar caché para futura referencia rápida
         try:
-            cache_key = f"job:{tenant_id}:{job_id}"
-            
             # Guardar/actualizar el estado en caché para consultas rápidas
             await CacheManager.set(
                 data_type="job_status",
