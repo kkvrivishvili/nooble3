@@ -34,15 +34,17 @@ settings = get_settings()
 async def get_agent_config(agent_id: str, tenant_id: str) -> Dict[str, Any]:
     """Obtiene la configuración de un agente desde Supabase."""
     
-    # Verificar caché primero
-    cached_config = await CacheManager.get_agent_config(
-        agent_id=agent_id,
-        tenant_id=tenant_id
-    )
-    
-    if cached_config:
-        logger.debug(f"Configuración de agente {agent_id} obtenida de caché")
-        return cached_config
+    # Verificar caché primero con manejo de errores
+    try:
+        cached_config = await CacheManager.get_agent_config(
+            agent_id=agent_id,
+            tenant_id=tenant_id
+        )
+        if cached_config:
+            logger.debug(f"Configuración de agente {agent_id} obtenida de caché")
+            return cached_config
+    except Exception as cache_err:
+        logger.debug(f"Error accediendo a caché de agente: {str(cache_err)}")
     
     # Si no está en caché, obtener de Supabase
     supabase = get_supabase_client()
@@ -71,12 +73,15 @@ async def get_agent_config(agent_id: str, tenant_id: str) -> Dict[str, Any]:
         )
     
     # Guardar en caché para futuros usos (TTL de 5 minutos)
-    await CacheManager.set_agent_config(
-        agent_id=agent_id,
-        config=result.data,
-        tenant_id=tenant_id,
-        ttl=300
-    )
+    try:
+        await CacheManager.set_agent_config(
+            agent_id=agent_id,
+            config=result.data,
+            tenant_id=tenant_id,
+            ttl=300
+        )
+    except Exception as cache_set_err:
+        logger.debug(f"Error guardando configuración en caché: {str(cache_set_err)}")
     
     return result.data
 
@@ -109,12 +114,16 @@ async def execute_agent(
     await context_manager.add_user_message(query, metadata=context)
     
     # Verificar caché para esta consulta específica
-    cached_response = await CacheManager.get_agent_response(
-        agent_id=agent_id,
-        query=query,  # La función se encarga de generar el hash
-        tenant_id=tenant_id,
-        conversation_id=conversation_id
-    )
+    try:
+        cached_response = await CacheManager.get_agent_response(
+            agent_id=agent_id,
+            query=query,  # La función se encarga de generar el hash
+            tenant_id=tenant_id,
+            conversation_id=conversation_id
+        )
+    except Exception as cache_err:
+        logger.debug(f"Error accediendo a caché de respuesta: {str(cache_err)}")
+        cached_response = None
     
     if cached_response and not streaming:
         logger.info(f"Respuesta obtenida de caché para conversación {conversation_id}")
@@ -271,14 +280,17 @@ async def execute_agent(
         
         # Guardar en caché para futuras consultas idénticas
         if not streaming and "error" not in agent_response:
-            await CacheManager.set_agent_response(
-                agent_id=agent_id,
-                query=query,
-                response=agent_response,
-                tenant_id=tenant_id,
-                conversation_id=conversation_id,
-                ttl=TTL_MEDIUM
-            )
+            try:
+                await CacheManager.set_agent_response(
+                    agent_id=agent_id,
+                    query=query,
+                    response=agent_response,
+                    tenant_id=tenant_id,
+                    conversation_id=conversation_id,
+                    ttl=TTL_MEDIUM
+                )
+            except Exception as cache_set_err:
+                logger.debug(f"Error guardando respuesta en caché: {str(cache_set_err)}")
     
     except ServiceError as service_error:
         # Manejo específico para errores de servicio estandarizados

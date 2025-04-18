@@ -15,7 +15,7 @@ from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
 from common.context import with_context, Context
 
-from config import get_settings
+from common.config import get_settings
 from services.extraction import process_file_from_storage
 from services.chunking import split_document_intelligently
 from services.embedding import process_and_store_chunks
@@ -36,13 +36,21 @@ async def initialize_queue():
     # Comprobar la disponibilidad del servicio de caché mediante CacheManager
     try:
         # Intentar una operación simple para verificar disponibilidad
-        test_value = await CacheManager.get(
-            data_type="system",
-            resource_id="queue_test"
-        )
+        try:
+            test_value = await CacheManager.get(
+                data_type="system",
+                resource_id="queue_test"
+            )
+        except Exception as cache_err:
+            logger.warning(f"CacheManager no disponible: {str(cache_err)}")
+            test_value = None
         
-        logger.info("Sistema de colas inicializado correctamente")
-        return True
+        if test_value is not None:
+            logger.info("Sistema de colas inicializado correctamente")
+            return True
+        else:
+            logger.warning("Redis no disponible - procesamiento asíncrono deshabilitado")
+            return False
     except Exception as e:
         logger.warning(f"Redis no disponible - procesamiento asíncrono deshabilitado: {str(e)}")
         return False
@@ -140,8 +148,11 @@ async def queue_document_processing_job(
                 status_code=500
             )
             
-        # Encolar el trabajo en Redis para procesamiento
-        await CacheManager.rpush(INGESTION_QUEUE, json.dumps(job_data))
+        # Encolar el trabajo en Redis para procesamiento con manejo de errores
+        try:
+            await CacheManager.rpush(INGESTION_QUEUE, json.dumps(job_data))
+        except Exception as cache_err:
+            logger.warning(f"Error al encolar en Redis: {str(cache_err)}")
             
         return job_id
     except ServiceError:

@@ -95,7 +95,6 @@ async def get_tier_rate_limit(tenant_id: str, tier: str, service_name: Optional[
     Raises:
         ServiceError: Si hay un error obteniendo el límite
     """
-    from ..context.vars import get_full_context
     from ..db.supabase import get_tenant_configurations
     
     error_context = {
@@ -104,7 +103,15 @@ async def get_tier_rate_limit(tenant_id: str, tier: str, service_name: Optional[
         "tier": tier,
         "service_name": service_name
     }
-    error_context.update(get_full_context())
+    
+    # Importar contexto dinámicamente para evitar importaciones circulares
+    try:
+        from ..context.vars import get_full_context
+        context = get_full_context()
+        if context:
+            error_context.update(context)
+    except ImportError:
+        pass
     
     try:
         # Intentar obtener configuración personalizada del tenant

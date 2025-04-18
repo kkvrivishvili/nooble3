@@ -29,41 +29,66 @@ async def track_token_usage(
 ) -> bool:
     if tokens <= 0:
         return True
-    settings = get_settings()
-    if not settings.enable_usage_tracking:
-        logger.debug(f"Tracking deshabilitado, omitiendo {tokens} tokens")
-        return True
+    # Obtener configuración con manejo de errores
+    try:
+        from ..config.settings import get_settings
+        settings = get_settings()
+        if not settings.enable_usage_tracking:
+            logger.debug(f"Tracking deshabilitado, omitiendo {tokens} tokens")
+            return True
+    except Exception as config_err:
+        logger.debug(f"Error obteniendo configuración, asumiendo tracking habilitado: {str(config_err)}")
+
+    # Obtener tenant_id con manejo de errores
     if not tenant_id:
-        tenant_id = get_current_tenant_id()
+        try:
+            from ..context.vars import get_current_tenant_id
+            tenant_id = get_current_tenant_id()
+        except ImportError:
+            pass
         if not tenant_id or tenant_id == "default":
             logger.warning("No se pudo registrar uso de tokens: tenant_id no disponible")
             return False
     try:
+        # Calcular tokens ajustados
         cost_factor = settings.model_cost_factors.get(model, 1.0) if model else 1.0
         adjusted = int(tokens * cost_factor)
+
+        # Intentar incrementar en caché primero
+        try:
+            await CacheManager.increment_counter(
+                scope="token_usage",
+                resource_id=model or "default",
+                tokens=adjusted,
+                tenant_id=tenant_id,
+                agent_id=agent_id,
+                conversation_id=conversation_id,
+                collection_id=collection_id,
+                token_type=token_type
+            )
+        except Exception as cache_err:
+            logger.debug(f"Error incrementando contador en caché: {str(cache_err)}")
+
+        # Intentar registrar en base de datos
+        try:
+            from ..db.rpc import increment_token_usage as rpc_increment_token_usage
+            await rpc_increment_token_usage(
+                tenant_id=tenant_id,
+                tokens=adjusted,
+                agent_id=agent_id,
+                conversation_id=conversation_id,
+                token_type=token_type
+            )
+        except Exception as db_err:
+            logger.warning(f"Error registrando tokens en base de datos: {str(db_err)}")
+
         combined = metadata.copy() if metadata else {}
         combined.update({"token_type": token_type, "cost_factor": cost_factor})
         if agent_id:
             combined["agent_id"] = agent_id
         if conversation_id:
             combined["conversation_id"] = conversation_id
-        await CacheManager.increment_counter(
-            scope="token_usage",
-            resource_id=model or "default",
-            tokens=adjusted,
-            tenant_id=tenant_id,
-            agent_id=agent_id,
-            conversation_id=conversation_id,
-            collection_id=collection_id,
-            token_type=token_type
-        )
-        await rpc_increment_token_usage(
-            tenant_id=tenant_id,
-            tokens=adjusted,
-            agent_id=agent_id,
-            conversation_id=conversation_id,
-            token_type=token_type
-        )
+
         return True
     except Exception as e:
         logger.error(f"Error track_token_usage: {e}", extra={"tenant_id": tenant_id})

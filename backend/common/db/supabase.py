@@ -10,7 +10,6 @@ import traceback
 from typing import Dict, Any, List, Optional
 from supabase import create_client, Client
 
-from ..context.vars import get_current_tenant_id, get_full_context
 from ..cache.manager import CacheManager
 from ..errors.exceptions import DatabaseError, ConfigurationError, ServiceError, ErrorCode
 from ..errors.handlers import handle_errors
@@ -88,7 +87,6 @@ async def get_supabase_client_with_token(token: Optional[str] = None, use_servic
         DatabaseError: Si hay un error al crear el cliente
     """
     error_context = {"function": "get_supabase_client_with_token"}
-    error_context.update(get_full_context())
     
     try:
         if token:
@@ -165,9 +163,13 @@ async def get_tenant_configurations(
         DatabaseError: Si hay un error de base de datos
         ServiceError: Para otros errores de servicio
     """
-    # Usar contexto si no se proporciona tenant_id
+    # Obtener tenant_id desde contexto si no se proporciona (import dinámico)
     if tenant_id is None:
-        tenant_id = get_current_tenant_id()
+        try:
+            from ..context.vars import get_current_tenant_id
+            tenant_id = get_current_tenant_id()
+        except ImportError:
+            tenant_id = None
     
     error_context = {
         "function": "get_tenant_configurations",
@@ -178,6 +180,15 @@ async def get_tenant_configurations(
     
     if scope_id:
         error_context["scope_id"] = scope_id
+    
+    # Agregar contexto completo si está disponible (import dinámico)
+    try:
+        from ..context.vars import get_full_context
+        ctx = get_full_context()
+        if ctx:
+            error_context.update(ctx)
+    except ImportError:
+        pass
 
     try:
         # Intentar obtener desde caché primero

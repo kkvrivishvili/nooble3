@@ -46,15 +46,13 @@ async def lifespan(app: FastAPI):
         # Inicializar cliente HTTP
         http_client = httpx.AsyncClient(timeout=30.0)
         
-        # Establecer contexto de servicio estándar
-        async with Context(tenant_id=settings.default_tenant_id):
-            # Cargar configuraciones específicas del servicio
-            try:
+        # Establecer contexto de servicio estándar de manera segura
+        try:
+            async with Context(tenant_id=settings.default_tenant_id):
                 if settings.load_config_from_supabase:
-                    # Cargar configuraciones...
                     logger.info(f"Configuraciones cargadas para {settings.service_name}")
-            except Exception as config_err:
-                logger.error(f"Error cargando configuraciones: {config_err}")
+        except Exception as context_err:
+            logger.error(f"Error con Context: {context_err}")
         
         # Verificar servicios dependientes si no estamos en desarrollo
         if settings.environment != "development":

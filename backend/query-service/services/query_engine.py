@@ -56,19 +56,21 @@ async def process_query_with_sources(
     collection_id = ctx.get_collection_id()
     agent_id = ctx.get_agent_id()
     
-    # Verificar caché primero
-    cached_result = await CacheManager.get_query_result(
-        query=query,
-        collection_id=collection_id,
-        tenant_id=tenant_id,
-        agent_id=agent_id,
-        similarity_top_k=similarity_top_k,
-        response_mode=response_mode
-    )
-    
-    if cached_result:
-        logger.info(f"Resultado de consulta obtenido de caché para '{query[:30]}...'")
-        return cached_result
+    # Verificar caché primero con manejo de errores
+    try:
+        cached_result = await CacheManager.get_query_result(
+            query=query,
+            collection_id=collection_id,
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            similarity_top_k=similarity_top_k,
+            response_mode=response_mode
+        )
+        if cached_result:
+            logger.info(f"Resultado de consulta obtenido de caché para '{query[:30]}...'")
+            return cached_result
+    except Exception as cache_err:
+        logger.debug(f"Error accediendo a caché de consulta: {str(cache_err)}")
     
     try:
         start_time = time.time()
@@ -139,17 +141,20 @@ async def process_query_with_sources(
             "processing_time": processing_time
         }
         
-        # Guardar en caché (1 hora)
-        await CacheManager.set_query_result(
-            query=query,
-            result=result,
-            collection_id=collection_id,
-            tenant_id=tenant_id,
-            agent_id=agent_id,
-            similarity_top_k=similarity_top_k,
-            response_mode=response_mode,
-            ttl=3600
-        )
+        # Guardar en caché (1 hora) con manejo de errores
+        try:
+            await CacheManager.set_query_result(
+                query=query,
+                result=result,
+                collection_id=collection_id,
+                tenant_id=tenant_id,
+                agent_id=agent_id,
+                similarity_top_k=similarity_top_k,
+                response_mode=response_mode,
+                ttl=3600
+            )
+        except Exception as cache_set_err:
+            logger.debug(f"Error guardando resultado de consulta en caché: {str(cache_set_err)}")
         
         return result
     

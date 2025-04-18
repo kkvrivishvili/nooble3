@@ -100,16 +100,18 @@ class CachedEmbeddingProvider:
                 details=error_context
             )
         
-        # Verificar caché usando el sistema unificado
-        cached_embedding = await CacheManager.get_embedding(
-            text=text,
-            model_name=self.model_name,
-            tenant_id=tenant_id,
-            agent_id=ctx.get_agent_id()
-        )
-        
-        if cached_embedding:
-            return cached_embedding
+        # Verificar caché usando el sistema unificado con manejo de errores
+        try:
+            cached_embedding = await CacheManager.get_embedding(
+                text=text,
+                model_name=self.model_name,
+                tenant_id=tenant_id,
+                agent_id=ctx.get_agent_id()
+            )
+            if cached_embedding:
+                return cached_embedding
+        except Exception as cache_err:
+            logger.debug(f"Error al obtener embedding de caché: {str(cache_err)}")
         
         # Obtener embedding desde el backend
         if hasattr(self, 'openai_embed'):
@@ -117,15 +119,18 @@ class CachedEmbeddingProvider:
         else:
             embedding = await self.embedder.get_embedding(text)
         
-        # Guardar en caché unificada
-        await CacheManager.set_embedding(
-            text=text,
-            embedding=embedding,
-            model_name=self.model_name,
-            tenant_id=tenant_id,
-            agent_id=ctx.get_agent_id(),
-            ttl=86400  # 24 horas
-        )
+        # Guardar en caché unificada con manejo de errores
+        try:
+            await CacheManager.set_embedding(
+                text=text,
+                embedding=embedding,
+                model_name=self.model_name,
+                tenant_id=tenant_id,
+                agent_id=ctx.get_agent_id(),
+                ttl=86400  # 24 horas
+            )
+        except Exception as cache_set_err:
+            logger.debug(f"Error al guardar embedding en caché: {str(cache_set_err)}")
         
         return embedding
     
@@ -226,11 +231,15 @@ class CachedEmbeddingProvider:
         result: List[Optional[List[float]]] = [None] * len(texts)
         
         # Verificar caché para todos los textos
-        cached_embeddings = await CacheManager.get_embeddings_batch(
-            texts=texts,
-            model_name=self.model_name,
-            tenant_id=tenant_id
-        )
+        try:
+            cached_embeddings = await CacheManager.get_embeddings_batch(
+                texts=texts,
+                model_name=self.model_name,
+                tenant_id=tenant_id
+            )
+        except Exception as cache_err:
+            logger.debug(f"Error al obtener embeddings de caché: {str(cache_err)}")
+            cached_embeddings = {}
         
         # Identificar textos no cacheados que necesitan procesamiento
         texts_to_process = []
@@ -260,15 +269,18 @@ class CachedEmbeddingProvider:
                 for idx, (i, embedding) in enumerate(zip(indices_to_process, new_embeddings)):
                     result[i] = embedding
                     
-                    # Guardar en caché
-                    await CacheManager.set_embedding(
-                        text=texts[i],
-                        embedding=embedding,
-                        model_name=self.model_name,
-                        tenant_id=tenant_id,
-                        agent_id=ctx.get_agent_id(),
-                        ttl=86400  # 24 horas
-                    )
+                    # Guardar en caché con manejo de errores
+                    try:
+                        await CacheManager.set_embedding(
+                            text=texts[i],
+                            embedding=embedding,
+                            model_name=self.model_name,
+                            tenant_id=tenant_id,
+                            agent_id=ctx.get_agent_id(),
+                            ttl=86400  # 24 horas
+                        )
+                    except Exception as cache_set_err:
+                        logger.debug(f"Error al guardar embedding en caché: {str(cache_set_err)}")
             except Exception as e:
                 error_context = {
                     "tenant_id": tenant_id,
