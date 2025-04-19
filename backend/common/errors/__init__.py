@@ -90,31 +90,67 @@ __all__ = [
 Sistema de manejo de errores para todos los servicios.
 """
 
-from .exceptions import (
-    ServiceError, AuthenticationError, PermissionError, ResourceNotFoundError,
-    ValidationError, RateLimitError, QuotaExceededError, ServiceUnavailableError,
-    ExternalApiError, DatabaseError, LlmGenerationError, ModelNotAvailableError,
-    EmbeddingError, DocumentProcessingError, CollectionError, ConversationError
-)
-
 from .handlers import (
-    setup_error_handling, handle_service_error_simple, handle_service_error_internal, handle_errors
+    setup_error_handling,
+    handle_errors,
+    handle_service_error_simple,
+    handle_service_error_internal,
 )
 
 from .responses import (
-    create_error_response, format_error_response, sanitize_content
+    create_error_response,
+    format_error_response,
+    sanitize_content,
 )
 
 __all__ = [
-    # Excepciones
-    'ServiceError', 'AuthenticationError', 'PermissionError', 'ResourceNotFoundError',
-    'ValidationError', 'RateLimitError', 'QuotaExceededError', 'ServiceUnavailableError',
-    'ExternalApiError', 'DatabaseError', 'LlmGenerationError', 'ModelNotAvailableError',
-    'EmbeddingError', 'DocumentProcessingError', 'CollectionError', 'ConversationError',
-    
-    # Manejadores
-    'setup_error_handling', 'handle_service_error_simple', 'handle_service_error_internal', 'handle_errors',
-    
-    # Utilidades
-    'create_error_response', 'format_error_response', 'sanitize_content'
+    # exceptions
+    "ErrorCode",
+    "ServiceError",
+    "ValidationError",
+    "AuthenticationError",
+    "PermissionError",
+    "ResourceNotFoundError",
+    "RateLimitError",
+    "RateLimitExceeded",
+    "QuotaExceededError",
+    "ServiceUnavailableError",
+    "ExternalApiError",
+    "DatabaseError",
+    "CacheError",
+    "LlmGenerationError",
+    "ModelNotAvailableError",
+    "EmbeddingError",
+    "DocumentProcessingError",
+    "CollectionError",
+    "ConversationError",
+    "AgentNotFoundError",
+    "AgentInactiveError",
+    "AgentExecutionError",
+    "AgentSetupError",
+    "AgentToolError",
+    "AgentLimitExceededError",
+    "InvalidAgentIdError",
+    "AgentAlreadyExistsError",
+    "AgentQuotaExceededError",
+    "QueryProcessingError",
+    "CollectionNotFoundError",
+    "RetrievalError",
+    "GenerationError",
+    "InvalidQueryParamsError",
+    "EmbeddingGenerationError",
+    "EmbeddingModelError",
+    "TextTooLargeError",
+    "BatchTooLargeError",
+    "InvalidEmbeddingParamsError",
+    "ConfigurationError",
+    # handlers
+    "setup_error_handling",
+    "handle_errors",
+    "handle_service_error_simple",
+    "handle_service_error_internal",
+    # responses
+    "create_error_response",
+    "format_error_response",
+    "sanitize_content",
 ]

@@ -447,3 +447,16 @@ def generate_docstring_template(
         docstring += f"Ejemplo:\n{example_desc}\n"
     
     return docstring
+
+__all__ = [
+    "configure_swagger_ui",
+    "get_swagger_ui_html",
+    "add_example_to_endpoint",
+    "generate_docstring_template",
+    # Constantes útiles (opcional, comentar si no se usan fuera)
+    "CONTACT_INFO",
+    "TERMS_OF_SERVICE",
+    "LICENSE_INFO",
+    "COMMON_TAGS",
+    "COMMON_RESPONSES",
+]

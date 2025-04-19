@@ -23,6 +23,8 @@ from .propagation import (
 
 from .memory import ContextManager
 
+from .validator import validate_tenant_id, validate_current_tenant
+
 # Re-exportar asynccontextmanager para conveniencia
 from contextlib import asynccontextmanager
 
@@ -46,6 +48,9 @@ __all__ = [
     
     # Gestión de memoria y contexto
     'ContextManager',
+    
+    # Validaciones explícitas
+    'validate_tenant_id', 'validate_current_tenant',
     
     # Para compatibilidad
     'asynccontextmanager'
