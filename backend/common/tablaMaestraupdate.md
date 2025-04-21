@@ -31,6 +31,7 @@ Este documento registra todos los cambios realizados durante la refactorización
 |---------|---------|-------|-----------|
 | auth/tenant.py | is_tenant_active() | Redundante con verify_tenant | verify_tenant() |
 | auth/tenant.py | is_tenant_active_sync() | Versión sincrónica redundante | verify_tenant() |
+| auth/models.py | get_allowed_models_for_tier() | Eliminado wrapper redundante | Usar directamente get_available_llm_models() y get_available_embedding_models() |
 
 ## Refactorización de Servicios
 
@@ -41,6 +42,37 @@ Este documento registra todos los cambios realizados durante la refactorización
 | query-service | config.py | Reemplazado:<br>• get_settings() ahora usa get_service_settings()<br><br>Simplificada:<br>• get_collection_config | • Código más simple (32 líneas vs. 88)<br>• Estructura más modular<br>• Eliminación de lógica duplicada |
 | ingestion-service | config.py | Eliminada:<br>• Clase IngestionConfig<br><br>Reemplazado:<br>• get_settings() ahora usa get_service_settings()<br><br>Simplificada:<br>• get_document_processor_config | • Código más limpio y directo<br>• Estructura más uniforme con otros servicios<br>• Centralización de configuración |
 
+## Correcciones Adicionales
+
+| Tipo | Descripción | Beneficios |
+|------|-------------|------------|
+| Importaciones | Estandarización de importaciones:<br>• `from common.config import get_settings` (no desde submodulos)<br>• Exportación explícita de funciones en __init__.py | • Consistencia en todo el código<br>• Prevención de errores de importación<br>• Mejor mantenibilidad |
+| Variables de entorno | Documentación completa en .env:<br>• Variables añadidas para todos los servicios<br>• Descripción clara de cada variable | • Mejor documentación<br>• Facilita configuración<br>• Evita errores por variables no definidas |
+| Documentación | Creación de README.md en common/config | • Guía clara de uso<br>• Documentación de principios y estructura<br>• Referencia para desarrolladores |
+
+## Separación de Responsabilidades
+
+### Estructura Final
+
+| Módulo | Responsabilidad | Implementación |
+|--------|-----------------|---------------|
+| common/config/tiers.py | Configuraciones y datos (límites, modelos disponibles) | • get_tier_limits()<br>• get_available_llm_models()<br>• get_available_embedding_models()<br>• get_embedding_model_details()<br>• get_llm_model_details() |
+| common/auth/models.py | Lógica de validación de acceso a modelos | • validate_model_access() |
+| common/tracking/ | Implementaciones de tracking | • track_token_usage()<br>• track_embedding_usage() |
+
+### Flujo de Datos
+
+```
+common/config/tiers.py → common/auth/models.py → servicios
+                       → common/tracking/     → servicios
+```
+
+### Rutas de Importación Correctas
+
+- **Configuraciones**: `from common.config.tiers import get_available_llm_models, get_tier_limits`
+- **Validación**: `from common.auth import validate_model_access`
+- **Tracking**: `from common.tracking import track_token_usage, track_embedding_usage`
+
 ## Beneficios Globales
 
 1. **Eliminación de código duplicado**: Se eliminaron aproximadamente 200 líneas de código redundante.
@@ -48,6 +80,7 @@ Este documento registra todos los cambios realizados durante la refactorización
 2. **Single Source of Truth**: 
    - Tiers y límites: Centralizados en tiers.py
    - Configuraciones específicas de servicio: Centralizadas en settings.py
+   - Cada funcionalidad tiene una única implementación de referencia
 
 3. **Simplificación de código**:
    - Los archivos config.py de los servicios son ahora ~70% más pequeños

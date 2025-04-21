@@ -18,7 +18,7 @@ from common.errors import (
 from common.context import with_context, set_current_tenant_id, get_current_tenant_id, get_current_collection_id, set_current_context_value
 from common.auth import verify_tenant, validate_model_access, RoleType, get_allowed_models_for_tier
 from common.tracking import track_usage
-from common.config.settings import get_settings
+from common.config import get_settings
 
 from services.query_engine import create_query_engine, process_query_with_sources
 

@@ -13,7 +13,7 @@ from common.context import with_context, get_current_tenant_id, get_current_coll
 from common.errors import (
     handle_service_error_simple, ValidationError, EmbeddingGenerationError, RateLimitExceeded
 )
-from common.config.settings import get_settings
+from common.config import get_settings
 from common.tracking import track_embedding_usage, track_token_usage
 from common.auth import verify_tenant, get_allowed_models_for_tier
 

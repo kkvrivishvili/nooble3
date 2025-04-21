@@ -14,7 +14,9 @@ from .tiers import (
     get_embedding_model_details,
     get_llm_model_details,
     get_agent_limits,
-    get_default_system_prompt
+    get_default_system_prompt,
+    is_development_environment,
+    should_use_mock_config
 )
 
 # Re-exportar símbolos principales para acceso directo
@@ -35,7 +37,11 @@ __all__ = [
     'get_embedding_model_details',
     'get_llm_model_details',
     'get_agent_limits',
-    'get_default_system_prompt'
+    'get_default_system_prompt',
+    
+    # Funciones de utilidad
+    'is_development_environment',
+    'should_use_mock_config'
 ]
 
 # Nota: Las funciones internas como get_service_configurations, get_mock_configurations y 
