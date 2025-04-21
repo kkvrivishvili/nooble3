@@ -4,7 +4,7 @@ from typing import Optional, List
 from fastapi import APIRouter, Depends, Path, Query
 
 from common.models import TenantInfo, ConversationListResponse, MessageListResponse, DeleteConversationResponse, ChatMessage
-from common.errors import handle_service_error_simple, AgentNotFoundError, ConversationError
+from common.errors import handle_service_error_simple, ConversationError, ServiceError
 from common.context import with_context
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
@@ -46,7 +46,7 @@ async def list_conversations(
             # Verificar que el agente exista y pertenezca al tenant
             agent_result = await supabase.table(get_table_name("agent_configs")).select("agent_id").eq("agent_id", agent_id).eq("tenant_id", tenant_id).execute()
             if not agent_result.data:
-                raise AgentNotFoundError(
+                raise ConversationError(
                     message=f"Agent {agent_id} not found or not accessible",
                     details={"tenant_id": tenant_id, "agent_id": agent_id}
                 )
@@ -201,7 +201,7 @@ async def delete_conversation(
             .execute()
         
         if not conversation_result.data:
-            raise ServiceError(
+            raise ConversationError(
                 message=f"Conversación {conversation_id} no encontrada",
                 error_code="conversation_not_found",
                 status_code=404
@@ -232,7 +232,7 @@ async def delete_conversation(
             .execute()
         
         if delete_result.error:
-            raise ServiceError(
+            raise ConversationError(
                 message="Error al eliminar la conversación",
                 status_code=500,
                 error_code="DELETE_FAILED"
@@ -260,10 +260,10 @@ async def delete_conversation(
             messages_deleted=messages_count
         )
     except Exception as e:
-        if isinstance(e, ServiceError):
+        if isinstance(e, ConversationError):
             raise
         logger.error(f"Error eliminando conversación: {str(e)}")
-        raise ServiceError(
+        raise ConversationError(
             message="Error al eliminar la conversación",
             status_code=500,
             error_code="DELETE_FAILED"
@@ -295,7 +295,7 @@ async def end_conversation(
             .execute()
         
         if not conversation_result.data:
-            raise ServiceError(
+            raise ConversationError(
                 message=f"Conversación {conversation_id} no encontrada",
                 error_code="conversation_not_found",
                 status_code=404
@@ -311,7 +311,7 @@ async def end_conversation(
             .execute()
         
         if update_result.error:
-            raise ServiceError(
+            raise ConversationError(
                 message="Error al finalizar la conversación",
                 status_code=500,
                 error_code="UPDATE_FAILED"
@@ -339,10 +339,10 @@ async def end_conversation(
             messages_deleted=0
         )
     except Exception as e:
-        if isinstance(e, ServiceError):
+        if isinstance(e, ConversationError):
             raise
         logger.error(f"Error finalizando conversación: {str(e)}")
-        raise ServiceError(
+        raise ConversationError(
             message="Error al finalizar la conversación",
             status_code=500,
             error_code="UPDATE_FAILED"

@@ -5,7 +5,7 @@ from .agents import router as agents_router
 from .chat import router as chat_router
 from .conversations import router as conversations_router
 from .admin import router as admin_router
-from .public import router as public_router  # Nueva importación
+from .public import router as public_router
 
 logger = logging.getLogger(__name__)
 

@@ -1,7 +1,7 @@
 import logging
-import uuid
 from typing import Optional, List
 import re
+import uuid
 
 from fastapi import APIRouter, Depends, Path, Query, HTTPException
 
@@ -44,7 +44,7 @@ async def create_agent(
             request.metadata["model_downgraded"] = True
     
     # Generar ID para el nuevo agente
-    agent_id = str(uuid.uuid4())
+    agent_id = f"agent_{uuid.uuid4().hex[:8]}"
     
     # Validar formato de ID
     if not re.match(r"^agent_[a-z0-9]{8}$", agent_id):

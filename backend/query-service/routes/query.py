@@ -11,9 +11,8 @@ from pydantic import UUID4, BaseModel, Field
 
 from common.models import TenantInfo, QueryRequest, QueryResponse
 from common.errors import (
-    ErrorCode, ServiceError, handle_service_error_simple,
-    QueryProcessingError, CollectionNotFoundError, 
-    InvalidQueryParamsError, RetrievalError, GenerationError
+    ServiceError, handle_service_error_simple,
+    QueryProcessingError
 )
 from common.context import with_context, set_current_tenant_id, get_current_tenant_id, get_current_collection_id, set_current_context_value
 from common.auth import verify_tenant, validate_model_access, RoleType, get_allowed_models_for_tier

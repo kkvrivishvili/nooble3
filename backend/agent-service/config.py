@@ -2,13 +2,10 @@
 Configuraciones específicas para el servicio de agentes.
 """
 
-import os
 from typing import Dict, Any, Optional
 
 from common.config import (
     get_service_settings,
-    get_agent_limits,
-    get_default_system_prompt
 )
 from common.models import HealthResponse
 from common.context import get_current_tenant_id

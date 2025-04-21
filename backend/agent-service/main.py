@@ -8,7 +8,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from common.config import get_settings
 from common.errors import setup_error_handling
 from common.utils.logging import init_logging
-from common.context import Context
 from common.db.supabase import init_supabase
 from common.swagger import configure_swagger_ui, add_example_to_endpoint
 from common.cache import CacheManager
@@ -50,14 +49,6 @@ async def lifespan(app: FastAPI):
         
         # Inicializar cliente HTTP
         http_client = httpx.AsyncClient(timeout=30.0)
-        
-        # Establecer contexto de servicio estándar de manera segura
-        try:
-            async with Context(tenant_id=settings.default_tenant_id):
-                if settings.load_config_from_supabase:
-                    logger.info(f"Configuraciones cargadas para {settings.service_name}")
-        except Exception as context_err:
-            logger.error(f"Error con Context: {context_err}")
         
         # Verificar servicios dependientes si no estamos en desarrollo
         if settings.environment != "development":
