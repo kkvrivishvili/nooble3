@@ -12,7 +12,7 @@ from common.context import with_context, ContextManager, set_current_conversatio
 from common.auth import verify_tenant
 from common.db.rpc import create_conversation, add_chat_history
 from common.tracking import track_query
-from common.cache.manager import CacheManager
+from common.cache import CacheManager
 
 from services.agent_executor import execute_agent, stream_agent_response
 
@@ -152,7 +152,13 @@ async def chat_with_agent(
         tokens_in=agent_response.get("tokens", 0) // 3,
         tokens_out=agent_response.get("tokens", 0) * 2 // 3,
         agent_id=agent_id,
-        conversation_id=conversation_id
+        conversation_id=conversation_id,
+        service="agent-service",
+        metadata={
+            "streaming": request.stream,
+            "client_reference_id": request.client_reference_id,
+            "user_id": tenant_info.user_id
+        }
     )
     
     # Construir respuesta

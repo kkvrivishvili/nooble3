@@ -11,7 +11,7 @@ from common.utils.logging import init_logging
 from common.context import Context
 from common.db.supabase import init_supabase
 from common.swagger import configure_swagger_ui, add_example_to_endpoint
-from common.cache.manager import CacheManager
+from common.cache import CacheManager
 from common.utils.rate_limiting import setup_rate_limiting
 from common.utils.http import check_service_health
 
@@ -37,7 +37,12 @@ async def lifespan(app: FastAPI):
         init_supabase()
         
         # Inicializar sistema de caché
-        cache_ready = await CacheManager.initialize()
+        cache_ready = await CacheManager.initialize(
+            redis_url=settings.redis_url,
+            max_connections=settings.redis_max_connections,
+            memory_cache_size=settings.memory_cache_size,
+            memory_cache_cleanup_percent=settings.memory_cache_cleanup_percent
+        )
         if cache_ready:
             logger.info("CacheManager inicializado correctamente")
         else:
@@ -114,8 +119,19 @@ configure_swagger_ui(
         {"name": "Agents", "description": "Operaciones de gestión de agentes"},
         {"name": "Conversations", "description": "Operaciones de gestión de conversaciones"},
         {"name": "Chat", "description": "Endpoints de interacción conversacional"},
-        {"name": "Admin", "description": "Operaciones administrativas"}
-    ]
+        {"name": "Public", "description": "Endpoints públicos sin autenticación"},
+        {"name": "Admin", "description": "Operaciones administrativas"},
+        {"name": "System", "description": "Endpoints de sistema y monitoreo"}
+    ],
+    contact={
+        "name": "Equipo de Desarrollo",
+        "url": settings.support_url,
+        "email": settings.support_email
+    },
+    license_info={
+        "name": "Privado",
+        "url": ""
+    }
 )
 
 # Configurar CORS

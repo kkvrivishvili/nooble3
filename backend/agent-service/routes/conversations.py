@@ -9,7 +9,7 @@ from common.context import with_context
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
 from common.auth import verify_tenant
-from common.cache.manager import CacheManager
+from common.cache import CacheManager
 
 logger = logging.getLogger(__name__)
 router = APIRouter()

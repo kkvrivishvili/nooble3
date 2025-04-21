@@ -28,7 +28,7 @@ def register_routes(app: FastAPI):
         """Verifica el estado del servicio y sus dependencias."""
         from common.config import get_settings
         from common.db.supabase import get_supabase_client
-        from common.cache.manager import CacheManager
+        from common.cache import CacheManager
         from main import http_client
         
         settings = get_settings()

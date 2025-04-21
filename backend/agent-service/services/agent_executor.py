@@ -21,7 +21,7 @@ from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
 from common.llm.token_counters import count_tokens
 from common.tracking import track_token_usage, track_usage
-from common.cache.manager import CacheManager, TTL_MEDIUM
+from common.cache import CacheManager, TTL_MEDIUM
 from common.utils.stream import stream_llm_response
 
 from services.callbacks import AgentCallbackHandler, StreamingCallbackHandler
@@ -247,7 +247,12 @@ async def execute_agent(
                 "model": model_name,
                 "agent_id": agent_id,
                 "conversation_id": conversation_id,
-                "token_type": "llm"
+                "token_type": "llm",
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "service": "agent-service",
+                "operation_type": "chat",
+                "streaming": streaming
             }
         )
         
@@ -389,14 +394,24 @@ async def stream_agent_response(
         )
         
         # Contabilizar tokens correctamente (en background)
+        input_tokens = count_tokens(query, model_name=model_name)
+        output_tokens = count_tokens(full_response, model_name=model_name)
+        total_tokens = input_tokens + output_tokens
+        
         await track_usage(
             tenant_id=tenant_id,
             operation="tokens",
             metadata={
-                "tokens": count_tokens(full_response, model_name=model_name),
+                "tokens": total_tokens,
                 "model": model_name,
                 "agent_id": agent_id,
-                "conversation_id": conversation_id
+                "conversation_id": conversation_id,
+                "token_type": "llm",
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "service": "agent-service",
+                "operation_type": "chat",
+                "streaming": True
             }
         )
     except ServiceError as service_error:

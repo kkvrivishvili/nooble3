@@ -8,7 +8,7 @@ from typing import Dict, Any, List, Optional, Callable
 from fastapi import HTTPException
 from pydantic import BaseModel
 
-from common.settings import Settings
+from common.config import get_settings
 from common.context import get_current_conversation_id
 from common.utils.http import call_service
 from common.errors import (
@@ -19,7 +19,7 @@ from common.errors import (
     ErrorCode
 )
 
-settings = Settings()
+settings = get_settings()
 logger = logging.getLogger(__name__)
 
 async def create_rag_tool(tool_config: Dict[str, Any], tenant_id: str, agent_id: Optional[str] = None) -> Callable:
@@ -162,34 +162,71 @@ async def create_rag_tool(tool_config: Dict[str, Any], tenant_id: str, agent_id:
     
     return rag_query_tool
 
+async def create_agent_tools(agent_config: Dict[str, Any], tenant_id: str, agent_id: str) -> List[Callable]:
+    """
+    Crea todas las herramientas para un agente basado en su configuración.
+    
+    Args:
+        agent_config: Configuración completa del agente
+        tenant_id: ID del tenant
+        agent_id: ID del agente
+        
+    Returns:
+        List[Callable]: Lista de herramientas disponibles para el agente
+    """
+    # Inicializar lista de herramientas
+    tools = []
+    
+    # Obtener configuración de herramientas del agente
+    tools_config = agent_config.get("tools", [])
+    
+    for tool_config in tools_config:
+        tool_type = tool_config.get("type")
+        
+        # Crear herramienta RAG si está configurada
+        if tool_type == "rag":
+            collection_id = tool_config.get("metadata", {}).get("collection_id")
+            if collection_id:
+                try:
+                    rag_tool = await create_rag_tool(
+                        tool_config=tool_config.get("metadata", {}),
+                        tenant_id=tenant_id,
+                        agent_id=agent_id
+                    )
+                    tools.append(rag_tool)
+                except Exception as e:
+                    logger.warning(f"Error creando herramienta RAG para colección {collection_id}: {str(e)}")
+    
+    # Si no hay herramientas configuradas, devolver una lista vacía
+    if not tools:
+        logger.info(f"No se encontraron herramientas configuradas para el agente {agent_id}")
+        
+    return tools
+
 # Solo implementamos las funciones para colecciones si Query Service está disponible
 async def get_available_collections(tenant_id: str) -> List[Dict[str, Any]]:
     """Obtiene las colecciones disponibles para un tenant."""
     try:
         response = await call_service(
             url=f"{settings.query_service_url}/collections",
-            data={},
+            method="GET",
+            headers={},
             tenant_id=tenant_id,
-            operation_type="health_check"  # Uso de timeout corto para consulta rápida
+            include_context=True,
+            operation_type="query" 
         )
         
         # Verificar éxito de la operación
         if not response.get("success", False):
             error_info = response.get("error", {})
-            error_msg = response.get("message", "Error desconocido obteniendo colecciones")
-            error_code = error_info.get("details", {}).get("error_code", ErrorCode.GENERAL_ERROR)
+            error_msg = error_info.get("message", "Error desconocido obteniendo colecciones")
+            error_code = error_info.get("code", ErrorCode.GENERAL_ERROR)
             
             logger.warning(f"Error obteniendo colecciones: {error_msg} (código: {error_code})")
-            
-            # Registrar el error pero continuar con lista vacía para no bloquear la operación
             return []
         
         # Extraer datos de la respuesta estandarizada
-        response_data = response.get("data", {})
-        return response_data.get("collections", [])
+        return response.get("data", {}).get("collections", [])
     except Exception as e:
         logger.warning(f"Error obteniendo colecciones: {str(e)}")
-        
-        # En este caso específico, devolvemos lista vacía en vez de propagar el error
-        # para mantener la funcionalidad degradada pero operativa
         return []

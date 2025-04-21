@@ -8,7 +8,7 @@ from fastapi.responses import StreamingResponse
 
 from common.models import PublicChatRequest, ChatResponse, ChatMessage
 from common.errors import ServiceError, handle_service_error_simple
-from common.context import with_context, Context
+from common.context import with_context, Context, ContextManager
 from common.db.rpc import create_conversation, add_chat_history
 from common.tracking import track_query
 from common.config import get_settings
@@ -87,6 +87,17 @@ async def public_chat_with_agent(
             agent_id=agent_id
         )
         
+        # Crear un ContextManager para esta sesión
+        context_manager = ContextManager.get_or_create(
+            tenant_id=tenant_info.tenant_id,
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+            session_id=session_id
+        )
+        
+        # Registrar mensaje del usuario
+        await context_manager.add_user_message(request.message)
+        
         # Ejecutar agente (usar stream o no según request)
         if request.stream:
             return StreamingResponse(
@@ -95,7 +106,8 @@ async def public_chat_with_agent(
                     agent_id=agent_id,
                     conversation_id=conversation_id,
                     query=request.message,
-                    session_id=session_id
+                    session_id=session_id,
+                    context_manager=context_manager
                 ),
                 media_type="text/event-stream"
             )
@@ -123,7 +135,14 @@ async def public_chat_with_agent(
             tokens_in=agent_response.get("tokens", 0) // 3,
             tokens_out=agent_response.get("tokens", 0) * 2 // 3,
             agent_id=agent_id,
-            conversation_id=conversation_id
+            conversation_id=conversation_id,
+            service="agent-service",
+            metadata={
+                "streaming": request.stream,
+                "session_id": session_id,
+                "public_access": True,
+                "tenant_slug": tenant_slug
+            }
         )
         
         # Construir respuesta

@@ -7,7 +7,7 @@ from common.models import TenantInfo, CacheClearResponse
 from common.errors import handle_service_error_simple, ValidationError
 from common.auth import verify_tenant
 from common.config import get_settings, invalidate_settings_cache
-from common.cache.manager import CacheManager
+from common.cache import CacheManager
 
 logger = logging.getLogger(__name__)
 router = APIRouter()

@@ -9,10 +9,11 @@ from common.models import TenantInfo, AgentConfig, AgentRequest, AgentResponse, 
 from common.errors import handle_service_error_simple, InvalidAgentIdError, AgentNotFoundError, AgentAlreadyExistsError, AgentSetupError, ErrorCode, AgentExecutionError
 from common.context import with_context
 from common.config import get_settings, invalidate_settings_cache
+from common.config.tiers import get_available_llm_models
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
-from common.auth import verify_tenant, validate_model_access, get_allowed_models_for_tier
-from common.cache.manager import CacheManager, TTL_MEDIUM
+from common.auth import verify_tenant, validate_model_access
+from common.cache import CacheManager, TTL_MEDIUM
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -32,17 +33,15 @@ async def create_agent(
     model_name = request.llm_model
     if model_name:
         try:
-            model_name = await validate_model_access(tenant_info, model_name, "llm")
+            model_name = await validate_model_access(tenant_info, model_name, "llm", tenant_id=tenant_info.tenant_id)
         except ServiceError as e:
             # Si el modelo no está permitido, usar el modelo por defecto para su tier
             logger.info(f"Cambiando al modelo por defecto: {e.message}", extra=e.context)
-            allowed_models = get_allowed_models_for_tier(tenant_info.subscription_tier, "llm")
+            allowed_models = get_available_llm_models(tenant_info.subscription_tier, tenant_id=tenant_info.tenant_id)
             model_name = allowed_models[0] if allowed_models else settings.default_llm_model
             # Guardar información sobre el downgrade para incluirla en la respuesta
             request.metadata = request.metadata or {}
             request.metadata["model_downgraded"] = True
-        else:
-            model_name = agent_check.data["llm_model"]
     
     # Generar ID para el nuevo agente
     agent_id = str(uuid.uuid4())
@@ -267,17 +266,16 @@ async def update_agent(
     model_name = request.llm_model
     if model_name and model_name != agent_check.data["llm_model"]:
         try:
-            model_name = await validate_model_access(tenant_info, model_name, "llm")
+            validated_model_name = await validate_model_access(tenant_info, model_name, "llm", tenant_id=tenant_info.tenant_id)
+            model_name = validated_model_name  # Usar el modelo validado
         except ServiceError as e:
             # Si el modelo no está permitido, usar el modelo por defecto para su tier
             logger.info(f"Cambiando al modelo por defecto: {e.message}", extra=e.context)
-            allowed_models = get_allowed_models_for_tier(tenant_info.subscription_tier, "llm")
+            allowed_models = get_available_llm_models(tenant_info.subscription_tier, tenant_id=tenant_info.tenant_id)
             model_name = allowed_models[0] if allowed_models else settings.default_llm_model
             # Guardar información sobre el downgrade para incluirla en la respuesta
             request.metadata = request.metadata or {}
             request.metadata["model_downgraded"] = True
-        else:
-            model_name = agent_check.data["llm_model"]
     
     # Preparar datos para actualizar
     update_data = {
