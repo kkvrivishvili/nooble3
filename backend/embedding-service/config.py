@@ -5,87 +5,61 @@ Configuraciones específicas para el servicio de embeddings.
 import os
 from typing import Dict, Any, Optional, List
 
-from common.config import get_settings as get_common_settings
+from common.config import (
+    get_service_settings,
+    get_available_embedding_models,
+    get_embedding_model_details
+)
+from common.models import HealthResponse
 from common.context import get_current_tenant_id
 
 def get_settings():
     """
     Obtiene la configuración específica para el servicio de embeddings.
     
-    Esta función extiende get_settings() de common con configuraciones
-    específicas del servicio de embeddings.
+    Esta función utiliza get_service_settings() centralizada que ya incluye
+    todas las configuraciones específicas para el servicio de embeddings.
     
     Returns:
-        Settings: Configuración combinada
+        Settings: Configuración para el servicio de embeddings
     """
-    # Obtener configuración base
-    settings = get_common_settings()
-    
-    # Agregar configuraciones específicas del servicio de embeddings
-    settings.service_name = "embedding-service"
-    settings.service_version = os.getenv("SERVICE_VERSION", "1.2.0")
-    
-    # Configuraciones específicas de embeddings
-    settings.embedding_cache_enabled = os.getenv("EMBEDDING_CACHE_ENABLED", "true").lower() in ["true", "1", "yes"]
-    settings.embedding_batch_size = int(os.getenv("EMBEDDING_BATCH_SIZE", "100"))
-    settings.default_embedding_dimension = int(os.getenv("DEFAULT_EMBEDDING_DIMENSION", "1536"))
-    
-    return settings
+    # Usar la función centralizada que ya incluye las configuraciones específicas
+    return get_service_settings("embedding-service")
 
-def get_available_models_for_tier(tier: str) -> Dict[str, Dict[str, Any]]:
+def get_health_status() -> HealthResponse:
     """
-    Obtiene los modelos de embeddings disponibles para un nivel de suscripción.
+    Obtiene el estado de salud del servicio de embeddings.
+    
+    Returns:
+        HealthResponse: Estado de salud del servicio
+    """
+    settings = get_settings()
+    
+    return HealthResponse(
+        service=settings.service_name,
+        version=settings.service_version,
+        status="healthy",
+        timestamp=None  # Se generará automáticamente
+    )
+
+def get_model_details_for_tier(tier: str) -> Dict[str, Dict[str, Any]]:
+    """
+    Obtiene los detalles de los modelos de embeddings disponibles para un tier específico.
     
     Args:
-        tier: Nivel de suscripción ('free', 'pro', 'enterprise')
+        tier: Nivel de suscripción
         
     Returns:
-        Dict[str, Dict[str, Any]]: Diccionario con modelos disponibles
+        Dict[str, Dict[str, Any]]: Detalles de los modelos disponibles
     """
-    # Modelos básicos disponibles para todos
-    basic_models = {
-        "text-embedding-3-small": {
-            "dimensions": 1536,
-            "description": "OpenAI text-embedding-3-small model, suitable for most applications",
-            "max_tokens": 8191
-        },
-        "text-embedding-ada-002": {
-            "dimensions": 1536,
-            "description": "OpenAI legacy model, maintained for backwards compatibility",
-            "max_tokens": 8191
-        }
-    }
+    # Obtener los modelos disponibles para este tier
+    available_models = get_available_embedding_models(tier)
     
-    # Modelos adicionales para niveles premium
-    pro_models = {
-        "text-embedding-3-large": {
-            "dimensions": 3072,
-            "description": "OpenAI's most capable embedding model with higher dimensions for better performance",
-            "max_tokens": 8191
-        }
-    }
+    # Obtener los detalles para cada modelo disponible
+    model_details = {}
+    for model_id in available_models:
+        details = get_embedding_model_details(model_id)
+        if details:  # Solo incluir si hay detalles disponibles
+            model_details[model_id] = details
     
-    # Modelos exclusivos para nivel enterprise
-    enterprise_models = {
-        "text-embedding-3-turbo": {
-            "dimensions": 3072,
-            "description": "Embeddings de mayor rendimiento, optimizados para RAG y búsquedas semánticas",
-            "max_tokens": 16000
-        },
-        "custom-domain-embedding": {
-            "dimensions": 4096,
-            "description": "Embeddings personalizados para dominios específicos con entrenamiento adicional",
-            "max_tokens": 32000
-        }
-    }
-    
-    # Devolver modelos según el nivel de suscripción
-    result = basic_models.copy()
-    
-    if tier.lower() in ['pro', 'business']:
-        result.update(pro_models)
-        
-    if tier.lower() in ['enterprise', 'business']:
-        result.update(enterprise_models)
-        
-    return result
+    return model_details

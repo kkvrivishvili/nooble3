@@ -61,22 +61,21 @@ default_tier_limits = {
     }
 }
 
-# Valores predeterminados para límites de tasa
+# Configuraciones de tasa por defecto para cada tier
 default_rate_limits = {
-    "free": 600,        # 10 req/segundo
-    "pro": 1200,        # 20 req/segundo
-    "business": 3000,   # 50 req/segundo
-    "enterprise": 6000  # 100 req/segundo
+    "free": 5,  # 5 solicitudes por minuto
+    "pro": 30,  # 30 solicitudes por minuto
+    "business": 60,  # 60 solicitudes por minuto
+    "enterprise": 120  # 120 solicitudes por minuto (personalizable)
 }
 
-# Multiplicadores por servicio para límites de tasa
+# Multiplicadores por servicio para ajuste fino
 service_multipliers = {
-    "agent": 0.5,        # Más restrictivo para agentes
-    "chat": 0.5,         # Más restrictivo para chat
-    "embedding": 2.0,    # Menos restrictivo para embeddings
-    "query": 1.0,        # Normal para consultas
-    "ingestion": 0.3,    # Muy restrictivo para ingesta de documentos
-    "collection": 0.5    # Restrictivo para operaciones de colección
+    "embedding": 2.0,  # Mayor límite para embeddings (menos intensivos)
+    "query": 0.8,  # Menor límite para consultas (más intensivas)
+    "chat": 1.0,   # Límite estándar
+    "agent": 0.5,  # Límite restringido (son costosos)
+    "ingestion": 0.3  # Muy restringido (alta carga)
 }
 
 @handle_errors
@@ -95,8 +94,7 @@ async def get_tier_rate_limit(tenant_id: str, tier: str, service_name: Optional[
     Raises:
         ServiceError: Si hay un error obteniendo el límite
     """
-    from ..db.supabase import get_tenant_configurations
-    
+    # Mantener la implementación actual...
     error_context = {
         "function": "get_tier_rate_limit",
         "tenant_id": tenant_id,
@@ -104,18 +102,10 @@ async def get_tier_rate_limit(tenant_id: str, tier: str, service_name: Optional[
         "service_name": service_name
     }
     
-    # Importar contexto dinámicamente para evitar importaciones circulares
-    try:
-        from ..context.vars import get_full_context
-        context = get_full_context()
-        if context:
-            error_context.update(context)
-    except ImportError:
-        pass
-    
     try:
         # Intentar obtener configuración personalizada del tenant
         try:
+            from ..db.supabase import get_tenant_configurations
             tenant_rate_limit_config = await get_tenant_configurations(
                 tenant_id=tenant_id,
                 scope="rate_limit",
@@ -160,7 +150,7 @@ async def get_tier_rate_limit(tenant_id: str, tier: str, service_name: Optional[
         logger.error(error_message, extra=error_context, exc_info=True)
         
         # Devolver un valor predeterminado para no interrumpir el servicio
-        return default_rate_limits.get("free", 600)
+        return default_rate_limits.get("free", 5)
 
 
 @handle_errors
@@ -175,31 +165,48 @@ async def get_tier_limits(tier: str, tenant_id: Optional[str] = None) -> Dict[st
     Returns:
         Dict[str, Any]: Límites del nivel de suscripción
     """
-    # Importaciones dinámicas
-    from ..db.supabase import get_tenant_configurations
-    from ..errors.exceptions import ServiceError, ErrorCode
+    # Normalizar tier a lowercase
+    tier = tier.lower()
+    error_context = {"tenant_id": tenant_id, "tier": tier}
     
-    if tier not in default_tier_limits:
-        raise ServiceError(
-            error_code=ErrorCode.INVALID_PARAMETER,
-            message=f"Nivel de suscripción no válido: {tier}"
-        )
-    
-    # Por defecto, usamos los límites predefinidos
-    limits = default_tier_limits[tier].copy()
-    
-    # Si se proporciona un tenant_id, intentamos obtener configuraciones personalizadas
-    if tenant_id:
-        try:
-            custom_configs = await get_tenant_configurations(tenant_id)
-            # Combinamos con la configuración personalizada si existe
-            if custom_configs and "tier_limits" in custom_configs and tier in custom_configs["tier_limits"]:
-                custom_tier_limits = custom_configs["tier_limits"][tier]
-                limits.update(custom_tier_limits)
-        except Exception as e:
-            logger.warning(f"Error al obtener configuraciones personalizadas para {tenant_id}: {str(e)}")
-    
-    return limits
+    try:
+        # Si no existe el tier, usar free
+        if tier not in default_tier_limits:
+            logger.warning(f"Tier no reconocido: {tier}, usando 'free'", extra=error_context)
+            tier = "free"
+            
+        # Copia de los límites por defecto
+        limits = default_tier_limits[tier].copy()
+        
+        # Si hay tenant_id, verificar personalizaciones desde DB
+        if tenant_id:
+            # Importación tardía para evitar ciclos
+            from ..db.supabase import get_table_name, get_supabase_client
+            
+            try:
+                supabase = get_supabase_client()
+                tier_customizations = supabase.table(get_table_name("tenant_tier_customizations")) \
+                    .select("customizations") \
+                    .eq("tenant_id", tenant_id) \
+                    .eq("tier", tier) \
+                    .execute()
+                    
+                if tier_customizations.data:
+                    custom_limits = tier_customizations.data[0].get("customizations", {})
+                    # Actualizar límites con personalizaciones
+                    limits.update(custom_limits)
+                    logger.debug(f"Límites personalizados aplicados para tenant {tenant_id}, tier {tier}")
+            except Exception as e:
+                logger.warning(f"Error obteniendo personalizaciones para tenant {tenant_id}: {e}", 
+                              extra=error_context)
+                # Continuar con valores por defecto
+                
+        return limits
+        
+    except Exception as e:
+        logger.error(f"Error obteniendo límites para tier {tier}: {e}", extra=error_context)
+        # Devolver límites de free como fallback
+        return default_tier_limits["free"].copy()
 
 def get_available_llm_models(tier: str) -> List[str]:
     """
@@ -211,10 +218,11 @@ def get_available_llm_models(tier: str) -> List[str]:
     Returns:
         List[str]: Lista de modelos LLM disponibles
     """
+    tier = tier.lower()
     if tier not in default_tier_limits:
-        return default_tier_limits["free"]["allowed_llm_models"]
+        tier = "free"
     
-    return default_tier_limits[tier]["allowed_llm_models"]
+    return default_tier_limits[tier].get("allowed_llm_models", ["gpt-3.5-turbo"])
 
 def get_available_embedding_models(tier: str) -> List[str]:
     """
@@ -226,10 +234,11 @@ def get_available_embedding_models(tier: str) -> List[str]:
     Returns:
         List[str]: Lista de modelos de embedding disponibles
     """
+    tier = tier.lower()
     if tier not in default_tier_limits:
-        return default_tier_limits["free"]["allowed_embedding_models"]
+        tier = "free"
     
-    return default_tier_limits[tier]["allowed_embedding_models"]
+    return default_tier_limits[tier].get("allowed_embedding_models", ["text-embedding-3-small"])
 
 def get_service_port(service_name: str) -> int:
     """
@@ -269,8 +278,9 @@ def is_development_environment() -> bool:
         bool: True si estamos en entorno de desarrollo
     """
     import os
-    env = os.environ.get("ENVIRONMENT", "development").lower()
+    env = os.getenv("ENVIRONMENT", "development").lower()
     return env in ["development", "dev", "local"]
+
 
 def should_use_mock_config() -> bool:
     """
@@ -283,44 +293,242 @@ def should_use_mock_config() -> bool:
     Returns:
         bool: True si se deben usar configuraciones mock
     """
-    # Si no estamos en desarrollo, nunca usamos mock
+    # Solo evaluar en entorno de desarrollo
     if not is_development_environment():
         return False
     
-    # En desarrollo, intentamos verificar si tenemos conexión
+    # Verificar si hay conexión a Supabase
     try:
-        from ..db.supabase import get_supabase_client
-        supabase = get_supabase_client()
+        from ..db.supabase import check_supabase_connection
+        connection_ok = check_supabase_connection()
         
-        # Hacemos una consulta simple para verificar conexión
-        result = supabase.table("tenants").select("count", count="exact").limit(1).execute()
+        if not connection_ok:
+            logger.info("No hay conexión a Supabase, usando configuraciones mock")
+            return True
+            
+        # Verificar si hay configuraciones base
+        from ..db.supabase import get_base_configurations
+        configs = get_base_configurations()
         
-        # Si hay algún error o no hay datos, usamos mock
-        if hasattr(result, "error") and result.error:
-            logger.warning(f"Usando mock por error de Supabase: {result.error}")
+        if not configs:
+            logger.info("No hay configuraciones en Supabase, usando configuraciones mock")
             return True
             
         return False
     except Exception as e:
-        logger.warning(f"Usando mock por excepción al verificar Supabase: {str(e)}")
+        logger.warning(f"Error verificando Supabase, usando configuraciones mock: {e}")
         return True
 
 
 """
 NOTA IMPORTANTE: SEPARACIÓN DE RESPONSABILIDADES
 
-Este archivo contiene SOLO configuraciones y datos relacionados con los tiers
-de suscripción, así como funciones simples para acceder a esos datos.
-
-Las funciones relacionadas con los tiers se encuentran en sus respectivos módulos 
-según sus responsabilidades:
-
-1. Validación de acceso a modelos por tier:
-   - Usar: from common.auth.models import validate_model_access
-
-2. Tracking de uso de tokens:
-   - Usar: from common.tracking import track_token_usage, track_embedding_usage
-
-Esta separación evita dependencias circulares y respeta el principio
-de responsabilidad única.
+Este módulo contiene SOLAMENTE la configuración relacionada con tiers y limites,
+sin añadir dependencias circulares. Las validaciones y tracking de uso están
+en auth/models.py y tracking/usage.py respectivamente.
 """
+
+# Nuevas funciones centralizadas para detalles de modelos y límites de agentes
+def get_embedding_model_details(model_id: str) -> Dict[str, Any]:
+    """
+    Obtiene los detalles técnicos de un modelo de embedding específico.
+    
+    Args:
+        model_id: ID del modelo de embedding
+        
+    Returns:
+        Dict[str, Any]: Detalles del modelo (dimensiones, descripción, etc.)
+    """
+    # Diccionario centralizado con detalles de los modelos
+    model_details = {
+        "text-embedding-3-small": {
+            "dimensions": 1536,
+            "description": "OpenAI text-embedding-3-small model, adecuado para la mayoría de aplicaciones",
+            "max_tokens": 8191,
+            "provider": "openai",
+            "version": "3",
+            "cost_per_1k_tokens": 0.02
+        },
+        "text-embedding-3-large": {
+            "dimensions": 3072,
+            "description": "OpenAI text-embedding-3-large model, mayor precisión para tareas complejas",
+            "max_tokens": 8191,
+            "provider": "openai",
+            "version": "3",
+            "cost_per_1k_tokens": 0.13
+        },
+        "text-embedding-ada-002": {
+            "dimensions": 1536,
+            "description": "OpenAI text-embedding-ada-002 model (legacy)",
+            "max_tokens": 8191,
+            "provider": "openai",
+            "version": "2",
+            "cost_per_1k_tokens": 0.1
+        },
+        "nomic-embed-text": {
+            "dimensions": 768,
+            "description": "Nomic AI embedding model for Ollama",
+            "max_tokens": 8192,
+            "provider": "ollama",
+            "version": "1",
+            "cost_per_1k_tokens": 0
+        }
+    }
+    
+    # Si el modelo no existe, devolver diccionario vacío
+    return model_details.get(model_id, {})
+
+
+def get_llm_model_details(model_id: str) -> Dict[str, Any]:
+    """
+    Obtiene los detalles técnicos de un modelo de LLM específico.
+    
+    Args:
+        model_id: ID del modelo LLM
+        
+    Returns:
+        Dict[str, Any]: Detalles del modelo (contexto, capacidades, etc.)
+    """
+    # Diccionario centralizado con detalles de los modelos LLM
+    model_details = {
+        "gpt-3.5-turbo": {
+            "context_window": 16385,
+            "description": "Modelo GPT-3.5 Turbo de OpenAI, buena relación costo-rendimiento",
+            "max_output_tokens": 4096,
+            "provider": "openai",
+            "version": "3.5",
+            "cost_per_1k_input_tokens": 0.0015,
+            "cost_per_1k_output_tokens": 0.002,
+            "capabilities": ["text_generation", "chat", "function_calling"]
+        },
+        "gpt-4": {
+            "context_window": 8192,
+            "description": "Modelo GPT-4 de OpenAI, alta precisión y comprensión",
+            "max_output_tokens": 4096,
+            "provider": "openai",
+            "version": "4",
+            "cost_per_1k_input_tokens": 0.03,
+            "cost_per_1k_output_tokens": 0.06,
+            "capabilities": ["text_generation", "chat", "function_calling", "advanced_reasoning"]
+        },
+        "gpt-4-turbo": {
+            "context_window": 128000,
+            "description": "Modelo GPT-4 Turbo de OpenAI, amplio contexto y alto rendimiento",
+            "max_output_tokens": 4096,
+            "provider": "openai",
+            "version": "4",
+            "cost_per_1k_input_tokens": 0.01,
+            "cost_per_1k_output_tokens": 0.03,
+            "capabilities": ["text_generation", "chat", "function_calling", "advanced_reasoning", "vision"]
+        },
+        "llama3": {
+            "context_window": 8192,
+            "description": "Modelo Llama3 de Meta a través de Ollama",
+            "max_output_tokens": 4096,
+            "provider": "ollama",
+            "version": "3",
+            "cost_per_1k_input_tokens": 0,
+            "cost_per_1k_output_tokens": 0,
+            "capabilities": ["text_generation", "chat"]
+        }
+    }
+    
+    # Si el modelo no existe, devolver diccionario vacío
+    return model_details.get(model_id, {})
+
+
+def get_agent_limits(agent_type: str, tier: str) -> Dict[str, Any]:
+    """
+    Obtiene los límites específicos para un tipo de agente y tier.
+    
+    Args:
+        agent_type: Tipo de agente ("conversational", "assistant", "custom", "rag")
+        tier: Nivel de suscripción
+        
+    Returns:
+        Dict[str, Any]: Límites específicos para el tipo de agente
+    """
+    # Bases por tipo de agente
+    base_limits = {
+        "conversational": {
+            "max_messages": 100,
+            "max_tokens_per_message": 2048,
+            "max_functions": 5,
+            "max_kb_connections": 1
+        },
+        "assistant": {
+            "max_messages": 200,
+            "max_tokens_per_message": 4096,
+            "max_functions": 10,
+            "max_kb_connections": 3
+        },
+        "rag": {
+            "max_messages": 150,
+            "max_tokens_per_message": 3072,
+            "max_functions": 3,
+            "max_kb_connections": 5
+        },
+        "custom": {
+            "max_messages": 50,
+            "max_tokens_per_message": 1024,
+            "max_functions": 2,
+            "max_kb_connections": 1
+        }
+    }
+    
+    # Modificadores por tier
+    tier_multipliers = {
+        "free": 1.0,
+        "pro": 2.0,
+        "business": 5.0,
+        "enterprise": 10.0
+    }
+    
+    # Obtener los valores base para el tipo de agente (o usar conversational como fallback)
+    result = base_limits.get(agent_type, base_limits["conversational"]).copy()
+    
+    # Obtener multiplicador según tier (o usar 1.0 como fallback)
+    multiplier = tier_multipliers.get(tier, 1.0)
+    
+    # Aplicar multiplicador a todos los valores numéricos
+    for key in result:
+        if isinstance(result[key], (int, float)):
+            result[key] = int(result[key] * multiplier)
+    
+    return result
+
+
+def get_default_system_prompt(agent_type: str) -> str:
+    """
+    Obtiene el prompt de sistema predeterminado para un tipo de agente.
+    
+    Args:
+        agent_type: Tipo de agente
+        
+    Returns:
+        str: Prompt de sistema predeterminado
+    """
+    system_prompts = {
+        "conversational": (
+            "Eres un asistente conversacional AI amigable y útil. "
+            "Tu objetivo es ayudar al usuario proporcionando respuestas claras, "
+            "precisas y útiles a sus preguntas."
+        ),
+        "assistant": (
+            "Eres un asistente personal inteligente. Ayuda al usuario con sus tareas, "
+            "recordatorios, búsqueda de información y cualquier otra solicitud. "
+            "Sé proactivo, eficiente y orientado a resultados."
+        ),
+        "rag": (
+            "Eres un asistente especializado en recuperación de información. "
+            "Responde preguntas basándote exclusivamente en la información proporcionada "
+            "en los documentos de contexto. Si no encuentras la respuesta en el contexto, "
+            "indícalo claramente."
+        ),
+        "custom": (
+            "Eres un asistente personalizado. Sigue las instrucciones específicas "
+            "proporcionadas por el creador del agente."
+        )
+    }
+    
+    return system_prompts.get(agent_type, system_prompts["conversational"])

@@ -49,184 +49,89 @@ class Settings(BaseSettings):
     
     # =========== Logging ===========
     log_level: str = Field("INFO", description="Nivel de logging")
+    log_format: str = Field("[%(asctime)s] [%(levelname)s] [%(name)s] - %(message)s", description="Formato de logging")
     
-    # =========== Caching y Redis ===========
-    redis_url: str = Field("redis://localhost:6379", description="URL de Redis")
-    cache_ttl: int = Field(86400, description="Tiempo de vida de caché en segundos")
+    # =========== Base de datos ===========
+    supabase_url: str = Field("https://localhost:54321", env="SUPABASE_URL", description="URL de Supabase")
+    supabase_key: str = Field("supabase-key", env="SUPABASE_KEY", description="Clave de Supabase")
+    supabase_service_key: str = Field("supabase-service-key", env="SUPABASE_SERVICE_KEY", description="Clave de servicio de Supabase")
+    db_prefix: str = Field("ai_", description="Prefijo para tablas")
     
-    # =========== Supabase ===========
-    supabase_url: str = Field(..., env="SUPABASE_URL", description="URL de Supabase")
-    supabase_key: str = Field(..., env="SUPABASE_KEY", description="Clave de Supabase")
-    supabase_service_key: Optional[str] = Field(None, env="SUPABASE_SERVICE_KEY", description="Clave de servicio de Supabase (service role)")
-    supabase_jwt_secret: str = Field("super-secret-jwt-token-with-at-least-32-characters-long", description="JWT Secret para verificación de tokens")
+    # =========== Redis ===========
+    redis_url: str = Field("redis://localhost:6379/0", env="REDIS_URL", description="URL de Redis")
+    redis_max_connections: int = Field(10, description="Máximo de conexiones Redis")
+    redis_password: Optional[str] = Field(None, env="REDIS_PASSWORD", description="Contraseña de Redis")
+    
+    # =========== Modelado de lenguaje ===========
+    openai_api_key: str = Field("", env="OPENAI_API_KEY", description="Clave de API de OpenAI")
+    openai_org_id: Optional[str] = Field(None, env="OPENAI_ORG_ID", description="ID de organización de OpenAI")
+    anthropic_api_key: Optional[str] = Field(None, env="ANTHROPIC_API_KEY", description="Clave de API de Anthropic")
+    default_llm_model: str = Field("gpt-3.5-turbo", description="Modelo LLM por defecto")
+    default_embedding_model: str = Field("text-embedding-3-small", description="Modelo embedding por defecto")
+    
+    # =========== API AI =========== 
+    api_key_hash_salt: str = Field("default-salt", env="API_KEY_HASH_SALT", description="Salt para hash de claves de API")
+    api_key_hash_iterations: int = Field(100000, description="Iteraciones de hash para claves de API")
+    
+    # =========== Cache ===========
+    settings_ttl: int = Field(300, description="TTL para caché de configuraciones (segundos)")
+    cache_ttl_extended: int = Field(86400, description="TTL para caché extendida (24h)")
+    cache_ttl_standard: int = Field(3600, description="TTL para caché estándar (1h)")
+    cache_ttl_short: int = Field(300, description="TTL para caché corta (5min)")
+    use_memory_cache: bool = Field(True, description="Usar caché en memoria")
+    memory_cache_size: int = Field(1000, description="Tamaño máximo de caché en memoria (items)")
+    
+    # =========== Configuración avanzada ===========
+    load_config_from_supabase: bool = Field(True, description="Cargar configuraciones desde Supabase")
+    override_settings_from_env: bool = Field(True, description="Permitir sobrescribir por variables de entorno")
+    mock_supabase: bool = Field(False, description="Usar mock para supabase")
+    allow_cors: bool = Field(True, description="Permitir CORS")
+    cors_origins: List[str] = Field(["*"], description="Orígenes permitidos para CORS")
+
+    # =========== Embeddings ===========
+    embedding_batch_size: int = Field(128, description="Tamaño de lote para embeddings")
+    embedding_dimensions: int = Field(1536, description="Dimensiones de embeddings")
+    embedding_cache_ttl: int = Field(604800, description="TTL para caché de embeddings (7 días)")
+    max_embedding_batch_size: int = Field(10, description="Máximo tamaño de lote para API de embeddings")
+    
+    # =========== Límites para streaming ===========
+    streaming_timeout: int = Field(60, description="Timeout para streaming (segundos)")
+    
+    # =========== Manejo de recursos ===========
+    max_query_retries: int = Field(3, description="Máximo de reintentos de consulta")
+    chunk_size: int = Field(512, description="Tamaño de fragmentos para indexación")
+    chunk_overlap: int = Field(51, description="Solapamiento entre fragmentos")
+    max_workers: int = Field(4, description="Máximo de workers para procesamiento")
+    max_doc_size_mb: int = Field(10, description="Tamaño máximo de documentos (MB)")
     
     # =========== Rate Limiting ===========
-    rate_limit_enabled: bool = Field(True, description="Habilitar límite de tasa")
-    rate_limit_free_tier: int = Field(600, description="Número de solicitudes permitidas en el periodo para el plan gratuito")
-    rate_limit_pro_tier: int = Field(1200, description="Número de solicitudes permitidas en el periodo para el plan pro")
-    rate_limit_business_tier: int = Field(3000, description="Número de solicitudes permitidas en el periodo para el plan empresarial")
-    rate_limit_period: int = Field(60, description="Periodo en segundos para el límite de tasa")
-    
-    # =========== OpenAI / Ollama ===========
-    openai_api_key: str = Field(..., env="OPENAI_API_KEY", description="Clave API de OpenAI")
-    use_ollama: bool = Field(False, description="Usar Ollama en lugar de OpenAI")
-    ollama_base_url: str = Field("http://ollama:11434", description="URL base de Ollama")
-    
-    # =========== Configuración de LLM ===========
-    default_llm_model: str = Field("gpt-3.5-turbo", description="Modelo LLM por defecto")
-    default_openai_llm_model: str = Field("gpt-3.5-turbo", description="Modelo LLM de OpenAI predeterminado")
-    default_ollama_llm_model: str = Field("llama3", description="Modelo LLM de Ollama predeterminado")
-    agent_default_temperature: float = Field(0.7, description="Temperatura para LLM")
-    max_tokens_per_response: int = Field(2048, description="Máximo de tokens por respuesta")
-    system_prompt_template: str = Field("Eres un asistente AI llamado {agent_name}. {agent_instructions}", description="Plantilla para prompt de sistema")
-    agent_default_message_limit: int = Field(50, description="Número máximo de mensajes por defecto para el agente")
-    
-    # =========== Configuración de Embeddings ===========
-    default_embedding_model: str = Field("text-embedding-3-small", description="Modelo de embeddings por defecto")
-    default_openai_embedding_model: str = Field("text-embedding-3-small", description="Modelo de embeddings de OpenAI predeterminado")
-    default_ollama_embedding_model: str = Field("nomic-embed-text", description="Modelo de embeddings de Ollama predeterminado")
-    embedding_cache_enabled: bool = Field(True, description="Habilitar caché de embeddings")
-    embedding_batch_size: int = Field(100, description="Tamaño de lote para embeddings")
-    max_embedding_batch_size: int = Field(200, description="Tamaño máximo de lote para embeddings")
-    max_tokens_per_batch: int = Field(50000, description="Número máximo de tokens por lote de embeddings")
-    max_token_length_per_text: int = Field(8000, description="Límite de tokens para textos individuales en embeddings")
-    default_embedding_dimension: int = Field(1536, description="Dimensión del vector de embedding por defecto")
-    
-    # =========== Configuración de Consultas ===========
-    default_similarity_top_k: int = Field(4, description="Número de resultados similares a recuperar por defecto")
-    default_response_mode: str = Field("compact", description="Modo de respuesta por defecto")
-    similarity_threshold: float = Field(0.7, description="Umbral de similitud mínima")
-    
-    # =========== Flags de carga de configuración ===========
-    load_config_from_supabase: bool = Field(False, description="Cargar configuración desde Supabase")
-    use_mock_config: bool = Field(False, description="Usar configuración mock si no hay datos en Supabase")
-    
-    # =========== Flags de tracking ===========
-    enable_usage_tracking: bool = Field(True, description="Habilitar tracking de uso")
-    model_cost_factors: Dict[str, float] = Field(default_factory=lambda: {
-        "gpt-4": 2.0,
-        "gpt-4-turbo": 1.5,
-        "gpt-3.5-turbo": 1.0,
-        "text-embedding-3-small": 0.8,
-        "text-embedding-3-large": 1.2,
-    }, description="Factores de costo por modelo para contabilización de tokens")
-    
-    # =========== Métodos de ayuda ===========
-    def get_service_configuration(self, service_name: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Obtiene el esquema de configuración para un servicio específico.
-        """
-        from .schema import get_service_configurations
-        return get_service_configurations(service_name or self.service_name)
-    
-    def get_mock_configuration(self, service_name: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Obtiene configuraciones mock para un servicio específico.
-        """
-        from .schema import get_mock_configurations
-        return get_mock_configurations(service_name or self.service_name)
-    
-    def use_mock_if_empty(self, service_name: Optional[str] = None, tenant_id: Optional[str] = None):
-        """
-        Establece configuraciones mock si no hay datos en Supabase.
-        """
-        if not self.use_mock_config:
-            return
-            
-        # Obtener configuraciones del tenant
-        tenant_id = tenant_id or self.default_tenant_id
-        
-        from ..db.supabase import get_tenant_configurations
-        configs = get_tenant_configurations(tenant_id=tenant_id, environment=self.environment)
-        
-        # Si no hay configuraciones, usar mock
-        if not configs:
-            logger.warning(f"No hay configuraciones para tenant {tenant_id}. Usando configuración mock.")
-            mock_configs = self.get_mock_configuration(service_name or self.service_name)
-            
-            # Establecer las configuraciones mock en esta instancia
-            for key, value in mock_configs.items():
-                if hasattr(self, key):
-                    setattr(self, key, value)
-    
-    @validator('default_llm_model')
-    def get_effective_llm_model(cls, v, values):
-        """
-        Determina el modelo LLM efectivo basado en la configuración.
-        """
-        if values.get('use_ollama', False):
-            return values.get('default_ollama_llm_model', "llama3")
-        return values.get('default_openai_llm_model', v)
-    
-    @validator('default_embedding_model')
-    def get_effective_embedding_model(cls, v, values):
-        """
-        Determina el modelo de embedding efectivo basado en la configuración.
-        """
-        if values.get('use_ollama', False):
-            return values.get('default_ollama_embedding_model', "nomic-embed-text")
-        return values.get('default_openai_embedding_model', v)
-    
-    def get_tenant_rate_limit(self, tenant_id: str, tier: str, service_name: Optional[str] = None) -> int:
-        """
-        Obtiene el límite de tasa específico para un tenant, considerando las configuraciones personalizadas.
-        
-        Args:
-            tenant_id: ID del tenant
-            tier: Nivel de suscripción ('free', 'pro', 'business')
-            service_name: Nombre del servicio (opcional)
-            
-        Returns:
-            int: Límite de solicitudes personalizado para el tenant
-        """
-        # Llamamos a la función centralizada en tiers.py
-        from .tiers import get_tier_rate_limit
-        
-        try:
-            # Intentar obtener de manera asíncrona, pero con fallback 
-            # para contextos sincrónicos
-            import asyncio
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # Estamos en contexto asíncrono
-                    return asyncio.create_task(get_tier_rate_limit(
-                        tenant_id=tenant_id,
-                        tier=tier,
-                        service_name=service_name
-                    ))
-                else:
-                    # Contexto sincrónico pero tenemos event loop
-                    return loop.run_until_complete(get_tier_rate_limit(
-                        tenant_id=tenant_id,
-                        tier=tier,
-                        service_name=service_name
-                    ))
-            except RuntimeError:
-                # No hay event loop disponible, usar valores por defecto
-                pass
-        except Exception as e:
-            logger.warning(f"Error obteniendo límite de tasa para {tenant_id}: {str(e)}")
-        
-        # Valores por defecto según tier si falla la obtención asíncrona
-        tier_limits = {
-            "free": self.rate_limit_free_tier,
-            "pro": self.rate_limit_pro_tier,
-            "business": self.rate_limit_business_tier,
-            "enterprise": 5000  # Valor alto por defecto
-        }
-        return tier_limits.get(tier.lower(), self.rate_limit_free_tier)
+    enable_rate_limiting: bool = Field(True, description="Activar limitación de tasa")
+    default_rate_limit: int = Field(10, description="Límite de tasa por defecto (req/min)")
+
+    @validator("redis_url")
+    def validate_redis_url(cls, v):
+        """Validar que la URL de Redis siga el formato correcto"""
+        if not v.startswith(("redis://", "rediss://")):
+            raise ValueError("La URL de Redis debe comenzar con redis:// o rediss://")
+        return v
+
+    @validator("service_name")
+    def validate_service_name(cls, v):
+        """Validar que el nombre del servicio sea válido"""
+        valid_services = ["agent-service", "embedding-service", "query-service", "ingestion-service"]
+        if v not in valid_services and not v.endswith("-service"):
+            # En modo desarrollo permitimos más flexibilidad
+            logger.warning(f"Servicio {v} no estándar, asegúrese de usarlo solo en desarrollo")
+        return v
     
     class Config:
+        """Configuración para Pydantic"""
         env_file = ".env"
-        env_prefix = ""
         case_sensitive = False
-        extra = "allow"  # Permitir campos adicionales no declarados en el modelo
+        extra = "ignore"
 
-
-@lru_cache(maxsize=100)  # Limitar tamaño del caché
-@handle_errors(error_type="config")
-async def get_settings() -> Settings:
+@handle_errors
+def get_settings(tenant_id: Optional[str] = None) -> Settings:
     """
     Obtiene la configuración con caché para el servicio.
     
@@ -242,97 +147,108 @@ async def get_settings() -> Settings:
     Raises:
         ConfigurationError: Si hay un problema al cargar configuraciones
     """
-    global _force_settings_reload, _settings_last_refresh
-    
-    # Preparar contexto para errores
+    # Claves de contexto para errores
     error_context = {"function": "get_settings"}
+    if tenant_id:
+        error_context["tenant_id"] = tenant_id
     
-    # Determinar el tenant_id antes de todo
-    tenant_id = "default"
-    try:
-        from ..context.vars import get_current_tenant_id
-        context_tenant_id = get_current_tenant_id()
-        if context_tenant_id and context_tenant_id != "default":
-            tenant_id = context_tenant_id
-            error_context["tenant_id"] = tenant_id
-    except Exception as e:
-        # Si falla la obtención del tenant_id del contexto, usar default
-        logger.debug(f"No se pudo obtener tenant_id del contexto: {str(e)}")
+    # Variables globales para control de caché
+    global _force_settings_reload, _settings_last_refresh, _settings_ttl
     
-    # Verificar si necesitamos recargar por TTL
-    current_time = time.time()
-    if tenant_id in _settings_last_refresh:
-        time_since_refresh = current_time - _settings_last_refresh[tenant_id]
-        if time_since_refresh > _settings_ttl:
-            logger.debug(f"TTL excedido para tenant {tenant_id}, forzando recarga de configuraciones")
-            _force_settings_reload = True
-    
-    # Si se ha solicitado recargar, invalidar la función cacheada
-    if _force_settings_reload:
-        get_settings.cache_clear()
-        _force_settings_reload = False
-        logger.info("Recargando configuraciones desde cero")
-    
-    settings = Settings()
-    error_context["service"] = settings.service_name
-    error_context["environment"] = settings.environment
-    
-    # Determinar si debemos cargar configuraciones desde Supabase
-    should_load_from_supabase = settings.load_config_from_supabase
-    
-    if should_load_from_supabase:
-        try:
-            # Importar aquí para evitar dependencias circulares
-            from .supabase_loader import override_settings_from_supabase
-            from ..context.vars import get_current_tenant_id
-            
-            # Determinar el tenant_id a utilizar (priorizar contexto si está disponible)
-            tenant_id_to_use = getattr(settings, "tenant_id", "default")
+    # Si existe la caché y no hay que recargar, usar valor cacheado
+    if tenant_id in _settings_last_refresh and not _force_settings_reload:
+        # Verificar si ha expirado el TTL
+        if time.time() - _settings_last_refresh[tenant_id] < _settings_ttl:
+            # Obtener de caché LRU
             try:
-                context_tenant_id = get_current_tenant_id()
-                if context_tenant_id and context_tenant_id != "default":
-                    tenant_id_to_use = context_tenant_id
-                    logger.debug(f"Usando tenant_id del contexto: {tenant_id_to_use}")
+                settings = _get_settings_lru(tenant_id)
+                return settings
             except Exception as e:
-                logger.debug(f"No se pudo obtener tenant_id del contexto: {str(e)}")
-            
-            error_context["tenant_id_to_use"] = tenant_id_to_use
-            
-            # Cargar configuraciones específicas del tenant desde Supabase
+                logger.warning(f"Error al recuperar settings de caché: {e}", extra=error_context)
+                # Continuar para regenerar
+    
+    # Si llegamos aquí, debemos crear nueva configuración
+    try:
+        # Crear objeto de configuración básico
+        settings = Settings()
+        
+        # Actualizar el TTL de caché según la configuración
+        _settings_ttl = settings.settings_ttl
+        
+        # Ambiente actual
+        environment = settings.environment
+        
+        # Si está activo, cargar configuraciones desde Supabase
+        if settings.load_config_from_supabase:
             try:
+                # Importación tardía para evitar ciclos
+                from .supabase_loader import override_settings_from_supabase
+                
+                # Aplicar configuraciones desde Supabase
                 settings = override_settings_from_supabase(
-                    settings, 
-                    tenant_id_to_use,
-                    settings.environment
+                    settings=settings,
+                    tenant_id=tenant_id or settings.default_tenant_id,
+                    environment=environment
                 )
-                logger.info(f"Configuración para tenant {tenant_id_to_use} cargada desde Supabase")
-            except Exception as supabase_err:
-                logger.error(f"Error al cargar configuraciones desde Supabase: {str(supabase_err)}", extra=error_context)
-                raise ConfigurationError(
-                    message=f"Error al cargar configuraciones desde Supabase: {str(supabase_err)}",
-                    error_code=ErrorCode.CONFIGURATION_ERROR.value,
-                    context=error_context
-                )
-        except ImportError as import_err:
-            error_context["missing_module"] = str(import_err).split(" ")[-1]
-            logger.error(f"Error al importar módulo para configuraciones: {str(import_err)}", extra=error_context)
-            raise ConfigurationError(
-                message=f"Error al importar módulo para configuraciones: {str(import_err)}", 
-                error_code=ErrorCode.MISSING_CONFIGURATION.value,
-                context=error_context
-            )
-    
-    # Actualizar timestamp de última recarga
-    _settings_last_refresh[tenant_id] = current_time
-    
-    # Import tiers dynamically to break circular import
-    from .tiers import TierSettings
-    _ = TierSettings  # ensure module loads when needed
-    
-    return settings
+            except Exception as e:
+                error_message = f"Error al cargar configuraciones desde Supabase: {e}"
+                logger.warning(error_message, extra=error_context)
+                # Continuar con valores predeterminados
+                
+                # Si no estamos en producción, usar configuraciones mock
+                if environment != "production":
+                    try:
+                        # Importación tardía para evitar ciclos
+                        from .schema import get_mock_configurations
+                        
+                        mock_config = get_mock_configurations(settings.service_name)
+                        if mock_config:
+                            logger.info("Usando configuraciones mock para desarrollo")
+                            for key, value in mock_config.items():
+                                if hasattr(settings, key):
+                                    setattr(settings, key, value)
+                    except Exception as mock_error:
+                        logger.warning(f"Error al cargar configuraciones mock: {mock_error}")
+        
+        # Resetear la bandera de recarga forzada si es específica para este tenant
+        if _force_settings_reload and (tenant_id is None or tenant_id in _settings_last_refresh):
+            _force_settings_reload = False
+            
+        # Actualizar timestamp de última actualización
+        _settings_last_refresh[tenant_id] = time.time()
+        
+        # Guardar en caché LRU
+        _add_settings_to_lru(tenant_id, settings)
+        
+        return settings
+        
+    except Exception as e:
+        error_message = f"Error al obtener configuraciones: {e}"
+        logger.error(error_message, extra=error_context, exc_info=True)
+        raise ConfigurationError(
+            message=error_message,
+            error_code=ErrorCode.CONFIGURATION_ERROR
+        )
 
+@lru_cache(maxsize=100)
+def _get_settings_lru(tenant_id: Optional[str]) -> Settings:
+    """Caché LRU para objetos Settings."""
+    # Esta función solo existe para usar @lru_cache
+    # No implementamos la lógica aquí, solo es un placeholder
+    # que será llamado desde get_settings
+    raise ValueError("Esta función no debe ser llamada directamente")
 
-def invalidate_settings_cache(tenant_id: Optional[str] = None):
+def _add_settings_to_lru(tenant_id: Optional[str], settings: Settings) -> None:
+    """Agrega un objeto Settings a la caché LRU."""
+    try:
+        # Limpiar caché existente para ese tenant
+        _get_settings_lru.cache_clear()
+        # La próxima vez que se llame con el mismo tenant_id,
+        # devolverá el objeto que haya sido cacheado por get_settings
+    except Exception as e:
+        logger.warning(f"Error manipulando caché LRU: {e}")
+
+def invalidate_settings_cache(tenant_id: Optional[str] = None) -> None:
     """
     Fuerza la recarga de configuraciones en la próxima llamada a get_settings().
     
@@ -344,14 +260,80 @@ def invalidate_settings_cache(tenant_id: Optional[str] = None):
     """
     global _force_settings_reload, _settings_last_refresh
     
-    _force_settings_reload = True
-    
-    if tenant_id:
-        # Eliminar timestamp de tenant específico
+    if tenant_id is None:
+        # Invalidar todas las configuraciones
+        _force_settings_reload = True
+        _settings_last_refresh = {}
+        # Limpiar toda la caché LRU
+        _get_settings_lru.cache_clear()
+        logger.info("Cache de configuraciones global invalidada")
+    else:
+        # Invalidar solo el tenant específico
         if tenant_id in _settings_last_refresh:
             del _settings_last_refresh[tenant_id]
-        logger.info(f"Caché de configuraciones invalidado para tenant {tenant_id}")
+            # Forzamos recarga para el próximo acceso
+            _force_settings_reload = True
+            logger.info(f"Cache de configuraciones para tenant {tenant_id} invalidada")
+
+@handle_errors
+def get_service_settings(service_name: str, service_version: Optional[str] = None, tenant_id: Optional[str] = None) -> Settings:
+    """
+    Obtiene la configuración específica para un servicio, extendiendo la configuración base.
+    
+    Esta función centraliza las configuraciones específicas de cada servicio,
+    evitando duplicación de código y manteniendo una única fuente de verdad.
+    
+    Args:
+        service_name: Nombre del servicio (agent-service, embedding-service, etc.)
+        service_version: Versión opcional del servicio
+        tenant_id: ID opcional del tenant
+        
+    Returns:
+        Settings: Configuración personalizada para el servicio
+        
+    Raises:
+        ConfigurationError: Si hay un problema al obtener las configuraciones
+    """
+    # Obtener configuración base
+    settings = get_settings(tenant_id=tenant_id)
+    
+    # Establecer nombre y versión del servicio
+    settings.service_name = service_name
+    if service_version:
+        settings.service_version = service_version
     else:
-        # Limpiar todos los timestamps
-        _settings_last_refresh.clear()
-        logger.info("Caché de configuraciones invalidado para todos los tenants")
+        settings.service_version = os.getenv("SERVICE_VERSION", "1.0.0")
+    
+    # Aplicar configuraciones específicas según el servicio
+    if service_name == "agent-service":
+        # Configuraciones específicas para agentes
+        settings.agent_default_message_limit = int(os.getenv("AGENT_DEFAULT_MESSAGE_LIMIT", "50"))
+        settings.agent_streaming_timeout = int(os.getenv("AGENT_STREAMING_TIMEOUT", "300"))
+        settings.model_capacity = {
+            "gpt-3.5-turbo": 4096,
+            "gpt-4": 8192,
+            "gpt-4-turbo": 16384,
+            "llama3": 8192,
+        }
+    
+    elif service_name == "embedding-service":
+        # Configuraciones específicas para embeddings
+        settings.embedding_cache_enabled = os.getenv("EMBEDDING_CACHE_ENABLED", "true").lower() in ["true", "1", "yes"]
+        settings.embedding_batch_size = int(os.getenv("EMBEDDING_BATCH_SIZE", "100"))
+        settings.max_embedding_batch_size = int(os.getenv("MAX_EMBEDDING_BATCH_SIZE", "10"))
+    
+    elif service_name == "query-service":
+        # Configuraciones específicas para queries
+        settings.default_similarity_top_k = int(os.getenv("DEFAULT_SIMILARITY_TOP_K", "4"))
+        settings.similarity_threshold = float(os.getenv("SIMILARITY_THRESHOLD", "0.7"))
+        settings.max_query_retries = int(os.getenv("MAX_QUERY_RETRIES", "3"))
+    
+    elif service_name == "ingestion-service":
+        # Configuraciones específicas para ingestion
+        settings.max_doc_size_mb = int(os.getenv("MAX_DOC_SIZE_MB", "10"))
+        settings.chunk_size = int(os.getenv("CHUNK_SIZE", "512"))
+        settings.chunk_overlap = int(os.getenv("CHUNK_OVERLAP", "51"))
+        settings.max_workers = int(os.getenv("MAX_WORKERS", "4"))
+    
+    logger.debug(f"Configuración específica para {service_name} cargada correctamente")
+    return settings

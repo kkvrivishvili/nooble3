@@ -5,40 +5,38 @@ Configuraciones específicas para el servicio de consultas.
 import os
 from typing import Dict, Any, Optional, List
 
-from common.config import get_settings as get_common_settings
+from common.config import get_service_settings
+from common.models import HealthResponse
 from common.context import get_current_tenant_id
 
 def get_settings():
     """
     Obtiene la configuración específica para el servicio de consultas.
     
-    Esta función extiende get_settings() de common con configuraciones
-    específicas del servicio de consultas.
+    Esta función utiliza get_service_settings() centralizada que ya incluye
+    todas las configuraciones específicas para el servicio de consultas.
     
     Returns:
-        Settings: Configuración combinada
+        Settings: Configuración para el servicio de consultas
     """
-    # Obtener configuración base
-    settings = get_common_settings()
+    # Usar la función centralizada que ya incluye las configuraciones específicas
+    return get_service_settings("query-service")
+
+def get_health_status() -> HealthResponse:
+    """
+    Obtiene el estado de salud del servicio de consultas.
     
-    # Agregar configuraciones específicas del servicio de consultas
-    settings.service_name = "query-service"
-    settings.service_version = os.getenv("SERVICE_VERSION", "1.3.0")
+    Returns:
+        HealthResponse: Estado de salud del servicio
+    """
+    settings = get_settings()
     
-    # Configuraciones específicas de RAG
-    settings.default_similarity_top_k = int(os.getenv("DEFAULT_SIMILARITY_TOP_K", "4"))
-    settings.default_response_mode = os.getenv("DEFAULT_RESPONSE_MODE", "compact")
-    settings.similarity_threshold = float(os.getenv("SIMILARITY_THRESHOLD", "0.7"))
-    
-    # Modos de respuesta disponibles
-    settings.available_response_modes = [
-        "compact", 
-        "refine", 
-        "tree_summarize", 
-        "simple_summarize"
-    ]
-    
-    return settings
+    return HealthResponse(
+        service=settings.service_name,
+        version=settings.service_version,
+        status="healthy",
+        timestamp=None  # Se generará automáticamente
+    )
 
 def get_collection_config(collection_id: str) -> Dict[str, Any]:
     """
@@ -50,40 +48,20 @@ def get_collection_config(collection_id: str) -> Dict[str, Any]:
     Returns:
         Dict[str, Any]: Configuración de la colección
     """
-    tenant_id = get_current_tenant_id()
+    # Obtener configuraciones por defecto
     settings = get_settings()
     
-    # Valores por defecto
-    config = {
+    # Configuración por defecto para cualquier colección
+    default_config = {
         "similarity_top_k": settings.default_similarity_top_k,
         "response_mode": settings.default_response_mode,
         "similarity_threshold": settings.similarity_threshold,
+        "chunk_size": settings.chunk_size,
+        "chunk_overlap": settings.chunk_overlap,
     }
     
-    try:
-        # Importar aquí para evitar dependencias circulares
-        from common.db.supabase import get_effective_configurations
-        
-        # Obtener configuraciones específicas para esta colección
-        collection_configs = get_effective_configurations(
-            tenant_id=tenant_id,
-            service_name="query",
-            collection_id=collection_id,
-            environment=settings.environment
-        )
-        
-        # Actualizar configuraciones si existen
-        if collection_configs:
-            if "default_similarity_top_k" in collection_configs:
-                config["similarity_top_k"] = int(collection_configs["default_similarity_top_k"])
-                
-            if "default_response_mode" in collection_configs:
-                config["response_mode"] = collection_configs["default_response_mode"]
-                
-            if "similarity_threshold" in collection_configs:
-                config["similarity_threshold"] = float(collection_configs["similarity_threshold"])
-    except Exception as e:
-        # Continuar con valores por defecto
-        pass
+    # En un sistema real, aquí podríamos obtener configuraciones 
+    # específicas para cada colección desde la base de datos
     
-    return config
+    # Por ahora, solo devolvemos la configuración por defecto
+    return default_config
