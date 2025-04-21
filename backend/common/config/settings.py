@@ -59,7 +59,7 @@ class Settings(BaseSettings):
     
     # =========== Redis ===========
     redis_url: str = Field("redis://localhost:6379/0", env="REDIS_URL", description="URL de Redis")
-    redis_max_connections: int = Field(10, description="Máximo de conexiones Redis")
+    redis_max_connections: int = Field(10, description="Máximo número de conexiones Redis")
     redis_password: Optional[str] = Field(None, env="REDIS_PASSWORD", description="Contraseña de Redis")
     
     # =========== Modelado de lenguaje ===========
@@ -80,6 +80,8 @@ class Settings(BaseSettings):
     cache_ttl_short: int = Field(300, description="TTL para caché corta (5min)")
     use_memory_cache: bool = Field(True, description="Usar caché en memoria")
     memory_cache_size: int = Field(1000, description="Tamaño máximo de caché en memoria (items)")
+    memory_cache_cleanup_percent: float = Field(0.2, description="Porcentaje de entradas a eliminar durante limpieza")
+    cache_ttl_permanent: int = Field(0, description="TTL para caché permanente (0 = sin expiración)")
     
     # =========== Configuración avanzada ===========
     load_config_from_supabase: bool = Field(True, description="Cargar configuraciones desde Supabase")

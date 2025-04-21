@@ -49,6 +49,21 @@ Este documento registra todos los cambios realizados durante la refactorización
 | Importaciones | Estandarización de importaciones:<br>• `from common.config import get_settings` (no desde submodulos)<br>• Exportación explícita de funciones en __init__.py | • Consistencia en todo el código<br>• Prevención de errores de importación<br>• Mejor mantenibilidad |
 | Variables de entorno | Documentación completa en .env:<br>• Variables añadidas para todos los servicios<br>• Descripción clara de cada variable | • Mejor documentación<br>• Facilita configuración<br>• Evita errores por variables no definidas |
 | Documentación | Creación de README.md en common/config | • Guía clara de uso<br>• Documentación de principios y estructura<br>• Referencia para desarrolladores |
+| Integración con caché | Refactorización del módulo common/cache/manager.py:<br>• Reemplazo de constantes hardcodeadas<br>• Actualización de importaciones<br>• Uso de configuraciones centralizadas<br>• Implementación de patrón singleton<br>• Métodos de instancia con fachada estática | • Consistencia con el resto del código<br>• Configurabilidad vía settings<br>• Compatible con código existente<br>• Mejor mantenibilidad<br>• Mayor flexibilidad |
+
+## Nuevas configuraciones de caché
+
+| Configuración | Descripción | Variable de entorno | Valor por defecto |
+|---------------|-------------|---------------------|------------------|
+| settings_ttl | TTL para caché de configuraciones | SETTINGS_TTL | 300 (5 min) |
+| cache_ttl_short | TTL para caché corta | CACHE_TTL_SHORT | 300 (5 min) |
+| cache_ttl_standard | TTL para caché estándar | CACHE_TTL_STANDARD | 3600 (1 hora) |
+| cache_ttl_extended | TTL para caché extendida | CACHE_TTL_EXTENDED | 86400 (24 horas) |
+| cache_ttl_permanent | TTL para caché permanente | CACHE_TTL_PERMANENT | 0 (sin expiración) |
+| use_memory_cache | Usar caché en memoria | USE_MEMORY_CACHE | true |
+| memory_cache_size | Tamaño máximo de caché en memoria | MEMORY_CACHE_SIZE | 1000 (items) |
+| memory_cache_cleanup_percent | Porcentaje a limpiar cuando se excede el tamaño | MEMORY_CACHE_CLEANUP_PERCENT | 0.2 (20%) |
+| redis_max_connections | Máximo número de conexiones a Redis | REDIS_MAX_CONNECTIONS | 10 |
 
 ## Separación de Responsabilidades
 

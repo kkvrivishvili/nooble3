@@ -37,6 +37,54 @@ Contiene la clase `Settings` y funciones para obtener configuraciones globales y
 - `invalidate_settings_cache(tenant_id: Optional[str] = None)`: Invalida la caché de configuraciones.
 - `get_service_settings(service_name: str, service_version: Optional[str] = None, tenant_id: Optional[str] = None) -> Settings`: Obtiene configuraciones específicas de un servicio.
 
+#### Configuraciones de Caché
+
+La clase `Settings` incluye configuraciones específicas para caché que son utilizadas por `common.cache.CacheManager`:
+
+```python
+# Configuraciones relacionadas con caché en Settings
+settings_ttl: int = Field(300, description="TTL para caché de configuraciones (segundos)")
+cache_ttl_extended: int = Field(86400, description="TTL para caché extendida (24h)")
+cache_ttl_standard: int = Field(3600, description="TTL para caché estándar (1h)")
+cache_ttl_short: int = Field(300, description="TTL para caché corta (5min)")
+cache_ttl_permanent: int = Field(0, description="TTL para caché permanente (0 = sin expiración)")
+use_memory_cache: bool = Field(True, description="Usar caché en memoria")
+memory_cache_size: int = Field(1000, description="Tamaño máximo de caché en memoria (items)")
+memory_cache_cleanup_percent: float = Field(0.2, description="Porcentaje de entradas a eliminar durante limpieza")
+redis_max_connections: int = Field(10, description="Máximo número de conexiones Redis")
+```
+
+Estas configuraciones pueden personalizarse a través de variables de entorno como `CACHE_TTL_STANDARD`, `MEMORY_CACHE_SIZE`, etc.
+
+### Integración con CacheManager
+
+El sistema de configuración centralizada se integra con `common.cache.CacheManager` a través de un patrón singleton:
+
+1. **CacheManager obtiene configuraciones desde Settings**:
+   ```python
+   def __init__(self):
+       from ..config import get_settings
+       self.settings = get_settings()
+       self.ttl_standard = self.settings.cache_ttl_standard
+       # ...
+   ```
+
+2. **Métodos de instancia usan configuraciones centralizadas**:
+   ```python
+   async def set(self, ...):
+       # Usa self.ttl_standard en lugar de constantes hardcodeadas
+   ```
+
+3. **Compatibilidad con código existente mediante fachada estática**:
+   ```python
+   @staticmethod
+   async def set(...):
+       instance = CacheManager.get_instance()
+       return await instance.set(...)
+   ```
+
+Esta implementación permite mantener las ventajas de la configuración centralizada mientras se preserva la compatibilidad con el código existente de los servicios.
+
 ### 2. Tiers (`common.config.tiers`)
 
 Contiene todas las configuraciones relacionadas con los tiers de suscripción y modelos disponibles.
