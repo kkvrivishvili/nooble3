@@ -5,7 +5,7 @@ from fastapi import APIRouter, Query, Depends
 
 from common.models import TenantInfo, CacheClearResponse
 from common.errors import handle_service_error_simple, ValidationError
-from common.auth import verify_tenant, get_auth_info
+from common.auth import verify_tenant
 from common.config import get_settings, invalidate_settings_cache
 from common.cache.manager import CacheManager
 
@@ -25,7 +25,7 @@ async def clear_config_cache(
     scope: Optional[str] = Query(None, description="Ámbito específico a invalidar ('tenant', 'service', 'agent', 'collection')"),
     scope_id: Optional[str] = Query(None, description="ID específico del ámbito (ej: agent_id, service_name)"),
     environment: str = Query(settings.environment, description="Entorno de configuración"),
-    tenant_info: Optional[TenantInfo] = Depends(get_auth_info)
+    tenant_info: Optional[TenantInfo] = Depends(verify_tenant)
 ):
     """
     Invalida el caché de configuraciones para el tenant autenticado (o globalmente),

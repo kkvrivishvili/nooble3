@@ -26,7 +26,7 @@ async def list_conversations(
     
     Args:
         agent_id: ID del agente para filtrar (opcional)
-        tenant_info: Información del tenant (inyectada mediante get_auth_info)
+        tenant_info: Información del tenant (inyectada mediante verify_tenant)
         
     Returns:
         ConversationListResponse: Lista de conversaciones
@@ -113,7 +113,7 @@ async def get_conversation_messages(
         conversation_id: ID de la conversación
         limit: Número máximo de mensajes a devolver (por defecto: de settings)
         offset: Desplazamiento para paginación (por defecto 0)
-        tenant_info: Información del tenant (inyectada mediante get_auth_info)
+        tenant_info: Información del tenant (inyectada mediante verify_tenant)
         
     Returns:
         MessageListResponse: Lista de mensajes de la conversación
