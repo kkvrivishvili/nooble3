@@ -31,7 +31,8 @@ async def get_llm_for_tenant(tenant_info: TenantInfo, requested_model: Optional[
     model_name = await validate_model_access(
         tenant_info, 
         requested_model or settings.default_llm_model,
-        model_type="llm"
+        model_type="llm",
+        tenant_id=tenant_info.tenant_id
     )
     
     # Configuración común a todos los modelos

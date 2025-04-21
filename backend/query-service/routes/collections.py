@@ -3,7 +3,6 @@ Endpoints para gestión de colecciones.
 """
 
 import logging
-import uuid
 from typing import Optional, List, Dict, Any
 
 from fastapi import APIRouter, Depends, Query

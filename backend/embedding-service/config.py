@@ -2,7 +2,6 @@
 Configuraciones específicas para el servicio de embeddings.
 """
 
-import os
 from typing import Dict, Any, Optional, List
 
 from common.config import (

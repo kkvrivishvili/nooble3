@@ -15,10 +15,10 @@ from common.errors import (
     QueryProcessingError
 )
 from common.context import with_context, set_current_tenant_id, get_current_tenant_id, get_current_collection_id, set_current_context_value
-from common.auth import verify_tenant, validate_model_access, RoleType, get_allowed_models_for_tier
-from common.tracking import track_usage
+from common.auth import verify_tenant, validate_model_access, RoleType
 from common.config import get_settings
-
+from common.config.tiers import get_available_llm_models
+from common.tracking import track_usage
 from services.query_engine import create_query_engine, process_query_with_sources
 
 router = APIRouter()
@@ -63,11 +63,11 @@ async def query_collection(
     if request.llm_model:
         try:
             # Intentar validar el modelo solicitado
-            request.llm_model = await validate_model_access(tenant_info, request.llm_model, "llm")
+            request.llm_model = await validate_model_access(tenant_info, request.llm_model, "llm", tenant_id=tenant_info.tenant_id)
         except ServiceError as e:
             # Si el modelo no está permitido, usar el modelo por defecto para su tier
             logger.info(f"Cambiando al modelo por defecto: {e.message}", extra=e.context)
-            allowed_models = get_allowed_models_for_tier(tenant_info.subscription_tier, "llm")
+            allowed_models = get_available_llm_models(tenant_info.subscription_tier, tenant_id=tenant_info.tenant_id)
             request.llm_model = allowed_models[0] if allowed_models else settings.default_llm_model
             # Informar al usuario sobre el cambio de modelo en los metadatos de respuesta
             set_current_context_value("model_downgraded", True)

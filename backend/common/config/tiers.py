@@ -208,37 +208,39 @@ async def get_tier_limits(tier: str, tenant_id: Optional[str] = None) -> Dict[st
         # Devolver límites de free como fallback
         return default_tier_limits["free"].copy()
 
-def get_available_llm_models(tier: str) -> List[str]:
+def get_available_llm_models(tier: str, tenant_id: Optional[str] = None) -> List[str]:
     """
     Obtiene los modelos LLM disponibles para un nivel de suscripción específico.
     
     Args:
         tier: Nivel de suscripción ('free', 'pro', 'business')
+        tenant_id: ID opcional del tenant para personalización
         
     Returns:
         List[str]: Lista de modelos LLM disponibles
     """
-    tier = tier.lower()
-    if tier not in default_tier_limits:
-        tier = "free"
+    # Primero obtener los límites completos del tier (que ya implementa personalización por tenant)
+    tier_limits = get_tier_limits(tier, tenant_id)
     
-    return default_tier_limits[tier].get("allowed_llm_models", ["gpt-3.5-turbo"])
+    # Extraer los modelos permitidos de los límites
+    return tier_limits.get("allowed_llm_models", ["gpt-3.5-turbo"])
 
-def get_available_embedding_models(tier: str) -> List[str]:
+def get_available_embedding_models(tier: str, tenant_id: Optional[str] = None) -> List[str]:
     """
     Obtiene los modelos de embedding disponibles para un nivel de suscripción específico.
     
     Args:
         tier: Nivel de suscripción ('free', 'pro', 'business')
+        tenant_id: ID opcional del tenant para personalización
         
     Returns:
         List[str]: Lista de modelos de embedding disponibles
     """
-    tier = tier.lower()
-    if tier not in default_tier_limits:
-        tier = "free"
+    # Primero obtener los límites completos del tier (que ya implementa personalización por tenant)
+    tier_limits = get_tier_limits(tier, tenant_id)
     
-    return default_tier_limits[tier].get("allowed_embedding_models", ["text-embedding-3-small"])
+    # Extraer los modelos permitidos de los límites
+    return tier_limits.get("allowed_embedding_models", ["text-embedding-3-small"])
 
 def get_service_port(service_name: str) -> int:
     """

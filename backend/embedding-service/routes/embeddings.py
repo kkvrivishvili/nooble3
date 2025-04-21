@@ -8,22 +8,21 @@ from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends, Body, HTTPException
 
 from common.models.base import TenantInfo
-from common.auth import verify_tenant, get_allowed_models_for_tier
+from common.auth import verify_tenant, validate_model_access
 from common.context import with_context, get_current_tenant_id, get_current_collection_id
 from common.errors import (
     handle_service_error_simple, ValidationError, EmbeddingGenerationError, RateLimitExceeded
 )
 from common.config import get_settings
+from common.config.tiers import get_available_embedding_models
 from common.tracking import track_embedding_usage, track_token_usage
-from common.auth import verify_tenant, get_allowed_models_for_tier
 
 from models.embeddings import (
     EmbeddingRequest, EmbeddingResponse, 
     BatchEmbeddingRequest, BatchEmbeddingResponse,
     InternalEmbeddingResponse
 )
-from utils.validators import validate_model_access
-from services.embedding import CachedEmbeddingProvider
+from services.embedding_provider import CachedEmbeddingProvider
 from services.exceptions import TextLengthExceeded, ModelError
 
 router = APIRouter()
@@ -67,11 +66,11 @@ async def generate_embeddings(
     
     # Validar acceso al modelo solicitado
     try:
-        validated_model = await validate_model_access(tenant_info, model_name, "embedding")
+        validated_model = await validate_model_access(tenant_info, model_name, "embedding", tenant_id=tenant_info.tenant_id)
     except ServiceError as e:
         # Si el modelo no está permitido, usar el modelo por defecto para su tier
         logger.info(f"Cambiando al modelo de embedding por defecto: {e.message}", extra=e.context)
-        allowed_models = get_allowed_models_for_tier(tenant_info.subscription_tier, "embedding")
+        allowed_models = get_available_embedding_models(tenant_info.subscription_tier, tenant_id=tenant_info.tenant_id)
         validated_model = allowed_models[0] if allowed_models else settings.default_embedding_model
         # Agregar información sobre el downgrade a la respuesta
         metadata = {"model_downgraded": True}
@@ -161,11 +160,11 @@ async def batch_generate_embeddings(
     
     # Validar acceso al modelo solicitado
     try:
-        validated_model = await validate_model_access(tenant_info, model_name, "embedding")
+        validated_model = await validate_model_access(tenant_info, model_name, "embedding", tenant_id=tenant_info.tenant_id)
     except ServiceError as e:
         # Si el modelo no está permitido, usar el modelo por defecto para su tier
         logger.info(f"Cambiando al modelo de embedding por defecto: {e.message}", extra=e.context)
-        allowed_models = get_allowed_models_for_tier(tenant_info.subscription_tier, "embedding")
+        allowed_models = get_available_embedding_models(tenant_info.subscription_tier, tenant_id=tenant_info.tenant_id)
         validated_model = allowed_models[0] if allowed_models else settings.default_embedding_model
         # Agregar información sobre el downgrade a la respuesta
         metadata = {"model_downgraded": True}
@@ -288,11 +287,11 @@ async def internal_embed(
         # Validar el modelo solicitado
         model_name = model or settings.default_embedding_model
         try:
-            validated_model = await validate_model_access(tenant_info, model_name, "embedding")
+            validated_model = await validate_model_access(tenant_info, model_name, "embedding", tenant_id=tenant_id)
         except ServiceError as e:
             # Si el modelo no está permitido, usar el modelo por defecto para su tier
             logger.info(f"Cambiando al modelo de embedding por defecto: {e.message}", extra=e.context)
-            allowed_models = get_allowed_models_for_tier(tenant_info.subscription_tier, "embedding")
+            allowed_models = get_available_embedding_models(tenant_info.subscription_tier, tenant_id=tenant_id)
             validated_model = allowed_models[0] if allowed_models else settings.default_embedding_model
             # Agregar información sobre el downgrade a la respuesta
             metadata = {"model_downgraded": True, "original_model": model_name}

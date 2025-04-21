@@ -20,7 +20,7 @@ from common.errors import (
 )
 from common.tracking import track_token_usage
 from common.llm.token_counters import count_tokens
-from common.cache.manager import CacheManager
+from common.cache import CacheManager
 
 logger = logging.getLogger(__name__)
 

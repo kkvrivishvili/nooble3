@@ -10,7 +10,7 @@ from common.errors import (
     TextTooLargeError, BatchTooLargeError, InvalidEmbeddingParamsError
 )
 from common.context import with_context, Context
-from common.cache.manager import CacheManager  # Usar la implementación unificada de caché
+from common.cache import CacheManager  # Importar desde el módulo correcto unificado
 
 logger = logging.getLogger(__name__)
 settings = get_settings()

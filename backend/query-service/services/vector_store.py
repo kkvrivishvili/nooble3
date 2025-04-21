@@ -4,7 +4,7 @@ import logging
 from typing import Optional, Any
 
 from common.db.supabase import get_tenant_vector_store
-from common.cache.manager import CacheManager, TTL_MEDIUM
+from common.cache import CacheManager, TTL_MEDIUM
 from common.context import with_context
 
 logger = logging.getLogger(__name__)

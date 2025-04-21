@@ -6,11 +6,11 @@ import uuid
 import logging
 from typing import Dict, Any, List, Optional
 
-from ..cache.manager import CacheManager
+from ..cache import CacheManager
 from ..db.supabase import get_supabase_client
 from ..db.tables import get_table_name
 from ..db.rpc import increment_token_usage as rpc_increment_token_usage
-from ..config.settings import get_settings
+from ..config import get_settings
 from ..config.tiers import get_tier_rate_limit
 from ..context.vars import get_current_tenant_id
 
@@ -31,7 +31,6 @@ async def track_token_usage(
         return True
     # Obtener configuración con manejo de errores
     try:
-        from ..config.settings import get_settings
         settings = get_settings()
         if not settings.enable_usage_tracking:
             logger.debug(f"Tracking deshabilitado, omitiendo {tokens} tokens")
@@ -42,7 +41,6 @@ async def track_token_usage(
     # Obtener tenant_id con manejo de errores
     if not tenant_id:
         try:
-            from ..context.vars import get_current_tenant_id
             tenant_id = get_current_tenant_id()
         except ImportError:
             pass
@@ -71,7 +69,6 @@ async def track_token_usage(
 
         # Intentar registrar en base de datos
         try:
-            from ..db.rpc import increment_token_usage as rpc_increment_token_usage
             await rpc_increment_token_usage(
                 tenant_id=tenant_id,
                 tokens=adjusted,
