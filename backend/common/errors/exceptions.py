@@ -7,8 +7,9 @@ from typing import Dict, Any, Optional
 from enum import Enum
 from fastapi import HTTPException, status
 
-# Importamos los códigos de error básicos desde config
-from ..config import (
+# Importamos los códigos de error básicos desde core (en lugar de desde config)
+# para evitar dependencias circulares
+from ..core.constants import (
     ERROR_GENERAL, ERROR_NOT_FOUND, ERROR_VALIDATION, ERROR_TENANT_REQUIRED,
     ERROR_DATABASE, ERROR_CACHE, ERROR_CONFIGURATION
 )

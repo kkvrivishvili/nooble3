@@ -10,8 +10,11 @@ from typing import Dict, Any, Optional, List, Union
 from functools import lru_cache
 from pydantic import Field, validator
 from pydantic_settings import BaseSettings
-from ..errors.handlers import handle_errors
-from ..errors.exceptions import ConfigurationError, ErrorCode
+
+# Eliminamos las importaciones directas y usaremos importaciones tardías
+# para evitar dependencias circulares
+# from ..errors.handlers import handle_errors
+# from ..errors.exceptions import ConfigurationError, ErrorCode
 
 logger = logging.getLogger(__name__)
 
@@ -154,7 +157,6 @@ class Settings(BaseSettings):
         case_sensitive = False
         extra = "ignore"
 
-@handle_errors
 def get_settings(tenant_id: Optional[str] = None) -> Settings:
     """
     Obtiene la configuración con caché para el servicio.
@@ -171,88 +173,97 @@ def get_settings(tenant_id: Optional[str] = None) -> Settings:
     Raises:
         ConfigurationError: Si hay un problema al cargar configuraciones
     """
-    # Claves de contexto para errores
-    error_context = {"function": "get_settings"}
-    if tenant_id:
-        error_context["tenant_id"] = tenant_id
+    # Importación tardía para evitar dependencias circulares
+    from ..errors.handlers import handle_errors
+    from ..errors.exceptions import ConfigurationError, ErrorCode
     
-    # Variables globales para control de caché
-    global _force_settings_reload, _settings_last_refresh, _settings_ttl
-    
-    # Si existe la caché y no hay que recargar, usar valor cacheado
-    if tenant_id in _settings_last_refresh and not _force_settings_reload:
-        # Verificar si ha expirado el TTL
-        if time.time() - _settings_last_refresh[tenant_id] < _settings_ttl:
-            # Obtener de caché LRU
-            try:
-                settings = _get_settings_lru(tenant_id)
-                return settings
-            except Exception as e:
-                logger.warning(f"Error al recuperar settings de caché: {e}", extra=error_context)
-                # Continuar para regenerar
-    
-    # Si llegamos aquí, debemos crear nueva configuración
-    try:
-        # Crear objeto de configuración básico
-        settings = Settings()
+    # Aplicamos el decorador dinámicamente
+    @handle_errors
+    def _get_settings_impl(tenant_id: Optional[str] = None) -> Settings:
+        # Claves de contexto para errores
+        error_context = {"function": "get_settings"}
+        if tenant_id:
+            error_context["tenant_id"] = tenant_id
         
-        # Actualizar el TTL de caché según la configuración
-        _settings_ttl = settings.settings_ttl
+        # Variables globales para control de caché
+        global _force_settings_reload, _settings_last_refresh, _settings_ttl
         
-        # Ambiente actual
-        environment = settings.environment
+        # Si existe la caché y no hay que recargar, usar valor cacheado
+        if tenant_id in _settings_last_refresh and not _force_settings_reload:
+            # Verificar si ha expirado el TTL
+            if time.time() - _settings_last_refresh[tenant_id] < _settings_ttl:
+                # Obtener de caché LRU
+                try:
+                    settings = _get_settings_lru(tenant_id)
+                    return settings
+                except Exception as e:
+                    logger.warning(f"Error al recuperar settings de caché: {e}", extra=error_context)
+                    # Continuar para regenerar
         
-        # Si está activo, cargar configuraciones desde Supabase
-        if settings.load_config_from_supabase:
-            try:
-                # Importación tardía para evitar ciclos
-                from .supabase_loader import override_settings_from_supabase
-                
-                # Aplicar configuraciones desde Supabase
-                settings = override_settings_from_supabase(
-                    settings=settings,
-                    tenant_id=tenant_id or settings.default_tenant_id,
-                    environment=environment
-                )
-            except Exception as e:
-                error_message = f"Error al cargar configuraciones desde Supabase: {e}"
-                logger.warning(error_message, extra=error_context)
-                # Continuar con valores predeterminados
-                
-                # Si no estamos en producción, usar configuraciones mock
-                if environment != "production":
-                    try:
-                        # Importación tardía para evitar ciclos
-                        from .schema import get_mock_configurations
-                        
-                        mock_config = get_mock_configurations(settings.service_name)
-                        if mock_config:
-                            logger.info("Usando configuraciones mock para desarrollo")
-                            for key, value in mock_config.items():
-                                if hasattr(settings, key):
-                                    setattr(settings, key, value)
-                    except Exception as mock_error:
-                        logger.warning(f"Error al cargar configuraciones mock: {mock_error}")
-        
-        # Resetear la bandera de recarga forzada si es específica para este tenant
-        if _force_settings_reload and (tenant_id is None or tenant_id in _settings_last_refresh):
-            _force_settings_reload = False
+        # Si llegamos aquí, debemos crear nueva configuración
+        try:
+            # Crear objeto de configuración básico
+            settings = Settings()
             
-        # Actualizar timestamp de última actualización
-        _settings_last_refresh[tenant_id] = time.time()
-        
-        # Guardar en caché LRU
-        _add_settings_to_lru(tenant_id, settings)
-        
-        return settings
-        
-    except Exception as e:
-        error_message = f"Error al obtener configuraciones: {e}"
-        logger.error(error_message, extra=error_context, exc_info=True)
-        raise ConfigurationError(
-            message=error_message,
-            error_code=ErrorCode.CONFIGURATION_ERROR
-        )
+            # Actualizar el TTL de caché según la configuración
+            _settings_ttl = settings.settings_ttl
+            
+            # Ambiente actual
+            environment = settings.environment
+            
+            # Si está activo, cargar configuraciones desde Supabase
+            if settings.load_config_from_supabase:
+                try:
+                    # Importación tardía para evitar ciclos
+                    from .supabase_loader import override_settings_from_supabase
+                    
+                    # Aplicar configuraciones desde Supabase
+                    settings = override_settings_from_supabase(
+                        settings=settings,
+                        tenant_id=tenant_id or settings.default_tenant_id,
+                        environment=environment
+                    )
+                except Exception as e:
+                    error_message = f"Error al cargar configuraciones desde Supabase: {e}"
+                    logger.warning(error_message, extra=error_context)
+                    # Continuar con valores predeterminados
+                    
+                    # Si no estamos en producción, usar configuraciones mock
+                    if environment != "production":
+                        try:
+                            # Importación tardía para evitar ciclos
+                            from .schema import get_mock_configurations
+                            
+                            mock_config = get_mock_configurations(settings.service_name)
+                            if mock_config:
+                                logger.info("Usando configuraciones mock para desarrollo")
+                                for key, value in mock_config.items():
+                                    if hasattr(settings, key):
+                                        setattr(settings, key, value)
+                        except Exception as mock_error:
+                            logger.warning(f"Error al cargar configuraciones mock: {mock_error}")
+            
+            # Resetear la bandera de recarga forzada si es específica para este tenant
+            if _force_settings_reload and (tenant_id is None or tenant_id in _settings_last_refresh):
+                _force_settings_reload = False
+                
+            # Actualizar timestamp de última actualización
+            _settings_last_refresh[tenant_id] = time.time()
+            
+            # Guardar en caché LRU
+            _add_settings_to_lru(tenant_id, settings)
+            
+            return settings
+            
+        except Exception as e:
+            error_message = f"Error al obtener configuraciones: {e}"
+            logger.error(error_message, extra=error_context, exc_info=True)
+            raise ConfigurationError(
+                message=error_message,
+                error_code=ErrorCode.CONFIGURATION_ERROR
+            )
+    
+    return _get_settings_impl(tenant_id)
 
 @lru_cache(maxsize=100)
 def _get_settings_lru(tenant_id: Optional[str]) -> Settings:
@@ -299,7 +310,6 @@ def invalidate_settings_cache(tenant_id: Optional[str] = None) -> None:
             _force_settings_reload = True
             logger.info(f"Cache de configuraciones para tenant {tenant_id} invalidada")
 
-@handle_errors
 def get_service_settings(service_name: str, service_version: Optional[str] = None, tenant_id: Optional[str] = None) -> Settings:
     """
     Obtiene la configuración específica para un servicio, extendiendo la configuración base.
@@ -318,46 +328,55 @@ def get_service_settings(service_name: str, service_version: Optional[str] = Non
     Raises:
         ConfigurationError: Si hay un problema al obtener las configuraciones
     """
-    # Obtener configuración base
-    settings = get_settings(tenant_id=tenant_id)
+    # Importación tardía para evitar dependencias circulares
+    from ..errors.handlers import handle_errors
+    from ..errors.exceptions import ConfigurationError
     
-    # Establecer nombre y versión del servicio
-    settings.service_name = service_name
-    if service_version:
-        settings.service_version = service_version
-    else:
-        settings.service_version = os.getenv("SERVICE_VERSION", "1.0.0")
+    # Aplicamos el decorador dinámicamente
+    @handle_errors
+    def _get_service_settings_impl(service_name: str, service_version: Optional[str] = None, tenant_id: Optional[str] = None) -> Settings:
+        # Obtener configuración base
+        settings = get_settings(tenant_id=tenant_id)
+        
+        # Establecer nombre y versión del servicio
+        settings.service_name = service_name
+        if service_version:
+            settings.service_version = service_version
+        else:
+            settings.service_version = os.getenv("SERVICE_VERSION", "1.0.0")
+        
+        # Aplicar configuraciones específicas según el servicio
+        if service_name == "agent-service":
+            # Configuraciones específicas para agentes
+            settings.agent_default_message_limit = int(os.getenv("AGENT_DEFAULT_MESSAGE_LIMIT", "50"))
+            settings.agent_streaming_timeout = int(os.getenv("AGENT_STREAMING_TIMEOUT", "300"))
+            settings.model_capacity = {
+                "gpt-3.5-turbo": 4096,
+                "gpt-4": 8192,
+                "gpt-4-turbo": 16384,
+                "llama3": 8192,
+            }
+        
+        elif service_name == "embedding-service":
+            # Configuraciones específicas para embeddings
+            settings.embedding_cache_enabled = os.getenv("EMBEDDING_CACHE_ENABLED", "true").lower() in ["true", "1", "yes"]
+            settings.embedding_batch_size = int(os.getenv("EMBEDDING_BATCH_SIZE", "100"))
+            settings.max_embedding_batch_size = int(os.getenv("MAX_EMBEDDING_BATCH_SIZE", "10"))
+        
+        elif service_name == "query-service":
+            # Configuraciones específicas para queries
+            settings.default_similarity_top_k = int(os.getenv("DEFAULT_SIMILARITY_TOP_K", "4"))
+            settings.similarity_threshold = float(os.getenv("SIMILARITY_THRESHOLD", "0.7"))
+            settings.max_query_retries = int(os.getenv("MAX_QUERY_RETRIES", "3"))
+        
+        elif service_name == "ingestion-service":
+            # Configuraciones específicas para ingestion
+            settings.max_doc_size_mb = int(os.getenv("MAX_DOC_SIZE_MB", "10"))
+            settings.chunk_size = int(os.getenv("CHUNK_SIZE", "512"))
+            settings.chunk_overlap = int(os.getenv("CHUNK_OVERLAP", "51"))
+            settings.max_workers = int(os.getenv("MAX_WORKERS", "4"))
+        
+        logger.debug(f"Configuración específica para {service_name} cargada correctamente")
+        return settings
     
-    # Aplicar configuraciones específicas según el servicio
-    if service_name == "agent-service":
-        # Configuraciones específicas para agentes
-        settings.agent_default_message_limit = int(os.getenv("AGENT_DEFAULT_MESSAGE_LIMIT", "50"))
-        settings.agent_streaming_timeout = int(os.getenv("AGENT_STREAMING_TIMEOUT", "300"))
-        settings.model_capacity = {
-            "gpt-3.5-turbo": 4096,
-            "gpt-4": 8192,
-            "gpt-4-turbo": 16384,
-            "llama3": 8192,
-        }
-    
-    elif service_name == "embedding-service":
-        # Configuraciones específicas para embeddings
-        settings.embedding_cache_enabled = os.getenv("EMBEDDING_CACHE_ENABLED", "true").lower() in ["true", "1", "yes"]
-        settings.embedding_batch_size = int(os.getenv("EMBEDDING_BATCH_SIZE", "100"))
-        settings.max_embedding_batch_size = int(os.getenv("MAX_EMBEDDING_BATCH_SIZE", "10"))
-    
-    elif service_name == "query-service":
-        # Configuraciones específicas para queries
-        settings.default_similarity_top_k = int(os.getenv("DEFAULT_SIMILARITY_TOP_K", "4"))
-        settings.similarity_threshold = float(os.getenv("SIMILARITY_THRESHOLD", "0.7"))
-        settings.max_query_retries = int(os.getenv("MAX_QUERY_RETRIES", "3"))
-    
-    elif service_name == "ingestion-service":
-        # Configuraciones específicas para ingestion
-        settings.max_doc_size_mb = int(os.getenv("MAX_DOC_SIZE_MB", "10"))
-        settings.chunk_size = int(os.getenv("CHUNK_SIZE", "512"))
-        settings.chunk_overlap = int(os.getenv("CHUNK_OVERLAP", "51"))
-        settings.max_workers = int(os.getenv("MAX_WORKERS", "4"))
-    
-    logger.debug(f"Configuración específica para {service_name} cargada correctamente")
-    return settings
+    return _get_service_settings_impl(service_name, service_version, tenant_id)

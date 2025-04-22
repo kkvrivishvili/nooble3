@@ -9,7 +9,9 @@ import redis.asyncio as redis
 from ..context.vars import get_current_tenant_id, get_current_agent_id
 from ..context.vars import get_current_conversation_id, get_current_collection_id
 
-from common.cache import (
+# Importamos directamente desde core.constants en lugar de common.cache
+# para evitar importaciones circulares
+from ..core.constants import (
     TTL_SHORT, TTL_STANDARD, TTL_EXTENDED, TTL_PERMANENT,
     DEFAULT_TTL_MAPPING,
     METRIC_SERIALIZATION_ERROR

@@ -6,9 +6,9 @@ siguiendo el patrón Cache-Aside para todos los servicios RAG.
 """
 
 import asyncio
-# Importamos constantes del módulo config centralizado
-from ..config import (
-    get_settings,
+# Importamos constantes del módulo core en lugar de config
+# para evitar dependencias circulares
+from ..core.constants import (
     TTL_SHORT, TTL_STANDARD, TTL_EXTENDED, TTL_PERMANENT,
     SOURCE_CACHE, SOURCE_SUPABASE, SOURCE_GENERATION,
     METRIC_CACHE_HIT, METRIC_CACHE_MISS, METRIC_LATENCY, METRIC_CACHE_SIZE,
@@ -16,6 +16,10 @@ from ..config import (
     METRIC_SERIALIZATION_ERROR, METRIC_DESERIALIZATION_ERROR,
     DEFAULT_TTL_MAPPING
 )
+
+# Mantenemos la importación de config, pero solo para la función get_settings
+# que usaremos con importación tardía donde sea necesario
+from ..config import get_settings
 
 # Función para obtener configuraciones de caché del sistema centralizado
 async def _get_cache_settings():
