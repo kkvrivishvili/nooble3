@@ -773,33 +773,127 @@ class CacheManager:
 
     async def increment_counter(
         self,
-        scope: str,
-        resource_id: str,
-        tokens: int = 0,
+        counter_type: str,
+        amount: int,
+        resource_id: str = "total",
         tenant_id: Optional[str] = None,
         agent_id: Optional[str] = None,
         conversation_id: Optional[str] = None,
         collection_id: Optional[str] = None,
-        token_type: str = "llm"
-    ) -> bool:
+        token_type: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        ttl: Optional[int] = None
+    ) -> int:
         """
-        Incrementa un contador de tokens de forma atómica usando CacheManager.
+        Incrementa un contador en caché y devuelve el nuevo valor.
+        
+        Args:
+            counter_type: Tipo de contador ('token_usage', 'embedding_usage', 'api_call', etc.)
+            amount: Cantidad a incrementar
+            resource_id: ID del recurso específico (modelo, operación, etc.)
+            tenant_id, agent_id, etc: Componentes contextuales
+            token_type: Tipo de token si es un contador de tokens
+            metadata: Metadatos adicionales del contador
+            ttl: Tiempo de vida del contador en segundos (usar None para ttl_extended)
+            
+        Returns:
+            int: Nuevo valor del contador
         """
+        # Usar contexto actual si necesario
         tenant_id = tenant_id or get_current_tenant_id()
-        key = f"{scope}:{resource_id}"
-        async with self._lock:
-            current = await self.get(
-                token_type, key,
-                tenant_id, agent_id, conversation_id, collection_id,
-                use_memory=False, search_hierarchy=False
-            ) or 0
-            await self.set(
-                token_type, key, current + tokens,
-                tenant_id, agent_id, conversation_id, collection_id,
-                ttl=0, use_memory=False
-            )
-        return True
-
+        
+        # Clave base del contador
+        counter_key_parts = [tenant_id, f"counter:{counter_type}"]
+        
+        # Añadir componentes adicionales
+        if token_type:
+            counter_key_parts.append(f"type:{token_type}")
+        if agent_id:
+            counter_key_parts.append(f"agent:{agent_id}")
+        if conversation_id:
+            counter_key_parts.append(f"conv:{conversation_id}")
+        if collection_id:
+            counter_key_parts.append(f"coll:{collection_id}")
+            
+        # Añadir ID del recurso 
+        counter_key_parts.append(resource_id)
+        
+        # Formar clave final
+        counter_key = ":".join(filter(None, counter_key_parts))
+        
+        # Obtener cliente Redis
+        redis_client = await get_redis_client()
+        if not redis_client:
+            logger.warning(f"Redis no disponible, no se puede incrementar contador {counter_key}")
+            return amount  # Si no hay Redis, devolver el incremento como valor
+        
+        try:
+            # Incrementar contador
+            new_value = await redis_client.incrby(counter_key, amount)
+            
+            # Establecer TTL si es la primera vez
+            if new_value == amount:
+                await redis_client.expire(
+                    counter_key, 
+                    ttl or self.ttl_extended
+                )
+            
+            # Si hay metadatos, guardarlos
+            if metadata:
+                metadata_key = f"{counter_key}:metadata"
+                await redis_client.hset(metadata_key, mapping=metadata)
+                await redis_client.expire(
+                    metadata_key, 
+                    ttl or self.ttl_extended
+                )
+            
+            return new_value
+        except Exception as e:
+            logger.warning(f"Error incrementando contador {counter_key}: {str(e)}")
+            return amount  # En caso de error, devolver el incremento
+    
+    @staticmethod
+    async def increment_counter(
+        scope: str,
+        amount: int,
+        resource_id: str = "total",
+        tenant_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        collection_id: Optional[str] = None,
+        token_type: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        ttl: Optional[int] = None
+    ) -> int:
+        """
+        Versión estática del método increment_counter para compatibilidad.
+        
+        Args:
+            scope: Tipo de contador ('token_usage', 'embedding_usage', etc)
+            amount: Cantidad a incrementar
+            resource_id: ID del recurso específico (modelo, operación, etc.)
+            tenant_id, agent_id, etc: Componentes contextuales
+            token_type: Tipo de token si es un contador de tokens
+            metadata: Metadatos adicionales
+            ttl: Tiempo de vida en segundos
+            
+        Returns:
+            int: Nuevo valor del contador
+        """
+        instance = CacheManager.get_instance()
+        return await instance.increment_counter(
+            counter_type=scope,
+            amount=amount,
+            resource_id=resource_id,
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+            collection_id=collection_id,
+            token_type=token_type,
+            metadata=metadata,
+            ttl=ttl
+        )
+    
     async def get_counter(
         self,
         scope: str,
@@ -808,20 +902,42 @@ class CacheManager:
         agent_id: Optional[str] = None,
         conversation_id: Optional[str] = None,
         collection_id: Optional[str] = None,
-        token_type: str = "llm"
+        token_type: Optional[str] = None
     ) -> int:
         """
-        Obtiene el valor del contador de tokens.
+        Obtiene el valor de un contador.
+        
+        Args:
+            scope: Tipo de contador
+            resource_id: ID del recurso
+            tenant_id, agent_id, etc: Componentes contextuales
+            token_type: Tipo de token si es un contador de tokens
+            
+        Returns:
+            int: Valor del contador
         """
         tenant_id = tenant_id or get_current_tenant_id()
-        key = f"{scope}:{resource_id}"
-        value = await self.get(
-            token_type, key,
-            tenant_id, agent_id, conversation_id, collection_id,
-            use_memory=False, search_hierarchy=False
-        )
-        return int(value) if value else 0
-
+        counter_key_parts = [tenant_id, f"counter:{scope}"]
+        if token_type:
+            counter_key_parts.append(f"type:{token_type}")
+        if agent_id:
+            counter_key_parts.append(f"agent:{agent_id}")
+        if conversation_id:
+            counter_key_parts.append(f"conv:{conversation_id}")
+        if collection_id:
+            counter_key_parts.append(f"coll:{collection_id}")
+        counter_key_parts.append(resource_id)
+        counter_key = ":".join(filter(None, counter_key_parts))
+        redis_client = await get_redis_client()
+        if not redis_client:
+            return 0
+        try:
+            value = await redis_client.get(counter_key)
+            return int(value) if value else 0
+        except Exception as e:
+            logger.warning(f"Error al obtener contador {counter_key}: {str(e)}")
+            return 0
+    
     async def ttl(
         self,
         data_type: str,
@@ -1014,26 +1130,6 @@ class CacheManager:
         return await instance.rpush(list_name, value, tenant_id, expiry)
     
     @staticmethod
-    async def increment_counter(
-        scope: str,
-        resource_id: str,
-        tokens: int = 0,
-        token_type: str = "tokens",
-        tenant_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
-        conversation_id: Optional[str] = None,
-        collection_id: Optional[str] = None
-    ) -> bool:
-        """
-        Método estático compatible que llama al método de instancia increment_counter().
-        """
-        instance = CacheManager.get_instance()
-        return await instance.increment_counter(
-            scope, resource_id, tokens, token_type, 
-            tenant_id, agent_id, conversation_id, collection_id
-        )
-    
-    @staticmethod
     async def get_counter(
         scope: str,
         resource_id: str,
@@ -1051,3 +1147,167 @@ class CacheManager:
             scope, resource_id, tenant_id, agent_id, 
             conversation_id, collection_id, token_type
         )
+    
+    @staticmethod
+    async def ttl(
+        data_type: str,
+        resource_id: str,
+        tenant_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        collection_id: Optional[str] = None
+    ) -> int:
+        """
+        Versión estática del método ttl() para compatibilidad.
+        """
+        instance = CacheManager.get_instance()
+        return await instance.ttl(
+            data_type, resource_id, tenant_id, 
+            agent_id, conversation_id, collection_id
+        )
+    
+    async def add_to_set(
+        self,
+        set_name: str,
+        value: str,
+        tenant_id: Optional[str] = None,
+        ttl: Optional[int] = None
+    ) -> int:
+        """
+        Añade un valor a un conjunto (set) en Redis.
+        
+        Args:
+            set_name: Nombre del conjunto
+            value: Valor a añadir
+            tenant_id: ID del tenant
+            ttl: Tiempo de vida en segundos (None para usar ttl_extended)
+            
+        Returns:
+            int: Número de elementos añadidos (0 si ya existía, 1 si se añadió)
+        """
+        tenant_id = tenant_id or get_current_tenant_id() or "system"
+        
+        # Construir clave del conjunto
+        key = f"{tenant_id}:set:{set_name}"
+        
+        # Obtener cliente Redis
+        redis_client = await get_redis_client()
+        if not redis_client:
+            logger.warning(f"Redis no disponible, no se puede añadir a conjunto {set_name}")
+            return 0
+            
+        try:
+            # Añadir al conjunto
+            result = await redis_client.sadd(key, value)
+            
+            # Establecer TTL si es necesario y no tiene uno ya
+            if ttl is not None or await redis_client.ttl(key) < 0:
+                await redis_client.expire(key, ttl or self.ttl_extended)
+                
+            return result
+        except Exception as e:
+            logger.warning(f"Error añadiendo a conjunto {set_name}: {str(e)}")
+            return 0
+    
+    async def remove_from_set(
+        self,
+        set_name: str,
+        value: str,
+        tenant_id: Optional[str] = None
+    ) -> int:
+        """
+        Elimina un valor de un conjunto (set) en Redis.
+        
+        Args:
+            set_name: Nombre del conjunto
+            value: Valor a eliminar
+            tenant_id: ID del tenant
+            
+        Returns:
+            int: Número de elementos eliminados (0 si no existía, 1 si se eliminó)
+        """
+        tenant_id = tenant_id or get_current_tenant_id() or "system"
+        
+        # Construir clave del conjunto
+        key = f"{tenant_id}:set:{set_name}"
+        
+        # Obtener cliente Redis
+        redis_client = await get_redis_client()
+        if not redis_client:
+            logger.warning(f"Redis no disponible, no se puede eliminar de conjunto {set_name}")
+            return 0
+            
+        try:
+            return await redis_client.srem(key, value)
+        except Exception as e:
+            logger.warning(f"Error eliminando de conjunto {set_name}: {str(e)}")
+            return 0
+    
+    async def get_set_members(
+        self,
+        set_name: str,
+        tenant_id: Optional[str] = None
+    ) -> List[str]:
+        """
+        Obtiene todos los miembros de un conjunto (set) en Redis.
+        
+        Args:
+            set_name: Nombre del conjunto
+            tenant_id: ID del tenant
+            
+        Returns:
+            List[str]: Lista de miembros del conjunto
+        """
+        tenant_id = tenant_id or get_current_tenant_id() or "system"
+        
+        # Construir clave del conjunto
+        key = f"{tenant_id}:set:{set_name}"
+        
+        # Obtener cliente Redis
+        redis_client = await get_redis_client()
+        if not redis_client:
+            logger.warning(f"Redis no disponible, no se pueden obtener miembros de conjunto {set_name}")
+            return []
+            
+        try:
+            members = await redis_client.smembers(key)
+            return list(members) if members else []
+        except Exception as e:
+            logger.warning(f"Error obteniendo miembros de conjunto {set_name}: {str(e)}")
+            return []
+    
+    @staticmethod
+    async def add_to_set(
+        set_name: str,
+        value: str,
+        tenant_id: Optional[str] = None,
+        ttl: Optional[int] = None
+    ) -> int:
+        """
+        Versión estática de add_to_set.
+        """
+        instance = CacheManager.get_instance()
+        return await instance.add_to_set(set_name, value, tenant_id, ttl)
+    
+    @staticmethod
+    async def remove_from_set(
+        set_name: str,
+        value: str,
+        tenant_id: Optional[str] = None
+    ) -> int:
+        """
+        Versión estática de remove_from_set.
+        """
+        instance = CacheManager.get_instance()
+        return await instance.remove_from_set(set_name, value, tenant_id)
+    
+    @staticmethod
+    async def get_set_members(
+        set_name: str,
+        tenant_id: Optional[str] = None
+    ) -> List[str]:
+        """
+        Versión estática de get_set_members.
+        """
+        instance = CacheManager.get_instance()
+        return await instance.get_set_members(set_name, tenant_id)

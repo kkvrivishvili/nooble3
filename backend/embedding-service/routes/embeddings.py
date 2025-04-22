@@ -15,7 +15,7 @@ from common.errors import (
 )
 from common.config import get_settings
 from common.config.tiers import get_available_embedding_models
-from common.tracking import track_embedding_usage, track_token_usage
+from common.tracking import track_token_usage
 
 from models.embeddings import (
     EmbeddingRequest, EmbeddingResponse, 
@@ -88,13 +88,18 @@ async def generate_embeddings(
         
         # Registrar uso
         tokens_estimate = sum(len(text.split()) * 1.3 for text in texts)  # Estimación de tokens
-        await track_embedding_usage(
+        await track_token_usage(
             tenant_id=tenant_id,
-            texts=texts,
+            tokens=int(tokens_estimate),
             model=model_name,
-            cached_count=0,  # Se podría mejorar para detectar cantidad de caché hits
             agent_id=agent_id,
-            conversation_id=conversation_id
+            conversation_id=conversation_id,
+            token_type="embedding",
+            operation="encode",
+            metadata={
+                "texts_count": len(texts),
+                "cached_count": 0
+            }
         )
         
         processing_time = time.time() - start_time
@@ -212,13 +217,18 @@ async def batch_generate_embeddings(
         
         # Registrar uso
         tokens_estimate = sum(len(text.split()) * 1.3 for text in texts)  # Estimación de tokens
-        await track_embedding_usage(
+        await track_token_usage(
             tenant_id=tenant_id,
-            texts=texts,
+            tokens=int(tokens_estimate),
             model=model_name,
-            cached_count=0,
             agent_id=agent_id,
-            conversation_id=conversation_id
+            conversation_id=conversation_id,
+            token_type="embedding",
+            operation="encode",
+            metadata={
+                "texts_count": len(texts),
+                "cached_count": 0
+            }
         )
         
         # Construir respuesta asociando embeddings con sus metadatos originales

@@ -18,7 +18,7 @@ from common.errors import (
     RetrievalError, GenerationError, InvalidQueryParamsError,
     EmbeddingGenerationError, EmbeddingModelError, TextTooLargeError
 )
-from common.tracking import track_token_usage
+from common.tracking import track_token_usage, track_query
 from common.llm.token_counters import count_tokens
 from common.cache import CacheManager
 
@@ -96,12 +96,21 @@ async def process_query_with_sources(
         tokens_total = tokens_in + tokens_out
         
         # Tracking de tokens async
-        await track_token_usage(
-            tenant_id=tenant_id,
-            tokens=tokens_total,
-            model=model_used,
-            collection_id=collection_id,
-            token_type="rag"
+        await _track_usage(
+            query_input={
+                "tenant_id": tenant_id,
+                "agent_id": agent_id,
+                "conversation_id": None,
+                "query": query,
+                "collection_id": collection_id
+            },
+            result={
+                "tokens": tokens_total,
+                "model": model_used
+            },
+            model_name=model_used,
+            elapsed_time=time.time() - start_time,
+            query_type="query"
         )
         
         # Extraer fuentes si están disponibles
@@ -169,6 +178,70 @@ async def process_query_with_sources(
             }
         )
 
+
+async def _track_usage(query_input: dict, result: dict, model_name: str, elapsed_time: float, query_type: str = "query") -> None:
+    """
+    Registra el uso de tokens para esta consulta.
+
+    Args:
+        query_input: Datos de entrada de la consulta
+        result: Resultados de la consulta
+        model_name: Nombre del modelo utilizado
+        elapsed_time: Tiempo de ejecución en segundos
+        query_type: Tipo de consulta (query, chat, etc.)
+    """
+    try:
+        tokens = result.get("tokens", 0)
+        tenant_id = query_input.get("tenant_id")
+        agent_id = query_input.get("agent_id")
+        conversation_id = query_input.get("conversation_id")
+        collection_id = query_input.get("collection_id")
+        
+        if tokens <= 0:
+            logger.debug(f"No se registrarán tokens: valor de tokens ({tokens}) inválido")
+            return
+            
+        if not tenant_id:
+            logger.warning("No se registrarán tokens: tenant_id no disponible")
+            return
+        
+        # Usar el sistema centralizado de tracking
+        tracking_success = await track_token_usage(
+            tenant_id=tenant_id,
+            tokens=tokens,
+            model=model_name,
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+            collection_id=collection_id,
+            token_type="llm",
+            operation=query_type,
+            metadata={
+                "elapsed_time": elapsed_time,
+                "query_type": query_type
+            }
+        )
+        
+        if not tracking_success:
+            logger.warning(f"No se pudo registrar el uso de tokens para tenant {tenant_id}")
+        
+        # También registrar la consulta para análisis
+        query_text = query_input.get("query", "")
+        if query_text:
+            await track_query(
+                tenant_id=tenant_id,
+                query_text=query_text,
+                metadata={
+                    "agent_id": agent_id,
+                    "conversation_id": conversation_id,
+                    "model": model_name,
+                    "elapsed_time": elapsed_time,
+                    "tokens": tokens,
+                    "query_type": query_type
+                }
+            )
+        
+    except Exception as e:
+        logger.error(f"Error al registrar el uso de tokens: {str(e)}", exc_info=True)
 
 @with_context(tenant=True, collection=True, agent=True)
 async def create_query_engine(

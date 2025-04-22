@@ -13,11 +13,6 @@ from pydantic_settings import BaseSettings
 from ..errors.handlers import handle_errors
 from ..errors.exceptions import ConfigurationError, ErrorCode
 
-# Eliminamos importaciones a nivel de módulo para evitar ciclos
-# Ya no importamos aquí:
-# from .schema import get_service_configurations, get_mock_configurations
-# from .tiers import default_tier_limits, get_tier_limits
-
 logger = logging.getLogger(__name__)
 
 # Variables globales para control de caché
@@ -109,7 +104,34 @@ class Settings(BaseSettings):
     # =========== Rate Limiting ===========
     enable_rate_limiting: bool = Field(True, description="Activar limitación de tasa")
     default_rate_limit: int = Field(10, description="Límite de tasa por defecto (req/min)")
-
+    
+    # =========== Tracking y Reconciliación ===========
+    enable_usage_tracking: bool = Field(True, env="ENABLE_USAGE_TRACKING", description="Habilitar tracking de uso")
+    reconciliation_schedule_daily: str = Field("0 2 * * *", env="RECONCILIATION_SCHEDULE_DAILY", description="Cron schedule para reconciliación diaria")
+    reconciliation_schedule_weekly: str = Field("0 3 * * 0", env="RECONCILIATION_SCHEDULE_WEEKLY", description="Cron schedule para reconciliación semanal")
+    reconciliation_schedule_monthly: str = Field("0 4 1 * *", env="RECONCILIATION_SCHEDULE_MONTHLY", description="Cron schedule para reconciliación mensual")
+    
+    # Límites para alertas de reconciliación
+    reconciliation_alert_threshold: int = Field(1000, env="RECONCILIATION_ALERT_THRESHOLD", description="Umbral para alertas de reconciliación")
+    reconciliation_critical_threshold: int = Field(5000, env="RECONCILIATION_CRITICAL_THRESHOLD", description="Umbral crítico para alertas de reconciliación")
+    
+    # Configuración de notificaciones
+    slack_webhook_url: Optional[str] = Field(None, env="SLACK_WEBHOOK_URL", description="URL del webhook de Slack para notificaciones")
+    alert_notifications_enabled: bool = Field(True, env="ALERT_NOTIFICATIONS_ENABLED", description="Habilitar notificaciones de alertas")
+    monitoring_enabled: bool = Field(True, env="MONITORING_ENABLED", description="Habilitar sistema de monitorización")
+    
+    # Factores de coste por modelo
+    model_cost_factors: Dict[str, float] = Field(
+        default_factory=lambda: {
+            "gpt-4": 20.0,  # Base: 1.0, 20x más costoso
+            "gpt-4-32k": 40.0,  # Base: 1.0, 40x más costoso
+            "gpt-3.5-turbo": 1.0,  # Base
+            "llama2-70b": 10.0,  # Base: 1.0, 10x más costoso
+            "claude-2": 15.0,  # Base: 1.0, 15x más costoso
+        },
+        description="Factores de coste relativo por modelo"
+    )
+    
     @validator("redis_url")
     def validate_redis_url(cls, v):
         """Validar que la URL de Redis siga el formato correcto"""
