@@ -2,7 +2,8 @@ import logging
 from typing import List, Dict, Any
 
 from common.errors import ServiceError, ErrorCode, DocumentProcessingError, handle_errors
-from common.config import get_settings, get_tier_limits
+from common.config import get_settings
+from common.config.tiers import get_tier_limits
 from common.context import with_context, Context
 
 # Importar la función desde llama_core para centralizar la implementación

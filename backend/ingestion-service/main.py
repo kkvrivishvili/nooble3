@@ -19,6 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from common.config.settings import get_settings
 from common.errors import setup_error_handling, DatabaseError, ServiceError
 from common.utils.logging import init_logging
+from common.utils.rate_limiting import setup_rate_limiting
 from common.context import Context
 from common.context.vars import get_current_tenant_id
 from common.db.supabase import init_supabase

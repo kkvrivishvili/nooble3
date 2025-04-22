@@ -5,7 +5,10 @@ import asyncio
 import logging
 import signal
 import time
-from typing import Set
+from typing import Set, Dict, Any
+
+from common.errors import handle_errors, ServiceError, ErrorCode
+from common.context import with_context, Context
 
 from .queue import process_next_job, initialize_queue, shutdown_queue
 
@@ -15,6 +18,7 @@ logger = logging.getLogger(__name__)
 running = False
 workers: Set[asyncio.Task] = set()
 
+@handle_errors(error_type="service", log_traceback=True)
 async def worker_process(worker_id: int):
     """Proceso worker individual que procesa trabajos de la cola."""
     logger.info(f"Worker {worker_id} iniciado")
@@ -33,6 +37,7 @@ async def worker_process(worker_id: int):
     
     logger.info(f"Worker {worker_id} detenido")
 
+@handle_errors(error_type="service", log_traceback=True)
 async def start_worker_pool(num_workers: int = 3):
     """Inicia un pool de workers para procesar trabajos."""
     global running, workers
@@ -57,6 +62,7 @@ async def start_worker_pool(num_workers: int = 3):
     
     logger.info(f"Pool de {num_workers} workers iniciado")
 
+@handle_errors(error_type="service", log_traceback=True)
 async def stop_worker_pool():
     """Detiene el pool de workers."""
     global running, workers

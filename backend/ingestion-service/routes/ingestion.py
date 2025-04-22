@@ -13,14 +13,14 @@ from pydantic import BaseModel, Field
 
 from common.models import TenantInfo, FileUploadResponse, BatchJobResponse
 from common.errors import (
-    handle_errors, DocumentProcessingError, ValidationError, ServiceError
+    handle_errors, DocumentProcessingError, ValidationError, ServiceError, ErrorCode
 )
 from common.context import with_context, Context
 from common.auth import verify_tenant
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
-from common.config.settings import get_settings
-from common.config import get_tier_limits
+from common.config import get_settings
+from common.config.tiers import get_tier_limits
 from common.db.storage import upload_to_storage
 
 # Importar los módulos actualizados con LlamaIndex

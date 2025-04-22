@@ -17,7 +17,8 @@ from fastapi import UploadFile
 
 from common.errors import handle_errors, ServiceError, ErrorCode, ValidationError
 from common.context import with_context, Context
-from common.config import get_settings, get_tier_limits
+from common.config import get_settings
+from common.config.tiers import get_tier_limits, get_available_embedding_models
 from common.tracking import track_token_usage
 from common.cache.manager import CacheManager
 
