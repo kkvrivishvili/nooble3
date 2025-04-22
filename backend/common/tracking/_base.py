@@ -255,3 +255,182 @@ async def track_usage(
     except Exception as e:
         logger.error(f"Error track_usage: {e}", extra={"tenant_id": tenant_id})
         return False
+
+async def track_embedding_usage(
+    tenant_id: Optional[str] = None,
+    text_length: int = 0,
+    vector_dimensions: int = 0,
+    model: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    collection_id: Optional[str] = None,
+    document_id: Optional[str] = None,
+    operation: str = "embedding",
+    metadata: Optional[Dict[str, Any]] = None
+) -> bool:
+    """
+    Registra el uso de embeddings para un tenant específico.
+    
+    Args:
+        tenant_id: ID del tenant (si None, se obtiene del contexto)
+        text_length: Longitud del texto procesado
+        vector_dimensions: Dimensiones del vector generado
+        model: Modelo de embedding utilizado
+        agent_id: ID del agente relacionado (opcional)
+        collection_id: ID de la colección de documentos (opcional)
+        document_id: ID del documento relacionado (opcional)
+        operation: Tipo de operación ('embedding', 'retrieval', etc.)
+        metadata: Datos adicionales sobre la operación
+        
+    Returns:
+        bool: True si el registro fue exitoso
+    """
+    if text_length <= 0:
+        return True
+        
+    # Obtener configuración con manejo de errores
+    try:
+        settings = get_settings()
+        if not settings.enable_usage_tracking:
+            logger.debug(f"Tracking deshabilitado, omitiendo embedding de {text_length} caracteres")
+            return True
+    except Exception as config_err:
+        logger.debug(f"Error obteniendo configuración, asumiendo tracking habilitado: {str(config_err)}")
+
+    # Obtener tenant_id del contexto si no se proporciona
+    if not tenant_id:
+        try:
+            tenant_id = get_current_tenant_id()
+        except ImportError:
+            pass
+        if not tenant_id or tenant_id == "default":
+            logger.warning("No se pudo registrar uso de embeddings: tenant_id no disponible")
+            return False
+    
+    # Obtener agent_id del contexto si no se proporciona
+    if not agent_id:
+        try:
+            agent_id = get_current_agent_id()
+        except ImportError:
+            pass
+    
+    # Preparar datos para registro
+    usage_data = {
+        "tenant_id": tenant_id,
+        "model": model or "default",
+        "text_length": text_length,
+        "vector_dimensions": vector_dimensions,
+        "operation": operation,
+        "timestamp": time.time(),
+        "usage_id": str(uuid.uuid4())
+    }
+    
+    # Añadir datos opcionales si están disponibles
+    if agent_id:
+        usage_data["agent_id"] = agent_id
+    if collection_id:
+        usage_data["collection_id"] = collection_id
+    if document_id:
+        usage_data["document_id"] = document_id
+    if metadata:
+        usage_data["metadata"] = json.dumps(metadata)
+    
+    # Registrar en base de datos
+    try:
+        supabase = get_supabase_client()
+        table_name = get_table_name("embedding_usage")
+        
+        # Insertar registro de uso
+        response = await supabase.table(table_name).insert(usage_data).execute()
+        
+        if response.data:
+            logger.debug(f"Uso de embedding registrado: {text_length} caracteres, modelo {model}")
+            return True
+        else:
+            logger.warning(f"Error al registrar uso de embedding: {response.error}")
+            return False
+    except Exception as e:
+        logger.error(f"Excepción al registrar uso de embedding: {str(e)}")
+        return False
+
+def track_operation(operation_name: str, operation_type: str):
+    """
+    Decorador para registrar operaciones y su rendimiento.
+    
+    Este decorador sirve como compatibilidad con implementaciones anteriores
+    y redirige el tracking a track_usage.
+    
+    Args:
+        operation_name: Nombre de la operación (ej: "get_agent_config")
+        operation_type: Tipo de operación (ej: "agent", "embedding")
+        
+    Returns:
+        Decorador configurado
+    """
+    def decorator(func):
+        import functools
+        
+        @functools.wraps(func)
+        async def wrapper(*args, **kwargs):
+            import time
+            start_time = time.time()
+            
+            # Extraer tenant_id de los argumentos si está presente
+            tenant_id = None
+            if 'tenant_id' in kwargs:
+                tenant_id = kwargs['tenant_id']
+            elif len(args) > 1 and isinstance(args[1], str):
+                # Asumiendo que el segundo argumento podría ser tenant_id en algunas funciones
+                tenant_id = args[1]
+            
+            try:
+                # Ejecutar la función original
+                result = await func(*args, **kwargs)
+                
+                # Calcular tiempo de ejecución
+                execution_time = time.time() - start_time
+                
+                # Crear metadatos de la operación
+                metadata = {
+                    "operation_name": operation_name,
+                    "operation_type": operation_type,
+                    "execution_time": execution_time,
+                    "status": "success"
+                }
+                
+                # Registrar la operación exitosa
+                if tenant_id:
+                    await track_usage(
+                        tenant_id=tenant_id,
+                        operation=f"{operation_type}.{operation_name}",
+                        metadata=metadata
+                    )
+                
+                return result
+            except Exception as e:
+                # Calcular tiempo hasta el error
+                execution_time = time.time() - start_time
+                
+                # Crear metadatos de error
+                metadata = {
+                    "operation_name": operation_name,
+                    "operation_type": operation_type,
+                    "execution_time": execution_time,
+                    "status": "error",
+                    "error_type": type(e).__name__,
+                    "error_message": str(e)
+                }
+                
+                # Registrar la operación fallida
+                if tenant_id:
+                    await track_usage(
+                        tenant_id=tenant_id,
+                        operation=f"{operation_type}.{operation_name}.error",
+                        metadata=metadata
+                    )
+                
+                # Re-lanzar la excepción
+                raise
+                
+        return wrapper
+    
+    return decorator

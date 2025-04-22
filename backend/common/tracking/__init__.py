@@ -6,7 +6,9 @@ from ._base import (
     track_token_usage,
     track_query,
     track_usage,
-    estimate_prompt_tokens
+    estimate_prompt_tokens,
+    track_embedding_usage,
+    track_operation
 )
 from .attribution import TokenAttributionService
 from .reconciliation import (
@@ -27,15 +29,19 @@ __all__ = [
     'track_token_usage',
     'track_query',
     'track_usage',
+    'track_operation',
     'estimate_prompt_tokens',
+    'track_embedding_usage',
     
-    # Servicios de atribución y reconciliación
+    # Servicios de atribución
     'TokenAttributionService',
+    
+    # Reconciliación y consolidación
     'reconcile_pending_tokens',
     'consolidate_counters',
     'audit_token_counters',
     
-    # Sistema de alertas
+    # Alertas
     'register_alert',
     'AlertLevel',
     

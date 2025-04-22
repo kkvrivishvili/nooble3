@@ -6,7 +6,7 @@ from .base import BaseModel, BaseResponse, ErrorResponse, HealthResponse, Tenant
 from .tenants import PublicTenantInfo
 from .agents import (
     AgentTool, AgentConfig, AgentRequest, AgentResponse, AgentSummary, 
-    AgentsListResponse, DeleteAgentResponse
+    AgentsListResponse, DeleteAgentResponse, AgentListResponse
 )
 from .collections import (
     CollectionInfo, CollectionsListResponse, CollectionToolResponse,
@@ -27,7 +27,7 @@ __all__ = [
     
     # Agents
     'AgentTool', 'AgentConfig', 'AgentRequest', 'AgentResponse', 'AgentSummary',
-    'AgentsListResponse', 'DeleteAgentResponse',
+    'AgentsListResponse', 'DeleteAgentResponse', 'AgentListResponse',
     
     # Collections
     'CollectionInfo', 'CollectionsListResponse', 'CollectionToolResponse',

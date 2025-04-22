@@ -313,3 +313,38 @@ class OllamaLLM(BaseLLM):
                 }
             ]
         }
+
+
+def is_using_ollama() -> bool:
+    """
+    Determina si se está usando Ollama como proveedor de modelos.
+    
+    Returns:
+        bool: True si se está usando Ollama, False si se está usando otro proveedor
+    """
+    return getattr(settings, "use_ollama", True)
+
+def get_embedding_model(model_name: Optional[str] = None) -> OllamaEmbeddings:
+    """
+    Obtiene una instancia configurada del modelo de embeddings.
+    
+    Args:
+        model_name: Nombre del modelo a utilizar (opcional)
+        
+    Returns:
+        Instancia inicializada de OllamaEmbeddings
+    """
+    return OllamaEmbeddings(model_name=model_name)
+
+def get_llm_model(model_name: Optional[str] = None, temperature: float = 0.7) -> OllamaLLM:
+    """
+    Obtiene una instancia configurada del modelo LLM.
+    
+    Args:
+        model_name: Nombre del modelo a utilizar (opcional)
+        temperature: Temperatura para la generación (0.0-1.0)
+        
+    Returns:
+        Instancia inicializada de OllamaLLM
+    """
+    return OllamaLLM(model_name=model_name, temperature=temperature)

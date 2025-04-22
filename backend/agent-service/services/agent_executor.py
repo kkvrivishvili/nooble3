@@ -8,18 +8,28 @@ import logging
 import time
 import json
 import traceback
-from typing import Dict, Any, List, Optional, Tuple
+import uuid
+from typing import Dict, Any, List, Optional, Tuple, AsyncIterator
 from pydantic import BaseModel
 
 import openai
-from langchain.agents import AgentExecutor
+from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain.prompts import MessagesPlaceholder
+from langchain.prompts.chat import ChatPromptTemplate
+from langchain.schema import HumanMessage, AIMessage, SystemMessage
+from langchain.chat_models import ChatOpenAI
 
+# Importaciones de contexto centralizadas
 from common.context import Context, with_context
-from common.errors import handle_errors, ServiceError, ErrorCode
+from common.context.memory import ContextManager
+from common.errors import handle_errors, ServiceError, ErrorCode, AgentExecutionError, AgentInactiveError
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
-from common.tracking import track_operation
+from common.config.settings import get_settings
+from common.tracking import track_operation, track_token_usage, track_embedding_usage
+from common.llm.utils import count_tokens
+from common.utils.stream import stream_llm_response
+from common.llm.callbacks import TokenCountingHandler
 from common.cache import (
     CacheManager,
     get_with_cache_aside,
@@ -30,10 +40,14 @@ from common.cache import (
     SOURCE_CACHE,
     SOURCE_SUPABASE,
     METRIC_CACHE_HIT,
+    METRIC_CACHE_INVALIDATION,
     track_cache_metrics
 )
+from services.chat_history import add_chat_history
+from services.tools import create_agent_tools
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 @handle_errors(error_type="service", log_traceback=True)
 @track_operation(operation_name="get_agent_config", operation_type="agent")
@@ -494,6 +508,8 @@ async def execute_agent(
         await track_cache_metrics(
             data_type="agent_response",
             tenant_id=tenant_id,
+            agent_id=agent_id,
+            conversation_id=conversation_id,
             metric_type=METRIC_CACHE_HIT,
             value=1,
             metadata={
@@ -602,22 +618,18 @@ async def execute_agent(
         output_tokens = count_tokens(answer, model_name=model_name)
         total_tokens = input_tokens + output_tokens
         
-        # Tracking de tokens async
-        await track_usage(
+        # Tracking de tokens usando la función estandarizada
+        await track_token_usage(
             tenant_id=tenant_id,
-            operation="tokens",
-            metadata={
-                "tokens": total_tokens,
-                "model": model_name,
-                "agent_id": agent_id,
-                "conversation_id": conversation_id,
-                "token_type": "llm",
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "service": "agent-service",
-                "operation_type": "chat",
-                "streaming": streaming
-            }
+            tokens=total_tokens,
+            model=model_name,
+            token_type="llm",
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            service="agent-service",
+            streaming=streaming
         )
         
         # Extraer tools usadas
@@ -685,7 +697,7 @@ async def execute_agent(
                     data_type="agent_response",
                     tenant_id=tenant_id,
                     agent_id=agent_id,
-                    conversation_id=conversation_id if conversation_id else None,
+                    conversation_id=conversation_id,
                     metric_type="cache_error",
                     value=1,
                     metadata={"error_type": "set_error", "error": str(cache_set_err)}
@@ -766,14 +778,14 @@ async def stream_agent_response(
         message_id = str(uuid.uuid4())
         start_time = time.time()
         
-        # Streaming de la respuesta
+        # Streaming de la respuesta usando la implementación centralizada
         async for token in stream_llm_response(
             prompt=query,
             tenant_id=tenant_id,
             agent_id=agent_id,
             conversation_id=conversation_id,
             model_name=model_name,
-            system_prompt=agent_config.get("system_prompt"),
+            system_message=agent_config.get("system_prompt"),
             use_cache=True
         ):
             try:
