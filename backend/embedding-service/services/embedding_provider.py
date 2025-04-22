@@ -81,18 +81,21 @@ class CachedEmbeddingProvider:
         
         # Verificar caché usando el sistema unificado con manejo de errores
         try:
-            cached_embedding = await CacheManager.get(
-                data_type="embedding", 
-                resource_id=self._generate_cache_key(text, self.model_name),
+            # Crear una clave estable para el caché
+            resource_id = self._generate_cache_key(text, self.model_name)
+            
+            val = await CacheManager.get(
+                data_type="embedding",
+                resource_id=resource_id,
                 tenant_id=tenant_id,
                 agent_id=ctx.get_agent_id() if ctx else None,
-                search_hierarchy=True,  # Buscar en niveles superiores de contexto
-                use_memory=True        # Usar caché en memoria si está disponible
+                search_hierarchy=True,
+                use_memory=True
             )
-            if cached_embedding:
+            if val:
                 logger.debug("Embedding recuperado de caché", 
                            extra={"tenant_id": tenant_id, "model": self.model_name})
-                return cached_embedding
+                return val
         except Exception as cache_err:
             # Manejo mejorado de errores de caché con categorización
             error_context = {
@@ -121,9 +124,12 @@ class CachedEmbeddingProvider:
         
         # Guardar en caché unificada con manejo de errores
         try:
+            # Crear una clave estable para el caché
+            resource_id = self._generate_cache_key(text, self.model_name)
+            
             await CacheManager.set(
                 data_type="embedding",
-                resource_id=self._generate_cache_key(text, self.model_name),
+                resource_id=resource_id,
                 value=embedding,
                 tenant_id=tenant_id,
                 agent_id=ctx.get_agent_id() if ctx else None,
@@ -294,11 +300,16 @@ class CachedEmbeddingProvider:
         cached_embeddings = {}
         for i, text in enumerate(texts):
             try:
-                val = await CacheManager.get_embedding(
-                    text=text,
-                    model_name=self.model_name,
+                # Crear una clave estable para el caché
+                resource_id = self._generate_cache_key(text, self.model_name)
+                
+                val = await CacheManager.get(
+                    data_type="embedding",
+                    resource_id=resource_id,
                     tenant_id=tenant_id,
-                    agent_id=ctx.get_agent_id()
+                    agent_id=ctx.get_agent_id() if ctx else None,
+                    search_hierarchy=True,
+                    use_memory=True
                 )
                 if val:
                     cached_embeddings[i] = val
@@ -350,14 +361,17 @@ class CachedEmbeddingProvider:
                 for idx, (i, embedding) in enumerate(zip(indices_to_process, new_embeddings)):
                     result[i] = embedding
                     
+                    # Crear una clave estable para el caché
+                    resource_id = self._generate_cache_key(texts[i], self.model_name)
+                    
                     # Guardar en caché con manejo de errores
                     try:
-                        await CacheManager.set_embedding(
-                            text=texts[i],
-                            embedding=embedding,
-                            model_name=self.model_name,
+                        await CacheManager.set(
+                            data_type="embedding",
+                            resource_id=resource_id,
+                            value=embedding,
                             tenant_id=tenant_id,
-                            agent_id=ctx.get_agent_id(),
+                            agent_id=ctx.get_agent_id() if ctx else None,
                             ttl=CacheManager.ttl_standard  # Usar valor estándar del CacheManager
                         )
                     except Exception as cache_set_err:

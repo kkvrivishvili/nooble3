@@ -15,7 +15,7 @@ from common.errors import (
     ServiceError, BatchTooLargeError, TextTooLargeError, EmbeddingModelError
 )
 from common.config import get_settings
-from common.config.tiers import get_available_embedding_models
+from common.config.tiers import get_available_embedding_models, get_available_llm_models
 from common.tracking import track_token_usage, estimate_prompt_tokens
 from common.cache import CacheManager
 
