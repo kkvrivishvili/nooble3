@@ -11,7 +11,8 @@ from contextvars import ContextVar, Token
 from typing import Optional, Dict
 import warnings
 
-from common.errors import ServiceError, ErrorCode
+# Eliminamos la importación circular
+# from common.errors import ServiceError, ErrorCode
 
 logger = logging.getLogger(__name__)
 

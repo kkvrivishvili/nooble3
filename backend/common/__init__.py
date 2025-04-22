@@ -9,13 +9,15 @@ from .cache import get_redis_client
 from .config import get_settings
 from .models import TenantInfo, HealthResponse
 from .utils import rate_limiting
-from .db import get_supabase_client
+# Comentamos esta importación para evitar ciclos potenciales
+# from .db import get_supabase_client
 from .tracking import track_token_usage, track_embedding_usage
 from .errors import setup_error_handling, handle_errors
 
 # Aliases para mantener compatibilidad hacia atrás
 from .auth import verify_tenant as verify_tenant
-from .db import get_supabase_client as get_supabase_client
+# Comentamos esta importación para evitar ciclos potenciales
+# from .db import get_supabase_client as get_supabase_client
 from .cache import get_redis_client as get_redis_client
 from .config import get_settings as get_settings
 from .models import TenantInfo as TenantInfo
@@ -34,7 +36,6 @@ __all__ = [
     'TenantInfo',
     'HealthResponse',
     'apply_rate_limit',
-    'get_supabase_client',
     'track_token_usage',
     'track_embedding_usage',
     'setup_error_handling',

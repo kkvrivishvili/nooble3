@@ -5,8 +5,17 @@ Proporciona mecanismos de caché multinivel (memoria y Redis) con contexto
 siguiendo el patrón Cache-Aside para todos los servicios RAG.
 """
 
-from common.config import get_settings
 import asyncio
+# Importamos constantes del módulo config centralizado
+from ..config import (
+    get_settings,
+    TTL_SHORT, TTL_STANDARD, TTL_EXTENDED, TTL_PERMANENT,
+    SOURCE_CACHE, SOURCE_SUPABASE, SOURCE_GENERATION,
+    METRIC_CACHE_HIT, METRIC_CACHE_MISS, METRIC_LATENCY, METRIC_CACHE_SIZE,
+    METRIC_CACHE_INVALIDATION, METRIC_CACHE_INVALIDATION_COORDINATED,
+    METRIC_SERIALIZATION_ERROR, METRIC_DESERIALIZATION_ERROR,
+    DEFAULT_TTL_MAPPING
+)
 
 # Función para obtener configuraciones de caché del sistema centralizado
 async def _get_cache_settings():
@@ -21,27 +30,6 @@ async def _get_cache_settings():
         "redis_url": settings.redis_url,
         "redis_max_connections": settings.redis_max_connections
     }
-
-# Constantes para fuentes de datos (para métricas)
-SOURCE_CACHE = "cache"
-SOURCE_SUPABASE = "supabase"
-SOURCE_GENERATION = "generation"
-
-# Constantes para tipos de métricas
-METRIC_CACHE_HIT = "cache_hit"
-METRIC_CACHE_MISS = "cache_miss"
-METRIC_LATENCY = "latency"
-METRIC_CACHE_SIZE = "cache_size"
-METRIC_CACHE_INVALIDATION = "cache_invalidation"
-METRIC_CACHE_INVALIDATION_COORDINATED = "cache_invalidation_coordinated"
-METRIC_SERIALIZATION_ERROR = "serialization_error"
-METRIC_DESERIALIZATION_ERROR = "deserialization_error"
-
-# Valores predeterminados para TTL mientras se carga la configuración
-TTL_SHORT = 300       # 5 minutos por defecto
-TTL_STANDARD = 3600   # 1 hora por defecto
-TTL_EXTENDED = 86400  # 24 horas por defecto
-TTL_PERMANENT = None  # Sin expiración
 
 # Inicializar de forma asíncrona los valores de configuración
 # Ejecutaremos esto más tarde cuando se importe el módulo en un contexto async
@@ -65,27 +53,6 @@ async def _initialize_cache_settings_async():
     except Exception as e:
         print(f"Error initializing cache settings: {e}")
         # Mantener los valores por defecto en caso de error
-
-# Mapeo de tipos de datos a TTL predeterminados
-DEFAULT_TTL_MAPPING = {
-    "embedding": TTL_EXTENDED,           # Embeddings (estables)
-    "vector_store": TTL_STANDARD,        # Vector stores (moderadamente estables)
-    "query_result": TTL_SHORT,           # Resultados de consulta (volátiles)
-    "agent_config": TTL_STANDARD,        # Configuraciones de agentes (moderadamente estables)
-    "agent_response": TTL_SHORT,         # Respuestas de agentes (volátiles)
-    "conversation": TTL_STANDARD,        # Conversaciones (moderadamente estables)
-    "conversation_messages": TTL_STANDARD, # Mensajes de conversación
-    "document": TTL_STANDARD,            # Documentos (moderadamente estables)
-    "document_metadata": TTL_EXTENDED,   # Metadatos de documentos (estables)
-    "collection_metadata": TTL_EXTENDED, # Metadatos de colecciones (estables)
-    "settings": TTL_SHORT,               # Configuraciones (volátiles)
-    "token_usage": TTL_EXTENDED,         # Uso de tokens (estadísticas)
-    "counter": TTL_EXTENDED,             # Contadores (estadísticas)
-    "retrieval_cache": TTL_SHORT,        # Resultados de recuperación (volátiles)
-    "embedding_batch": TTL_EXTENDED,     # Lotes de embeddings (estables)
-    "semantic_index": TTL_STANDARD,      # Índices semánticos (moderadamente estables)
-    "default": TTL_STANDARD              # Valor predeterminado
-}
 
 from .manager import CacheManager
 from .helpers import (

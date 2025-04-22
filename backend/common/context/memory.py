@@ -8,7 +8,8 @@ import uuid
 import logging
 from typing import Dict, Any, List, Optional, Set, Union
 
-from common.cache import AgentMemory
+# Eliminamos la importación circular
+# from common.cache import AgentMemory
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +73,7 @@ class ContextManager:
             AgentMemory: Objeto para gestionar la memoria del agente
         """
         if not self._memory and self.agent_id:
+            from common.cache import AgentMemory  # Importamos AgentMemory aquí
             self._memory = AgentMemory(
                 tenant_id=self.tenant_id,
                 agent_id=self.agent_id,

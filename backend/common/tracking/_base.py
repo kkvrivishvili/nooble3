@@ -7,14 +7,13 @@ import logging
 import json
 from typing import Dict, Any, List, Optional
 
-from ..cache import CacheManager
+# Usamos solo las importaciones necesarias sin crear ciclos
 from ..db.supabase import get_supabase_client
 from ..db.tables import get_table_name
 from ..db.rpc import increment_token_usage as rpc_increment_token_usage
 from ..config import get_settings
 from ..config.tiers import get_tier_rate_limit
 from ..context.vars import get_current_tenant_id, get_current_agent_id, get_current_conversation_id
-from . import attribution
 
 logger = logging.getLogger(__name__)
 
@@ -49,124 +48,111 @@ async def track_token_usage(
         if not tenant_id or tenant_id == "default":
             logger.warning("No se pudo registrar uso de tokens: tenant_id no disponible")
             return False
-            
-    # Obtener agent_id y conversation_id del contexto si no se proporcionan
+
+    # Obtener agent_id del contexto si no se proporcionó
     if not agent_id:
         try:
             agent_id = get_current_agent_id()
-        except (ImportError, ValueError):
+        except (ImportError, Exception):
             pass
-            
+    
+    # Obtener conversation_id del contexto si no se proporcionó
     if not conversation_id:
         try:
             conversation_id = get_current_conversation_id()
-        except (ImportError, ValueError):
+        except (ImportError, Exception):
             pass
-            
+    
+    # Crear metadatos de la operación
+    full_metadata = {
+        "model": model,
+        "collection_id": collection_id,
+        "token_type": token_type,
+        "operation": operation,
+        "timestamp": int(time.time())
+    }
+    
+    # Agregar metadatos personalizados si se proporcionaron
+    if metadata:
+        for key, value in metadata.items():
+            if key not in full_metadata:
+                full_metadata[key] = value
+    
+    # Intentar determinar la atribución del costo de los tokens (si aplica)
+    attribution_info = None
     try:
-        # Determinar el propietario real de los tokens
-        try:
-            attribution_service = attribution.TokenAttributionService()
-            effective_tenant_id = await attribution_service.determine_token_owner(
-                requester_tenant_id=tenant_id,
-                agent_id=agent_id,
-                conversation_id=conversation_id
-            )
-        except Exception as attr_err:
-            logger.error(f"Error determinando propietario de tokens: {str(attr_err)}", exc_info=True)
-            effective_tenant_id = tenant_id  # Fallback al tenant original
-        
-        # Calcular factor de coste según el modelo
-        cost_factor = 1.0
-        if model and hasattr(settings, 'model_cost_factors'):
-            cost_factor = settings.model_cost_factors.get(model, 1.0)
-        
-        # Incrementar contador en Redis
-        counter_key = f"{effective_tenant_id}:counter:token_usage:type:{token_type}:model:{model or 'unknown'}"
-        redis_success = False
-        
-        try:
-            redis_status = await CacheManager.increment_counter(
-                counter_key=counter_key,
-                value=tokens,
-                metadata={
-                    "model": model,
-                    "token_type": token_type,
-                    "operation": operation,
-                    "timestamp": time.time(),
-                    "agent_id": agent_id,
-                    "conversation_id": conversation_id,
-                    "collection_id": collection_id
-                } if metadata is None else {**metadata, "timestamp": time.time()}
-            )
-            redis_success = redis_status > 0
-        except Exception as redis_err:
-            logger.error(f"Error incrementando contador en Redis: {str(redis_err)}", exc_info=True)
-            # Continuar con persistencia en BD a pesar del error
-        
-        # Incrementar contador en la base de datos
-        db_success = False
-        try:
-            db_success = await rpc_increment_token_usage(
-                tenant_id=effective_tenant_id,
-                tokens=tokens,
-                agent_id=agent_id,
-                conversation_id=conversation_id,
-                token_type=token_type
-            )
-        except Exception as db_err:
-            logger.error(f"Error incrementando contador en BD: {str(db_err)}", exc_info=True)
-            
-            # Solo marcar para reconciliación si Redis funcionó pero la BD falló
-            if redis_success:
-                try:
-                    record = {
-                        "tenant_id": effective_tenant_id,
-                        "tokens": tokens,
-                        "model": model,
-                        "agent_id": agent_id,
-                        "conversation_id": conversation_id,
-                        "token_type": token_type,
-                        "timestamp": time.time(),
-                        "retry_count": 0
-                    }
-                    
-                    await CacheManager.add_to_set(
-                        set_name="pending_token_reconciliation",
-                        tenant_id="system",  # Conjunto a nivel de sistema
-                        value=json.dumps(record)
-                    )
-                    logger.info(f"Tokens marcados para reconciliación futura: {tokens} para {effective_tenant_id}")
-                except Exception as rec_err:
-                    logger.error(f"Error crítico marcando tokens para reconciliación: {str(rec_err)}", exc_info=True)
-
-        # Registrar valores finales para análisis
-        combined_meta = metadata.copy() if metadata else {}
-        combined_meta.update({
-            "token_type": token_type, 
-            "cost_factor": cost_factor,
-            "original_tenant_id": tenant_id,
-            "effective_tenant_id": effective_tenant_id,
-            "redis_success": redis_success,
-            "db_success": db_success,
-            "total_tokens": tokens
-        })
-        if agent_id:
-            combined_meta["agent_id"] = agent_id
-        if conversation_id:
-            combined_meta["conversation_id"] = conversation_id
-        if model:
-            combined_meta["model"] = model
-
-        # Registrar métricas para monitoreo
-        logger.info(
-            f"Token usage tracked: {tokens} tokens for tenant {effective_tenant_id}",
-            extra={"tracking_meta": combined_meta}
+        # Importación tardía para evitar dependencia circular
+        from .attribution import TokenAttributionService
+        attribution_service = TokenAttributionService()
+        attribution_info = await attribution_service.determine_attribution(
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+            token_type=token_type,
+            operation=operation
         )
-
-        return redis_success or db_success  # Éxito si al menos uno funcionó
-    except Exception as e:
-        logger.error(f"Error track_token_usage: {e}", extra={"tenant_id": tenant_id})
+        
+        if attribution_info:
+            full_metadata["attribution"] = attribution_info
+    except Exception as attr_err:
+        logger.warning(f"Error determinando atribución de tokens: {str(attr_err)}")
+    
+    # Generar ID único para este registro de uso
+    usage_id = str(uuid.uuid4())
+    
+    # Verificar límites de rate antes de continuar
+    try:
+        rate_limit = get_tier_rate_limit(tenant_id)
+        if rate_limit:
+            # Importación tardía de CacheManager para evitar ciclo
+            from ..cache import CacheManager
+            # Verificar contador de tokens ya consumidos
+            cache_key = f"rate_limit:{tenant_id}:{token_type}:{int(time.time() / 60)}"
+            cache = await CacheManager.get_instance()
+            current_count = await cache.get("counter", cache_key, tenant_id) or 0
+            
+            # Si excede el límite, registrar y detener
+            if current_count + tokens > rate_limit:
+                logger.warning(f"Límite de rate excedido para tenant {tenant_id}: {current_count}/{rate_limit}")
+                await cache.set("counter", cache_key, current_count + tokens, tenant_id, ttl=70)
+                
+                # Registrar el evento de límite excedido
+                try:
+                    rate_limit_table = get_table_name("rate_limit_events")
+                    supabase = get_supabase_client()
+                    await supabase.table(rate_limit_table).insert({
+                        "tenant_id": tenant_id,
+                        "token_type": token_type,
+                        "tokens_requested": tokens,
+                        "tokens_available": rate_limit - current_count,
+                        "metadata": json.dumps(full_metadata)
+                    }).execute()
+                except Exception as db_err:
+                    logger.error(f"Error registrando evento de límite: {str(db_err)}")
+                
+                return False
+            
+            # Actualizar contador
+            await cache.set("counter", cache_key, current_count + tokens, tenant_id, ttl=70)
+    except Exception as rate_err:
+        logger.warning(f"Error verificando límites de rate: {str(rate_err)}")
+    
+    # Registrar uso en base de datos
+    try:
+        # Usar RPC para incrementar el contador de tokens
+        await rpc_increment_token_usage(
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+            token_type=token_type,
+            operation=operation,
+            tokens=tokens,
+            model=model,
+            metadata=full_metadata
+        )
+        return True
+    except Exception as db_err:
+        logger.error(f"Error registrando uso de tokens en base de datos: {str(db_err)}")
         return False
 
 async def track_query(

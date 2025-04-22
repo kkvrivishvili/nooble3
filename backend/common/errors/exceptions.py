@@ -7,6 +7,12 @@ from typing import Dict, Any, Optional
 from enum import Enum
 from fastapi import HTTPException, status
 
+# Importamos los códigos de error básicos desde config
+from ..config import (
+    ERROR_GENERAL, ERROR_NOT_FOUND, ERROR_VALIDATION, ERROR_TENANT_REQUIRED,
+    ERROR_DATABASE, ERROR_CACHE, ERROR_CONFIGURATION
+)
+
 logger = logging.getLogger(__name__)
 
 class ErrorCode(Enum):
@@ -24,10 +30,10 @@ class ErrorCode(Enum):
     - 8xxx: Errores específicos de consultas (RAG)
     - 9xxx: Errores específicos de embeddings
     """
-    # Errores generales (1xxx)
-    GENERAL_ERROR = "GENERAL_ERROR"
-    NOT_FOUND = "NOT_FOUND"
-    VALIDATION_ERROR = "VALIDATION_ERROR"
+    # Errores generales (1xxx) - Mapeados a las constantes de config
+    GENERAL_ERROR = ERROR_GENERAL
+    NOT_FOUND = ERROR_NOT_FOUND
+    VALIDATION_ERROR = ERROR_VALIDATION
     
     # Errores de autenticación y autorización (2xxx)
     PERMISSION_DENIED = "PERMISSION_DENIED"
@@ -184,6 +190,7 @@ class ServiceError(Exception):
         if context:
             self.context = context
         else:
+            # Importación tardía para evitar ciclos y mejorar la claridad en la resolución de importaciones circulares entre los módulos de errors y context
             from ..context.vars import get_full_context
             self.context = get_full_context()
         
@@ -233,6 +240,7 @@ class ServiceError(Exception):
         Returns:
             HTTPException: Excepción HTTP para FastAPI
         """
+        from fastapi import HTTPException, status  # Importación tardía
         return HTTPException(
             status_code=self.status_code,
             detail=self.to_dict()

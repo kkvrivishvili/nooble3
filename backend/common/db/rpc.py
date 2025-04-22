@@ -309,6 +309,7 @@ async def increment_token_usage(
     Raises:
         ServiceError: Si hay un error al incrementar los tokens
     """
+    # Importación tardía para evitar ciclo circular con tracking.attribution
     from ..tracking.attribution import TokenAttributionService
     
     # Determinar el tenant efectivo (propietario) usando el mismo servicio
