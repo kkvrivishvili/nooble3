@@ -9,17 +9,24 @@ import uuid
 import asyncio
 from typing import Dict, Any, Optional, List
 
-from common.cache.manager import CacheManager, get_redis_client
-from common.errors import ServiceError, DocumentProcessingError
-from common.db.supabase import get_supabase_client
-from common.db.tables import get_table_name
-from common.context import with_context, Context
+from common.config import get_settings, get_tier_limits
+from common.errors import ServiceError, handle_errors, ErrorCode
+from common.context import Context, with_context, get_full_context
+from common.database import get_supabase_client, get_table_name
+from common.cache.manager import CacheManager
+from services.document import update_document_status
+from services.storage import update_processing_job
+from services.extraction import extract_text_from_file, validate_file, get_extractor_for_mimetype
 
-from common.config import get_settings
-from services.extraction import process_file_from_storage
-from services.chunking import split_document_intelligently
-from services.embedding import process_and_store_chunks
-from services.storage import update_document_status, update_processing_job
+# Importar servicios de LlamaIndex
+from services.llama_core import (
+    split_text_with_llama_index, 
+    generate_embeddings_with_llama_index,
+    store_chunks_in_vector_store,
+    load_and_process_file_with_llama_index,
+    validate_file_with_llama_index
+)
+from services.llama_extractors import process_upload_with_llama_index, process_text_with_llama_index
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -61,6 +68,7 @@ async def shutdown_queue():
     logger.info("Sistema de colas cerrado correctamente")
 
 @with_context(tenant=True, validate_tenant=True)
+@handle_errors(error_type="service", log_traceback=True)
 async def queue_document_processing_job(
     tenant_id: str,
     document_id: str,
@@ -197,7 +205,7 @@ async def check_stuck_jobs():
             lock_key = f"{JOB_LOCK_PREFIX}:{job_id}"
             # Verificar bloqueo usando CacheManager.get en lugar de exists
             val = await CacheManager.get(
-                data_type="system",
+                data_type="lock",
                 resource_id=lock_key,
                 tenant_id=tenant_id
             )
@@ -221,8 +229,11 @@ async def check_stuck_jobs():
                                 
                                 # Liberar explícitamente cualquier bloqueo antiguo que pudiera existir
                                 try:
-                                    redis_client = await get_redis_client()
-                                    await redis_client.delete(lock_key)
+                                    await CacheManager.delete(
+                                        data_type="lock",
+                                        resource_id=lock_key,
+                                        tenant_id=tenant_id
+                                    )
                                 except Exception as err:
                                     logger.debug(f"Error liberando lock Redis para job {job_id}: {err}")
                                 
@@ -277,8 +288,11 @@ async def check_stuck_jobs():
                                 
                                 # Forzar liberación del bloqueo
                                 try:
-                                    redis_client = await get_redis_client()
-                                    await redis_client.delete(lock_key)
+                                    await CacheManager.delete(
+                                        data_type="lock",
+                                        resource_id=lock_key,
+                                        tenant_id=tenant_id
+                                    )
                                 except Exception as err:
                                     logger.debug(f"Error liberando lock Redis forzado para job {job_id}: {err}")
                                 
@@ -313,6 +327,7 @@ async def process_next_job_with_retry(max_retries: int = 3) -> bool:
     return False
 
 @with_context(tenant=True, validate_tenant=True)
+@handle_errors(error_type="service", log_traceback=True)
 async def process_next_job(ctx: Context = None) -> bool:
     """
     Procesa el siguiente trabajo de la cola de ingesta.
@@ -372,8 +387,14 @@ async def process_next_job(ctx: Context = None) -> bool:
             
             # Adquirir un lock para este trabajo
             lock_key = f"{JOB_LOCK_PREFIX}:{job_id}"
-            redis_client = await get_redis_client()
-            lock_acquired = await redis_client.set(lock_key, "1", ex=job_lock_expire_seconds, nx=True)
+            lock_acquired = await CacheManager.set(
+                data_type="lock",
+                resource_id=lock_key,
+                value="1",
+                tenant_id=tenant_id,
+                ttl=job_lock_expire_seconds,
+                nx=True
+            )
             
             if not lock_acquired:
                 logger.warning(
@@ -455,7 +476,7 @@ async def process_next_job(ctx: Context = None) -> bool:
             
             if source_type == "file":
                 # Procesamiento de archivo almacenado
-                processed_text = await process_file_from_storage(
+                processed_text = await process_upload_with_llama_index(
                     tenant_id=tenant_id,
                     collection_id=collection_id,
                     file_key=file_key
@@ -470,61 +491,94 @@ async def process_next_job(ctx: Context = None) -> bool:
                 )
             elif source_type == "text":
                 # El texto ya está disponible
-                processed_text = text_content
+                processed_text = await process_text_with_llama_index(
+                    text=text_content,
+                    tenant_id=tenant_id,
+                    collection_id=collection_id
+                )
             
             # Verificar que tenemos texto procesado
             if not processed_text:
-                error_msg = f"No se pudo extraer texto de la fuente tipo {source_type}"
-                logger.error(error_msg, extra=context)
-                
+                logger.error(f"No se pudo procesar el documento {document_id}")
                 await update_processing_job(
                     job_id=job_id,
                     tenant_id=tenant_id,
                     status="failed",
-                    error=error_msg
+                    error="No se pudo extraer texto del documento",
+                    ctx=ctx
                 )
-                
                 await update_document_status(
                     document_id=document_id,
                     tenant_id=tenant_id,
                     status="failed",
-                    metadata={"error": error_msg}
+                    metadata={"error": "No se pudo extraer texto del documento"}
                 )
-                
                 return False
 
             # Dividir en chunks y generar embeddings
-            chunks = await split_document_intelligently(
+            document_metadata = {
+                "tenant_id": tenant_id, 
+                "collection_id": collection_id,
+                "document_id": document_id,
+                "source_type": source_type,
+                "job_id": job_id
+            }
+            
+            logger.info(f"Dividiendo documento {document_id} en chunks")
+            chunks = await split_text_with_llama_index(
                 text=processed_text,
                 document_id=document_id,
-                metadata={"tenant_id": tenant_id, "collection_id": collection_id}
+                metadata=document_metadata,
+                ctx=ctx
             )
             
-            await process_and_store_chunks(
+            if not chunks:
+                logger.error(f"No se pudieron generar chunks para el documento {document_id}")
+                await update_processing_job(
+                    job_id=job_id,
+                    tenant_id=tenant_id,
+                    status="failed",
+                    error="No se pudieron generar chunks para el documento",
+                    ctx=ctx
+                )
+                await update_document_status(
+                    document_id=document_id,
+                    tenant_id=tenant_id,
+                    status="failed",
+                    metadata={"error": "No se pudieron generar chunks para el documento"}
+                )
+                return False
+            
+            logger.info(f"Almacenando {len(chunks)} chunks en vector store para documento {document_id}")
+            processing_stats = await store_chunks_in_vector_store(
                 chunks=chunks,
                 document_id=document_id,
                 tenant_id=tenant_id,
-                collection_id=collection_id
+                collection_id=collection_id,
+                ctx=ctx
             )
-
-            # Actualizar estados
-            await update_processing_job(
-                job_id=job_id,
-                tenant_id=tenant_id,
-                status="completed"
-            )
-
+            
+            # Actualizar estado del documento y trabajo a completado
             await update_document_status(
                 document_id=document_id,
                 tenant_id=tenant_id,
-                status="processed",
-                metadata={"chunks_count": len(chunks)}
+                status="completed",
+                metadata={
+                    "chunks_count": len(chunks),
+                    "processing_stats": processing_stats
+                }
             )
-
-            # Limpiar recursos de caché asociados al trabajo
-            if job_id and tenant_id:
-                await _cleanup_job_resources(job_id, tenant_id)
             
+            await update_processing_job(
+                job_id=job_id,
+                tenant_id=tenant_id,
+                status="completed",
+                progress=100,
+                processing_stats=processing_stats,
+                ctx=ctx
+            )
+            
+            logger.info(f"Procesamiento completado para documento {document_id}")
             return True
     except Exception as e:
         error_context = {
@@ -572,7 +626,7 @@ async def process_next_job(ctx: Context = None) -> bool:
         if lock_acquired and lock_key:
             try:
                 await CacheManager.delete(
-                    data_type="system",
+                    data_type="lock",
                     resource_id=lock_key,
                     tenant_id=tenant_id
                 )
@@ -580,7 +634,9 @@ async def process_next_job(ctx: Context = None) -> bool:
             except Exception as unlock_error:
                 logger.error(f"Error liberando lock para job_id={job_id}: {str(unlock_error)}")
 
-async def _cleanup_job_resources(job_id: str, tenant_id: str):
+@with_context(tenant=True)
+@handle_errors(error_type="service", log_traceback=True, convert_exceptions=False)
+async def _cleanup_job_resources(job_id: str, tenant_id: str, ctx: Context = None):
     """
     Limpia los recursos temporales asociados a un trabajo.
     

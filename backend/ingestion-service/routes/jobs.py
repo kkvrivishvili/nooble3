@@ -9,10 +9,10 @@ from fastapi import APIRouter, Depends, Query, Path
 
 from common.models import TenantInfo, JobListResponse, JobDetailResponse, JobUpdateResponse
 from common.errors import (
-    ServiceError, handle_service_error_simple, ErrorCode,
+    ServiceError, handle_errors, ErrorCode,
     NotFoundError
 )
-from common.context import with_context
+from common.context import with_context, Context
 from common.auth import verify_tenant
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
@@ -29,14 +29,15 @@ logger = logging.getLogger(__name__)
     description="Obtiene la lista de trabajos de procesamiento"
 )
 @with_context(tenant=True)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 async def list_jobs(
     status: Optional[str] = Query(None, description="Filtrar por estado (pending, processing, completed, failed)"),
     batch_id: Optional[str] = Query(None, description="Filtrar por ID de lote"),
     document_id: Optional[str] = Query(None, description="Filtrar por ID de documento"),
     limit: int = Query(50, description="Número máximo de trabajos a devolver"),
     offset: int = Query(0, description="Desplazamiento para paginación"),
-    tenant_info: TenantInfo = Depends(verify_tenant)
+    tenant_info: TenantInfo = Depends(verify_tenant),
+    ctx: Context = None
 ):
     """
     Lista los trabajos de procesamiento para el tenant actual.
@@ -130,10 +131,11 @@ async def list_jobs(
     description="Obtiene detalles de un trabajo específico"
 )
 @with_context(tenant=True)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 async def get_job(
     job_id: str = Path(..., description="ID del trabajo"),
-    tenant_info: TenantInfo = Depends(verify_tenant)
+    tenant_info: TenantInfo = Depends(verify_tenant),
+    ctx: Context = None
 ):
     """
     Obtiene detalles de un trabajo específico, incluyendo estado actual.
@@ -208,10 +210,11 @@ async def get_job(
     description="Reintenta un trabajo fallido"
 )
 @with_context(tenant=True)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 async def retry_job(
     job_id: str = Path(..., description="ID del trabajo a reintentar"),
-    tenant_info: TenantInfo = Depends(verify_tenant)
+    tenant_info: TenantInfo = Depends(verify_tenant),
+    ctx: Context = None
 ):
     """
     Reintenta un trabajo fallido.
@@ -259,10 +262,11 @@ async def retry_job(
     description="Cancela un trabajo pendiente o en ejecución"
 )
 @with_context(tenant=True)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 async def cancel_job_endpoint(
     job_id: str = Path(..., description="ID del trabajo a cancelar"),
-    tenant_info: TenantInfo = Depends(verify_tenant)
+    tenant_info: TenantInfo = Depends(verify_tenant),
+    ctx: Context = None
 ):
     """
     Cancela un trabajo pendiente o en ejecución.
@@ -314,8 +318,8 @@ from typing import Dict
 from fastapi import APIRouter, Query, Depends
 
 from common.models import TenantInfo, JobsStatsResponse
-from common.errors import ServiceError, handle_service_error_simple, ErrorCode
-from common.context import with_context
+from common.errors import ServiceError, handle_errors, ErrorCode
+from common.context import with_context, Context
 from common.auth import verify_tenant
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
@@ -330,10 +334,11 @@ logger = logging.getLogger(__name__)
     description="Obtiene estadísticas de procesamiento de documentos"
 )
 @with_context(tenant=True)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 async def get_jobs_stats(
     time_period: str = Query("day", description="Periodo de tiempo (hour, day, week, month)"),
-    tenant_info: TenantInfo = Depends(verify_tenant)
+    tenant_info: TenantInfo = Depends(verify_tenant),
+    ctx: Context = None
 ):
     """
     Obtiene estadísticas de procesamiento de documentos.

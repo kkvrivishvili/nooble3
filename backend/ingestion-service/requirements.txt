@@ -17,18 +17,25 @@ beautifulsoup4>=4.12.3,<5.0.0
 markdown==3.5
 pandas==2.1.0
 
-# LlamaIndex para integración
+# LlamaIndex - Núcleo y extensiones
 llama-index==0.12.26
-llama-index-embeddings-openai>=0.1.0
+llama-index-core==0.12.1
+llama-index-readers-file==0.1.6
+llama-index-readers-web==0.1.6
+llama-index-embeddings-openai==0.1.5
+llama-index-vector-stores-supabase==0.1.4
+llama-index-llms-openai==0.1.5
+tiktoken==0.9.0
+tenacity==9.0.0
 
 # Background jobs
 rq==1.15.1
 
 # Utilidades
 python-dotenv==1.0.1
-tenacity==9.0.0
 
 # Testing
 pytest==8.3.5
+pytest-asyncio==0.23.5
 
 # Nota: La biblioteca común se instalará usando PYTHONPATH

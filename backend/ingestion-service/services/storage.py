@@ -7,16 +7,20 @@ from typing import Dict, Any, Optional, List, Tuple
 
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
-from common.errors import ServiceError, DocumentProcessingError
+from common.errors import ServiceError, DocumentProcessingError, handle_errors
 from common.cache.manager import CacheManager
+from common.context import with_context, Context
 
 logger = logging.getLogger(__name__)
 
+@with_context(tenant=True)
+@handle_errors(error_type="service", log_traceback=True)
 async def update_document_status(
     document_id: str,
     tenant_id: str,
     status: str,
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = None,
+    ctx: Context = None
 ) -> bool:
     """
     Actualiza el estado de un documento.
@@ -71,13 +75,16 @@ async def update_document_status(
         logger.error(f"Error actualizando estado del documento: {str(e)}")
         return False
 
+@with_context(tenant=True)
+@handle_errors(error_type="service", log_traceback=True)
 async def update_processing_job(
     job_id: str,
     tenant_id: str,
     status: str,
     progress: float = None,
     error: str = None,
-    processing_stats: Dict[str, Any] = None
+    processing_stats: Dict[str, Any] = None,
+    ctx: Context = None
 ) -> bool:
     """
     Actualiza el estado de un trabajo de procesamiento.
@@ -149,35 +156,37 @@ async def update_processing_job(
         logger.error(f"Error actualizando estado del trabajo: {str(e)}")
         return False
 
-async def invalidate_vector_store_cache(tenant_id: str, collection_id: str) -> bool:
+@with_context(tenant=True)
+@handle_errors(error_type="service", log_traceback=False, convert_exceptions=False)
+async def invalidate_vector_store_cache(tenant_id: str, collection_id: str, ctx: Context = None) -> bool:
     """
     Invalida la caché del vector store para una colección específica.
     
     Args:
         tenant_id: ID del tenant
         collection_id: ID de la colección
+        ctx: Contexto de la operación
         
     Returns:
         bool: True si se invalidó correctamente
     """
     try:
-        # Usar CacheManager directamente para invalidar caché
-        await CacheManager.invalidate(
-            tenant_id=tenant_id,
-            data_type="query_result",
-            resource_id=collection_id,
-            collection_id=collection_id
-        )
+        # Obtener instancia de CacheManager
+        cache_manager = CacheManager()
         
-        # También invalidar vector_store si existe
-        await CacheManager.invalidate(
-            tenant_id=tenant_id,
-            data_type="vector_store",
-            resource_id=collection_id,
-            collection_id=collection_id
-        )
+        # Invalidar caché de resultados de consultas
+        query_cache_key = f"query_result:{tenant_id}:{collection_id}"
+        await cache_manager.delete(query_cache_key)
         
-        logger.info(f"Caché invalidada para colección {collection_id}")
+        # Invalidar caché del vector store
+        vector_store_key = f"vectorstore:{tenant_id}:{collection_id}"
+        await cache_manager.delete(vector_store_key)
+        
+        # También invalidar patrones globales
+        pattern = f"*:{tenant_id}:{collection_id}:*"
+        await cache_manager.delete_pattern(pattern)
+        
+        logger.info(f"Caché invalidada para colección {collection_id} del tenant {tenant_id}")
         return True
         
     except Exception as e:
@@ -185,7 +194,9 @@ async def invalidate_vector_store_cache(tenant_id: str, collection_id: str) -> b
         # Intentar continuar a pesar del error de caché
         return False
 
-async def get_document_with_cache(document_id: str, tenant_id: str) -> Optional[Dict[str, Any]]:
+@with_context(tenant=True)
+@handle_errors(error_type="service", log_traceback=True)
+async def get_document_with_cache(document_id: str, tenant_id: str, ctx: Context = None) -> Optional[Dict[str, Any]]:
     """
     Obtiene un documento con caché para mejorar rendimiento.
     

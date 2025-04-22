@@ -13,18 +13,22 @@ from pydantic import BaseModel, Field
 
 from common.models import TenantInfo, FileUploadResponse, BatchJobResponse
 from common.errors import (
-    handle_service_error_simple, DocumentProcessingError, ValidationError
+    handle_errors, DocumentProcessingError, ValidationError, ServiceError
 )
-from common.context import with_context
-from common.context.vars import get_current_tenant_id, get_current_collection_id
+from common.context import with_context, Context
 from common.auth import verify_tenant
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
 from common.config.settings import get_settings
+from common.config import get_tier_limits
+from common.db.storage import upload_to_storage
 
-from services.extraction import validate_file
+# Importar los módulos actualizados con LlamaIndex
+from services.llama_extractors import process_upload_with_llama_index
 from services.queue import queue_document_processing_job
-from backend.common.db.storage import upload_to_storage
+from services.storage import upload_to_storage
+from services.extraction import validate_file
+from services.llama_core import validate_file_with_llama_index
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -46,14 +50,15 @@ class DocumentUploadMetadata(BaseModel):
     description="Carga un documento para procesamiento y generación de embeddings"
 )
 @with_context(tenant=True, collection=True)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 async def upload_document(
     file: UploadFile = File(...),
     tenant_info: TenantInfo = Depends(verify_tenant),
     collection_id: str = Form(...),
     title: Optional[str] = Form(None),
     description: Optional[str] = Form(None),
-    tags: Optional[str] = Form(None)
+    tags: Optional[str] = Form(None),
+    ctx: Context = None
 ):
     """
     Endpoint simplificado que solo sube a Storage y encola.
@@ -82,8 +87,44 @@ async def upload_document(
     }
     
     try:
+        # 0. Verificar límites del tier
+        tier_limits = get_tier_limits(tenant_info.tier, tenant_id=tenant_id)
+        max_docs = tier_limits.get("max_docs", 999999)
+        
+        # Contar documentos actuales del tenant
+        supabase = get_supabase_client()
+        doc_count_result = await supabase.table(get_table_name("documents")) \
+            .select("count", count="exact") \
+            .eq("tenant_id", tenant_id) \
+            .execute()
+            
+        if doc_count_result.error:
+            logger.error(f"Error contando documentos: {doc_count_result.error}", extra=error_context)
+            raise ServiceError(
+                message="Error al verificar límites de tier",
+                error_code="TIER_LIMIT_CHECK_ERROR",
+                status_code=500
+            )
+            
+        current_docs = doc_count_result.count or 0
+        
+        # Verificar si excede el límite
+        if current_docs >= max_docs:
+            logger.warning(f"Límite de documentos excedido: {current_docs}/{max_docs}", 
+                         extra=error_context)
+            raise ValidationError(
+                message=f"Límite de documentos excedido. El tier actual permite máximo {max_docs} documentos.",
+                details={
+                    "error_code": "TIER_LIMIT_EXCEEDED",
+                    "limit_type": "max_docs",
+                    "current": current_docs,
+                    "max": max_docs,
+                    "tier": tenant_info.tier
+                }
+            )
+        
         # 1. Validar archivo
-        file_info = await validate_file(file)
+        file_info = await validate_file_with_llama_index(file, ctx=ctx)
         
         # Procesar tags si están presentes
         tag_list = tags.split(",") if tags else []
@@ -166,10 +207,11 @@ class UrlIngestionRequest(BaseModel):
     description="Procesa y genera embeddings para el contenido de una URL"
 )
 @with_context(tenant=True, collection=True)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 async def ingest_url(
     request: UrlIngestionRequest,
-    tenant_info: TenantInfo = Depends(verify_tenant)
+    tenant_info: TenantInfo = Depends(verify_tenant),
+    ctx: Context = None
 ):
     """
     Procesa y genera embeddings para el contenido de una URL.
@@ -260,10 +302,11 @@ class TextIngestionRequest(BaseModel):
     description="Procesa y genera embeddings para texto plano"
 )
 @with_context(tenant=True, collection=True)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 async def ingest_text(
     request: TextIngestionRequest,
-    tenant_info: TenantInfo = Depends(verify_tenant)
+    tenant_info: TenantInfo = Depends(verify_tenant),
+    ctx: Context = None
 ):
     """
     Procesa y genera embeddings para texto plano.
@@ -352,11 +395,12 @@ class BatchUrlsRequest(BaseModel):
     summary="Procesar lote de URLs",
     description="Procesa un lote de URLs en segundo plano"
 )
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 @with_context(tenant=True, collection=True)
 async def batch_process_urls(
     request: BatchUrlsRequest,
-    tenant_info: TenantInfo = Depends(verify_tenant)
+    tenant_info: TenantInfo = Depends(verify_tenant),
+    ctx: Context = None
 ):
     """
     Procesa un lote de URLs en segundo plano.

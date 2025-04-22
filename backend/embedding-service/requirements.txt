@@ -9,8 +9,10 @@ openai==1.69.0
 tiktoken==0.9.0
 
 # LlamaIndex para funcionalidad de embeddings
-llama-index>=0.10.0
-llama-index-embeddings-openai>=0.1.0
+llama-index==0.12.26
+llama-index-embeddings-openai==0.1.4
+llama-index-core==0.12.1
+llama-index-vector-stores-supabase==0.1.2
 
 # Almacenamiento y caché
 redis==5.2.1

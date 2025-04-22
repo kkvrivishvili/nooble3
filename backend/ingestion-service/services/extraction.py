@@ -12,8 +12,10 @@ import asyncio
 
 from common.config import get_settings
 from common.db.storage import get_file_from_storage
-from common.errors import DocumentProcessingError, ValidationError, ServiceError, ErrorCode
+from common.errors import DocumentProcessingError, ValidationError, ServiceError, ErrorCode, handle_errors
 from common.context.vars import get_full_context
+from common.context import with_context, Context
+from common.cache.manager import CacheManager
 
 import fitz  # PyMuPDF
 from bs4 import BeautifulSoup
@@ -460,7 +462,7 @@ def get_extractor_for_mimetype(mimetype: str) -> Type[DocumentExtractor]:
     logger.error(f"No se encontró extractor para el tipo MIME: {mimetype}", 
                 extra=error_context)
     raise DocumentProcessingError(
-        message=f"No extractor found for MIME type: {mimetype}",
+        message=f"No extractor found for MIME type: {str(mimetype)}",
         details={"mimetype": mimetype},
         context=error_context
     )
@@ -469,7 +471,9 @@ def get_extractor_for_mimetype(mimetype: str) -> Type[DocumentExtractor]:
 # Funciones Principales de Extracción
 # --------------------------
 
-async def extract_text_from_file(file_path: str, mimetype: Optional[str] = None) -> str:
+@with_context(tenant=False)
+@handle_errors(error_type="service", log_traceback=True)
+async def extract_text_from_file(file_path: str, mimetype: Optional[str] = None, ctx: Context = None) -> str:
     """
     Extrae texto de un archivo utilizando el extractor adecuado según su tipo MIME.
     
@@ -617,4 +621,261 @@ async def extract_with_specific_method(file_path: str, mimetype: str) -> str:
             context=error_context
         )
 
-# ... Resto del código ...
+@with_context(tenant=True, validate_tenant=True)
+@handle_errors(error_type="service", log_traceback=True)
+async def process_text(
+    text: str, 
+    tenant_id: str,
+    collection_id: str,
+    metadata: Optional[Dict[str, Any]] = None,
+    ctx: Context = None
+) -> str:
+    """
+    Procesa texto plano directamente.
+
+    Args:
+        text: Texto a procesar
+        tenant_id: ID del tenant
+        collection_id: ID de la colección
+        metadata: Metadatos adicionales
+
+    Returns:
+        str: Texto procesado
+        
+    Raises:
+        DocumentProcessingError: Si hay un error en el procesamiento
+    """
+    if not text or not text.strip():
+        raise ValidationError(
+            message="Empty text provided for processing",
+            details={"error_code": ErrorCode.EMPTY_TEXT}
+        )
+    
+    return text
+
+@with_context(tenant=True, validate_tenant=True)
+@handle_errors(error_type="service", log_traceback=True)
+async def process_file(
+    file_path: str, 
+    tenant_id: str,
+    collection_id: str,
+    metadata: Optional[Dict[str, Any]] = None,
+    ctx: Context = None
+) -> str:
+    """
+    Procesa un archivo local y extrae su contenido como texto.
+
+    Args:
+        file_path: Ruta al archivo local
+        tenant_id: ID del tenant
+        collection_id: ID de la colección
+        metadata: Metadatos adicionales
+
+    Returns:
+        str: Texto extraído del archivo
+        
+    Raises:
+        DocumentProcessingError: Si hay un error en la extracción
+        ValidationError: Si el archivo no existe o no es válido
+    """
+    return await extract_text_from_file(file_path)
+
+@with_context(tenant=True, validate_tenant=True)
+@handle_errors(error_type="service", log_traceback=True)
+async def process_file_from_storage(
+    tenant_id: str,
+    collection_id: str,
+    file_key: str,
+    metadata: Optional[Dict[str, Any]] = None,
+    ctx: Context = None
+) -> str:
+    """
+    Descarga un archivo desde el almacenamiento, lo procesa y extrae su contenido como texto.
+
+    Args:
+        tenant_id: ID del tenant
+        collection_id: ID de la colección
+        file_key: Clave del archivo en el almacenamiento
+        metadata: Metadatos adicionales
+        ctx: Contexto de la operación
+
+    Returns:
+        str: Texto extraído del archivo
+        
+    Raises:
+        DocumentProcessingError: Si hay un error en la extracción
+        ServiceError: Si hay un error en el acceso al almacenamiento
+    """
+    # Obtener contexto para errores
+    error_context = {
+        "service": "ingestion",
+        "operation": "process_file_from_storage",
+        "tenant_id": tenant_id,
+        "collection_id": collection_id,
+        "file_key": file_key
+    }
+    
+    logger.info(f"Obteniendo archivo {file_key} del almacenamiento", extra=error_context)
+    
+    # Intentar obtener el archivo del cache primero
+    cache_key = f"file:{file_key}"
+    cached_data = await CacheManager.get(
+        data_type="storage", 
+        resource_id=cache_key,
+        tenant_id=tenant_id,
+        use_memory=False  # Archivos potencialmente grandes, solo usar Redis
+    )
+    
+    if cached_data:
+        logger.info(f"Archivo {file_key} recuperado de caché", extra=error_context)
+        local_path = cached_data.get("local_path")
+        mimetype = cached_data.get("mimetype")
+        
+        if local_path:
+            # Verificar que el archivo aún existe
+            import os
+            if os.path.exists(local_path):
+                return await extract_text_from_file(local_path, mimetype)
+    
+    # Si no está en caché, obtenerlo del almacenamiento
+    try:
+        with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+            local_path = temp_file.name
+            
+        # Obtener archivo del storage
+        file_data = await get_file_from_storage(file_key, local_path)
+        if not file_data:
+            raise ServiceError(
+                message=f"Failed to retrieve file {file_key} from storage",
+                details={"file_key": file_key},
+                context=error_context
+            )
+            
+        mimetype = file_data.get("mimetype")
+        
+        # Guardar en caché para futuras operaciones
+        await CacheManager.set(
+            data_type="storage", 
+            resource_id=cache_key,
+            value={"local_path": local_path, "mimetype": mimetype},
+            tenant_id=tenant_id,
+            ttl=3600,  # 1 hora de caché
+            use_memory=False  # Archivos potencialmente grandes, solo usar Redis
+        )
+        
+        # Extraer texto
+        logger.info(f"Procesando archivo {file_key} de tipo {mimetype}", extra=error_context)
+        return await extract_text_from_file(local_path, mimetype)
+    except Exception as e:
+        logger.error(f"Error procesando archivo del almacenamiento: {str(e)}", 
+                    extra=error_context, exc_info=True)
+        
+        # Limpiar archivo temporal si existe
+        import os
+        if 'local_path' in locals() and os.path.exists(local_path):
+            try:
+                os.unlink(local_path)
+            except:
+                pass
+                
+        raise
+
+@with_context(tenant=True, validate_tenant=False)
+@handle_errors(error_type="simple", log_traceback=False)
+async def validate_file(file: UploadFile, ctx: Context = None) -> Dict[str, Any]:
+    """
+    Valida un archivo subido y verifica que cumple con los requisitos para ser procesado.
+    
+    Args:
+        file: Archivo subido mediante FastAPI
+        ctx: Contexto de la operación
+        
+    Returns:
+        Dict[str, Any]: Información del archivo validado incluyendo mimetype, tamaño, etc.
+        
+    Raises:
+        ValidationError: Si el archivo no es válido por alguna razón
+    """
+    # Obtener contexto para errores
+    error_context = {
+        "service": "ingestion",
+        "operation": "validate_file",
+        "file_name": file.filename
+    }
+    
+    # Añadir información de contexto si está disponible
+    if ctx:
+        if ctx.has_tenant_id():
+            error_context["tenant_id"] = ctx.get_tenant_id()
+        if ctx.has_collection_id():
+            error_context["collection_id"] = ctx.get_collection_id()
+    
+    # Verificar que se proporcionó un archivo
+    if not file:
+        raise ValidationError(
+            message="No file provided",
+            details={"error_code": ErrorCode.MISSING_FILE},
+            context=error_context
+        )
+    
+    # Verificar que el archivo tiene un nombre
+    if not file.filename:
+        raise ValidationError(
+            message="File has no name",
+            details={"error_code": ErrorCode.INVALID_FILENAME},
+            context=error_context
+        )
+    
+    # Detectar el tipo MIME
+    mimetype = file.content_type
+    
+    # Verificar que el mimetype es soportado
+    try:
+        extractor_class = get_extractor_for_mimetype(mimetype)
+    except DocumentProcessingError:
+        raise ValidationError(
+            message=f"Unsupported file type: {mimetype}",
+            details={"mimetype": mimetype, "error_code": ErrorCode.UNSUPPORTED_FILE_TYPE},
+            context=error_context
+        )
+    
+    # Verificar el tamaño del archivo (límite configurable)
+    settings = get_settings()
+    max_file_size = settings.max_file_size_mb * 1024 * 1024  # Convertir MB a bytes
+    
+    # Intentar obtener el tamaño del archivo
+    file_size = 0
+    try:
+        # Guardar la posición actual
+        current_position = await file.tell()
+        # Ir al final del archivo
+        await file.seek(0, 2)  # 2 = SEEK_END
+        # Obtener la posición final (tamaño)
+        file_size = await file.tell()
+        # Volver a la posición original
+        await file.seek(current_position)
+    except Exception as e:
+        logger.warning(f"No se pudo determinar el tamaño del archivo: {str(e)}", 
+                     extra=error_context)
+    
+    # Verificar si excede el tamaño máximo
+    if file_size > max_file_size:
+        max_size_mb = max_file_size / (1024 * 1024)
+        actual_size_mb = file_size / (1024 * 1024)
+        raise ValidationError(
+            message=f"File too large. Maximum size is {max_size_mb:.1f} MB, but got {actual_size_mb:.1f} MB",
+            details={
+                "max_size_mb": max_size_mb,
+                "file_size_mb": actual_size_mb,
+                "error_code": ErrorCode.FILE_TOO_LARGE
+            },
+            context=error_context
+        )
+    
+    # Devolver información del archivo
+    return {
+        "filename": file.filename,
+        "mimetype": mimetype,
+        "size": file_size,
+        "extractor": extractor_class.__name__
+    }

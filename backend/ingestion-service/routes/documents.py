@@ -9,10 +9,10 @@ from fastapi import APIRouter, Depends, Query, Path, HTTPException
 
 from common.models import TenantInfo, DocumentListResponse, DocumentDetailResponse, DeleteDocumentResponse
 from common.errors import (
-    ServiceError, handle_service_error_simple, ErrorCode,
+    ServiceError, handle_errors, ErrorCode,
     DocumentProcessingError, NotFoundError
 )
-from common.context import with_context
+from common.context import with_context, Context
 from common.auth import verify_tenant
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
@@ -27,13 +27,14 @@ logger = logging.getLogger(__name__)
     description="Obtiene la lista de documentos para un tenant o colección específica"
 )
 @with_context(tenant=True, collection=True)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 async def list_documents(
     collection_id: Optional[str] = Query(None, description="Filtrar por ID de colección"),
     status: Optional[str] = Query(None, description="Filtrar por estado (pending, processing, completed, failed)"),
     limit: int = Query(50, description="Número máximo de documentos a devolver"),
     offset: int = Query(0, description="Desplazamiento para paginación"),
-    tenant_info: TenantInfo = Depends(verify_tenant)
+    tenant_info: TenantInfo = Depends(verify_tenant),
+    ctx: Context = None
 ):
     """
     Lista los documentos para el tenant actual, con filtros opcionales.
@@ -120,10 +121,11 @@ async def list_documents(
     description="Obtiene detalles de un documento específico"
 )
 @with_context(tenant=True)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 async def get_document(
     document_id: str = Path(..., description="ID del documento"),
-    tenant_info: TenantInfo = Depends(verify_tenant)
+    tenant_info: TenantInfo = Depends(verify_tenant),
+    ctx: Context = None
 ):
     """
     Obtiene detalles completos de un documento específico.
@@ -221,10 +223,11 @@ async def get_document(
     description="Elimina un documento y todos sus chunks"
 )
 @with_context(tenant=True)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 async def delete_document(
     document_id: str = Path(..., description="ID del documento a eliminar"),
-    tenant_info: TenantInfo = Depends(verify_tenant)
+    tenant_info: TenantInfo = Depends(verify_tenant),
+    ctx: Context = None
 ):
     """
     Elimina un documento y todos sus chunks asociados.
