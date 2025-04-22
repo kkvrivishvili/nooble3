@@ -1,0 +1,842 @@
+"""
+Funciones auxiliares para implementar el patrón Cache-Aside.
+
+Este módulo proporciona una implementación centralizada y estandarizada 
+del patrón Cache-Aside para todos los servicios del sistema RAG.
+"""
+
+import logging
+import time
+import sys
+import json
+import hashlib
+from typing import Dict, List, Any, Optional, Callable, Tuple, Union, TypeVar
+
+from common.cache.manager import CacheManager
+from common.context import Context
+from common.db.supabase import get_supabase_client
+from common.db.tables import get_table_name
+
+# Importar constantes desde el módulo principal
+from common.cache import (
+    SOURCE_CACHE, SOURCE_SUPABASE, SOURCE_GENERATION,
+    METRIC_CACHE_HIT, METRIC_CACHE_MISS, METRIC_LATENCY, METRIC_CACHE_SIZE,
+    METRIC_CACHE_INVALIDATION, METRIC_CACHE_INVALIDATION_COORDINATED,
+    METRIC_SERIALIZATION_ERROR, METRIC_DESERIALIZATION_ERROR,
+    DEFAULT_TTL_MAPPING, TTL_STANDARD
+)
+
+logger = logging.getLogger(__name__)
+
+# Tipo genérico para resultados de caché
+T = TypeVar('T')
+
+async def get_with_cache_aside(
+    data_type: str,
+    resource_id: str,
+    tenant_id: str,
+    fetch_from_db_func: Callable,
+    generate_func: Optional[Callable] = None,
+    agent_id: Optional[str] = None,
+    conversation_id: Optional[str] = None,
+    collection_id: Optional[str] = None,
+    ctx: Optional[Context] = None,
+    ttl: Optional[int] = None,
+    serializer: Optional[Callable] = None,
+    deserializer: Optional[Callable] = None
+) -> Tuple[Optional[T], Dict[str, Any]]:
+    """
+    Implementación centralizada del patrón Cache-Aside para el sistema RAG.
+    
+    Sigue el flujo estándar:
+    1. Verificar caché primero
+    2. Si no está en caché, buscar en Supabase mediante fetch_from_db_func
+    3. Si no está en BD, generar dato (si se proporciona generate_func)
+    4. Almacenar en caché con TTL adecuado según el tipo de dato
+    5. Retornar dato con métricas unificadas del proceso
+    
+    Este método garantiza consistencia en la implementación del patrón en
+    todos los servicios (ingestion, embedding, query, agent).
+    
+    Args:
+        data_type: Tipo de datos ("embedding", "vector_store", "agent_config", etc.)
+        resource_id: ID único del recurso
+        tenant_id: ID del tenant
+        fetch_from_db_func: Función async que busca el dato en Supabase
+                          (recibe params: resource_id, tenant_id, ctx)
+        generate_func: Función async opcional para generar el dato si no existe
+                     (recibe params: resource_id, tenant_id, ctx, **kwargs)
+        agent_id, conversation_id, collection_id: Contexto adicional opcional
+        ctx: Contexto de la operación
+        ttl: Tiempo de vida en segundos (si None, usa valor predeterminado por tipo)
+        serializer: Función para serializar el objeto antes de almacenar en caché
+        deserializer: Función para deserializar el objeto al recuperar de caché
+        
+    Returns:
+        Tuple[Optional[Any], Dict[str, Any]]: 
+            - El dato recuperado o generado (o None si no existe)
+            - Diccionario con métricas y metadatos del proceso
+    """
+    # Métricas para seguimiento de rendimiento
+    start_time = time.time()
+    metrics = {
+        "source": None,
+        "data_type": data_type,
+        "resource_id": resource_id,
+    }
+    
+    # Si no se proporcionan funciones de serialización, usar las predeterminadas
+    if serializer is None:
+        serializer = lambda x: serialize_for_cache(x, data_type)
+    if deserializer is None:
+        deserializer = lambda x: deserialize_from_cache(x, data_type)
+    
+    # Validar parámetros obligatorios
+    if not tenant_id:
+        logger.warning(f"Tenant ID es obligatorio para Cache-Aside en {data_type}")
+        metrics["source"] = "error"
+        metrics["error"] = "missing_tenant_id"
+        metrics["total_time_ms"] = (time.time() - start_time) * 1000
+        return None, metrics
+    
+    if not resource_id:
+        logger.warning(f"Resource ID es obligatorio para Cache-Aside en {data_type}")
+        metrics["source"] = "error"
+        metrics["error"] = "missing_resource_id"
+        metrics["total_time_ms"] = (time.time() - start_time) * 1000
+        return None, metrics
+    
+    # 1. VERIFICAR CACHÉ - Paso 1 del patrón Cache-Aside
+    cache_check_start = time.time()
+    
+    try:
+        cached_value = await CacheManager.get(
+            data_type=data_type,
+            resource_id=resource_id,
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+            collection_id=collection_id,
+            search_hierarchy=True,
+            use_memory=True
+        )
+        
+        cache_check_time = time.time() - cache_check_start
+        
+        if cached_value:
+            # Deserializar valor de caché si es necesario
+            deserialize_success = True
+            if deserializer:
+                try:
+                    cached_value = deserializer(cached_value)
+                except Exception as deserialize_err:
+                    deserialize_success = False
+                    logger.warning(f"Error deserializando valor de caché: {str(deserialize_err)}")
+                    # Registrar error de deserialización en métricas y considerar como caché miss
+                    await track_cache_metrics(
+                        data_type=data_type,
+                        tenant_id=tenant_id,
+                        metric_type=METRIC_DESERIALIZATION_ERROR,
+                        value=1,
+                        metadata={"source": SOURCE_CACHE, "error": str(deserialize_err)}
+                    )
+            
+            # Continuar solo si la deserialización fue exitosa
+            if deserialize_success:
+                # Registrar acierto y latencia de caché
+                await track_cache_metrics(
+                    data_type=data_type,
+                    tenant_id=tenant_id,
+                    metric_type=METRIC_CACHE_HIT,
+                    value=True,
+                    metadata={"source": SOURCE_CACHE, "latency_ms": cache_check_time * 1000}
+                )
+                
+                metrics["source"] = SOURCE_CACHE
+                metrics["latency_ms"] = cache_check_time * 1000
+                metrics["total_time_ms"] = (time.time() - start_time) * 1000
+                
+                logger.debug(f"Dato de tipo {data_type} (id: {resource_id}) obtenido de caché")
+                return cached_value, metrics
+    except Exception as cache_err:
+        logger.debug(f"Error accediendo a caché para {data_type}: {str(cache_err)}")
+    
+    # Registrar fallo de caché
+    await track_cache_metrics(
+        data_type=data_type,
+        tenant_id=tenant_id,
+        metric_type=METRIC_CACHE_MISS,
+        value=True,
+        metadata={"source": "miss"}  # Añadir metadato para la fuente
+    )
+    
+    # 2. OBTENER DE SUPABASE - Paso 2 del patrón Cache-Aside
+    db_start_time = time.time()
+    
+    try:
+        db_value = await fetch_from_db_func(resource_id, tenant_id, ctx)
+        
+        db_time = time.time() - db_start_time
+        
+        # Registrar latencia de BD
+        await track_cache_metrics(
+            data_type=data_type,
+            tenant_id=tenant_id,
+            metric_type=METRIC_LATENCY,
+            value=db_time * 1000,
+            metadata={"source": SOURCE_SUPABASE}
+        )
+        
+        if db_value:
+            # Serializar valor antes de guardarlo en caché
+            try:
+                cache_value = serializer(db_value) if serializer else db_value
+            except Exception as serialize_err:
+                logger.warning(f"Error serializando valor de BD para {data_type}: {str(serialize_err)}")
+                # Registrar métrica de error de serialización
+                await track_cache_metrics(
+                    data_type=data_type,
+                    tenant_id=tenant_id,
+                    metric_type=METRIC_SERIALIZATION_ERROR,
+                    value=1,
+                    metadata={"source": SOURCE_SUPABASE, "error": str(serialize_err)}
+                )
+                # En caso de error de serialización, aún podemos retornar el valor original
+                metrics["source"] = SOURCE_SUPABASE
+                metrics["latency_ms"] = db_time * 1000
+                metrics["total_time_ms"] = (time.time() - start_time) * 1000
+                metrics["serialization_error"] = True
+                return db_value, metrics
+            
+            # Determinar TTL adecuado para el tipo de dato
+            if ttl is None:
+                ttl = get_default_ttl_for_data_type(data_type)
+            
+            # Guardar en caché para futuras consultas
+            try:
+                # Estimar tamaño para métricas
+                size_estimate = estimate_object_size(cache_value)
+                
+                # Guardar en caché con el valor serializado
+                await CacheManager.set(
+                    data_type=data_type,
+                    resource_id=resource_id,
+                    value=cache_value,  # Valor ya serializado
+                    tenant_id=tenant_id,
+                    agent_id=agent_id,
+                    conversation_id=conversation_id,
+                    collection_id=collection_id,
+                    ttl=ttl
+                )
+                
+                # Registrar tamaño en caché
+                await track_cache_metrics(
+                    data_type=data_type,
+                    tenant_id=tenant_id,
+                    metric_type=METRIC_CACHE_SIZE,
+                    value=size_estimate
+                )
+                logger.debug(f"Dato de tipo {data_type} (id: {resource_id}) almacenado en caché")
+            except Exception as cache_set_err:
+                logger.warning(f"Error almacenando en caché {data_type}: {str(cache_set_err)}")
+            
+            metrics["source"] = SOURCE_SUPABASE
+            metrics["latency_ms"] = db_time * 1000
+            metrics["total_time_ms"] = (time.time() - start_time) * 1000
+            
+            return db_value, metrics
+    except Exception as db_err:
+        logger.warning(f"Error obteniendo {data_type} de base de datos: {str(db_err)}")
+    
+    # 3. GENERAR DATO - Paso 3 del patrón Cache-Aside (opcional)
+    if generate_func is None:
+        # Si no se proporciona función para generar, retornar None
+        metrics["source"] = "not_found"
+        metrics["total_time_ms"] = (time.time() - start_time) * 1000
+        logger.debug(f"Dato de tipo {data_type} (id: {resource_id}) no encontrado")
+        return None, metrics
+    
+    # Intentar generar el dato
+    generation_start = time.time()
+    
+    try:
+        generated_value = await generate_func(resource_id, tenant_id, ctx)
+        generation_time = time.time() - generation_start
+        
+        # Registrar latencia de generación
+        await track_cache_metrics(
+            data_type=data_type,
+            tenant_id=tenant_id,
+            metric_type=METRIC_LATENCY,
+            value=generation_time * 1000,
+            metadata={"source": SOURCE_GENERATION}
+        )
+        
+        if generated_value:
+            # Serializar valor antes de guardarlo en caché
+            try:
+                cache_value = serializer(generated_value) if serializer else generated_value
+            except Exception as serialize_err:
+                logger.warning(f"Error serializando valor generado para {data_type}: {str(serialize_err)}")
+                # Registrar métrica de error de serialización
+                await track_cache_metrics(
+                    data_type=data_type,
+                    tenant_id=tenant_id,
+                    metric_type=METRIC_SERIALIZATION_ERROR,
+                    value=1,
+                    metadata={"source": SOURCE_GENERATION, "error": str(serialize_err)}
+                )
+                # En caso de error de serialización, aún podemos retornar el valor original
+                metrics["source"] = SOURCE_GENERATION
+                metrics["latency_ms"] = generation_time * 1000
+                metrics["total_time_ms"] = (time.time() - start_time) * 1000
+                metrics["serialization_error"] = True
+                return generated_value, metrics
+            
+            # Determinar TTL adecuado para el tipo de dato
+            if ttl is None:
+                ttl = get_default_ttl_for_data_type(data_type)
+                
+            # Guardar en caché
+            try:
+                # Estimar tamaño para métricas
+                size_estimate = estimate_object_size(cache_value)
+                
+                # Guardar en caché con el valor serializado
+                await CacheManager.set(
+                    data_type=data_type,
+                    resource_id=resource_id,
+                    value=cache_value,  # Valor ya serializado
+                    tenant_id=tenant_id,
+                    agent_id=agent_id,
+                    conversation_id=conversation_id,
+                    collection_id=collection_id,
+                    ttl=ttl
+                )
+                
+                # Registrar tamaño en caché
+                await track_cache_metrics(
+                    data_type=data_type,
+                    tenant_id=tenant_id,
+                    metric_type=METRIC_CACHE_SIZE,
+                    value=size_estimate
+                )
+                logger.debug(f"Dato generado de tipo {data_type} (id: {resource_id}) almacenado en caché")
+            except Exception as cache_set_err:
+                logger.warning(f"Error almacenando en caché dato generado {data_type}: {str(cache_set_err)}")
+            
+            metrics["source"] = SOURCE_GENERATION
+            metrics["latency_ms"] = generation_time * 1000
+            metrics["total_time_ms"] = (time.time() - start_time) * 1000
+            
+            return generated_value, metrics
+    except Exception as gen_err:
+        logger.error(f"Error generando {data_type}: {str(gen_err)}")
+    
+    # Si llegamos aquí, no se pudo obtener ni generar el dato
+    metrics["source"] = "error"
+    metrics["total_time_ms"] = (time.time() - start_time) * 1000
+    
+    return None, metrics
+
+async def invalidate_coordinated(
+    tenant_id: str,
+    primary_data_type: str,
+    primary_resource_id: str,
+    related_invalidations: List[Dict[str, Any]] = None,
+    agent_id: Optional[str] = None,
+    conversation_id: Optional[str] = None,
+    collection_id: Optional[str] = None
+) -> Dict[str, int]:
+    """
+    Realiza invalidación coordinada de caché para múltiples recursos relacionados.
+    
+    Args:
+        tenant_id: ID del tenant
+        primary_data_type: Tipo de datos principal a invalidar
+        primary_resource_id: ID del recurso principal
+        related_invalidations: Lista de diccionarios con invalidaciones relacionadas
+                               [{"data_type": str, "resource_id": str, ...}]
+        agent_id, conversation_id, collection_id: Contexto adicional opcional
+        
+    Returns:
+        Dict[str, int]: Diccionario con conteo de claves invalidadas por tipo
+    """
+    # Validar parámetros obligatorios
+    if not tenant_id:
+        logger.warning("Tenant ID es obligatorio para invalidación coordinada")
+        return {primary_data_type: 0}
+    
+    if not primary_data_type or not primary_resource_id:
+        logger.warning("Data type y resource ID son obligatorios para invalidación coordinada")
+        return {primary_data_type: 0}
+    
+    invalidation_counts = {primary_data_type: 0}
+    
+    # 1. Invalidar recurso principal
+    try:
+        # Registrar métrica de invalidación coordinada
+        await track_cache_metrics(
+            data_type=primary_data_type,
+            tenant_id=tenant_id,
+            metric_type=METRIC_CACHE_INVALIDATION_COORDINATED,
+            value=1,
+            agent_id=agent_id,
+            metadata={
+                "resource_id": primary_resource_id,
+                "related_count": len(related_invalidations) if related_invalidations else 0
+            }
+        )
+        
+        deleted = await CacheManager.invalidate(
+            tenant_id=tenant_id,
+            data_type=primary_data_type,
+            resource_id=primary_resource_id,
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+            collection_id=collection_id
+        )
+        invalidation_counts[primary_data_type] = deleted
+        logger.debug(f"Invalidadas {deleted} claves para {primary_data_type} (id: {primary_resource_id})")
+    except Exception as e:
+        logger.warning(f"Error invalidando {primary_data_type}: {str(e)}")
+    
+    # 2. Invalidar recursos relacionados
+    if related_invalidations:
+        for related in related_invalidations:
+            rel_type = related.get("data_type")
+            rel_id = related.get("resource_id")
+            rel_agent_id = related.get("agent_id", agent_id)
+            rel_conv_id = related.get("conversation_id", conversation_id)
+            rel_coll_id = related.get("collection_id", collection_id)
+            
+            if rel_type not in invalidation_counts:
+                invalidation_counts[rel_type] = 0
+                
+            try:
+                deleted = await CacheManager.invalidate(
+                    tenant_id=tenant_id,
+                    data_type=rel_type,
+                    resource_id=rel_id,
+                    agent_id=rel_agent_id,
+                    conversation_id=rel_conv_id,
+                    collection_id=rel_coll_id
+                )
+                invalidation_counts[rel_type] += deleted
+                logger.debug(f"Invalidadas {deleted} claves relacionadas para {rel_type}")
+            except Exception as e:
+                logger.warning(f"Error invalidando {rel_type} relacionado: {str(e)}")
+    
+    return invalidation_counts
+
+async def invalidate_resource_cache(
+    data_type: str,
+    resource_id: str,
+    tenant_id: str,
+    agent_id: Optional[str] = None,
+    conversation_id: Optional[str] = None,
+    collection_id: Optional[str] = None
+) -> bool:
+    """
+    Invalida la caché para un recurso específico.
+    
+    Esta función proporciona una interfaz simple para invalidar recursos en caché
+    siguiendo el mismo patrón de nombrado usado por get_with_cache_aside.
+    
+    Args:
+        data_type: Tipo de datos ("embedding", "vector_store", "agent_config", etc.)
+        resource_id: ID único del recurso
+        tenant_id: ID del tenant
+        agent_id, conversation_id, collection_id: Contexto adicional opcional
+        
+    Returns:
+        bool: True si la invalidación fue exitosa
+    """
+    # Validar parámetros obligatorios
+    if not tenant_id:
+        logger.warning(f"Tenant ID es obligatorio para invalidar caché de {data_type}")
+        return False
+    
+    if not resource_id:
+        logger.warning(f"Resource ID es obligatorio para invalidar caché de {data_type}")
+        return False
+    
+    # Registrar métrica de invalidación antes de intentar la operación
+    try:
+        # Registrar métrica de invalidación
+        await track_cache_metrics(
+            data_type=data_type,
+            tenant_id=tenant_id,
+            metric_type=METRIC_CACHE_INVALIDATION,
+            value=1,
+            agent_id=agent_id,
+            metadata={"resource_id": resource_id}
+        )
+        
+        deleted = await CacheManager.invalidate(
+            tenant_id=tenant_id,
+            data_type=data_type,
+            resource_id=resource_id,
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+            collection_id=collection_id
+        )
+        
+        logger.debug(f"Invalidadas {deleted} claves para {data_type}:{resource_id}")
+        return deleted > 0
+    except Exception as e:
+        logger.warning(f"Error invalidando caché para {data_type}:{resource_id}: {str(e)}")
+        return False
+
+async def invalidate_document_update(
+    tenant_id: str,
+    document_id: str,
+    collection_id: Optional[str] = None
+) -> Dict[str, int]:
+    """
+    Invalidación especializada para actualizaciones de documentos en el sistema RAG.
+    
+    Cuando se actualiza un documento, esta función invalida automáticamente:
+    1. La caché del documento mismo
+    2. Los embeddings relacionados con el documento
+    3. El vector store de la colección
+    4. Las consultas que pudieron haber usado ese documento
+    
+    Esta invalidación coordinada mantiene la consistencia del sistema
+    después de actualizaciones, asegurando que no se usen datos obsoletos.
+    
+    Args:
+        tenant_id: ID del tenant
+        document_id: ID del documento actualizado
+        collection_id: ID de la colección a la que pertenece el documento (opcional)
+        
+    Returns:
+        Dict[str, int]: Diccionario con conteo de claves invalidadas por tipo
+    """
+    # Preparar invalidaciones relacionadas
+    invalidations = [
+        {"data_type": "embedding", "resource_id": f"doc:{document_id}"},
+        {"data_type": "retrieval_cache", "resource_id": "*"}
+    ]
+    
+    # Añadir invalidación del vector store si tenemos collection_id
+    if collection_id:
+        invalidations.append({"data_type": "vector_store", "resource_id": collection_id})
+        invalidations.append({"data_type": "semantic_index", "resource_id": collection_id})
+    
+    # Usar la función de invalidación coordinada existente
+    return await invalidate_coordinated(
+        tenant_id=tenant_id,
+        primary_data_type="document",
+        primary_resource_id=document_id,
+        related_invalidations=invalidations,
+        collection_id=collection_id
+    )
+
+# Funciones auxiliares para métricas
+
+async def track_cache_metrics(
+    data_type: str,
+    tenant_id: str,
+    metric_type: str,
+    value: Union[bool, float, int],
+    agent_id: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None
+):
+    """
+    Función centralizada para registrar todas las métricas relacionadas con caché.
+    
+    Unifica la lógica de seguimiento de métricas como hits, misses, latencia, tamaño,
+    etc., en una sola función que maneja diferentes tipos de métricas.
+    
+    Args:
+        data_type: Tipo de dato ("embedding", "vector_store", etc.)
+        tenant_id: ID del tenant
+        metric_type: Tipo de métrica (METRIC_CACHE_HIT, METRIC_LATENCY, etc.)
+        value: Valor de la métrica (booleano para hit/miss, número para latencia/tamaño)
+        agent_id: ID del agente opcional
+        metadata: Metadatos adicionales
+    """
+    try:
+        # Conversión de valor según tipo de métrica
+        if metric_type in [METRIC_CACHE_HIT, METRIC_CACHE_MISS]:
+            # Para hit/miss, el valor es un booleano, incrementar contador en 1
+            amount = 1
+            counter_type = METRIC_CACHE_HIT if value else METRIC_CACHE_MISS
+        elif metric_type == METRIC_LATENCY:
+            # Para latencia, el valor es un float (milisegundos)
+            amount = int(value)  # Convertir a entero para contador
+            counter_type = METRIC_LATENCY
+            if not metadata:
+                metadata = {}
+            metadata["latency_ms"] = value
+        elif metric_type == METRIC_CACHE_SIZE:
+            # Para tamaño, el valor es un entero (bytes)
+            amount = int(value)
+            counter_type = METRIC_CACHE_SIZE
+        else:
+            # Para otros tipos de métricas
+            amount = 1 if isinstance(value, bool) else int(value)
+            counter_type = metric_type
+        
+        # Usar la función centralizada de incremento de contador
+        await CacheManager.increment_counter(
+            counter_type=counter_type,
+            amount=amount,
+            resource_id=data_type,
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            metadata=metadata
+        )
+    except Exception as e:
+        logger.debug(f"Error al registrar métrica de caché {metric_type}: {str(e)}")
+
+# Mantener funciones antiguas para compatibilidad pero delegando a la función centralizada
+
+async def track_cache_hit(data_type: str, tenant_id: str, hit: bool):
+    """Registra un acierto o fallo de caché."""
+    await track_cache_metrics(
+        data_type=data_type,
+        tenant_id=tenant_id,
+        metric_type=METRIC_CACHE_HIT if hit else METRIC_CACHE_MISS,
+        value=hit
+    )
+
+async def track_cache_metric(data_type: str, tenant_id: str, source: str, latency_ms: float):
+    """Registra la latencia de recuperación de datos."""
+    await track_cache_metrics(
+        data_type=data_type,
+        tenant_id=tenant_id,
+        metric_type=METRIC_LATENCY,
+        value=latency_ms,
+        metadata={"source": source}
+    )
+
+async def track_cache_size(data_type: str, tenant_id: str, size_bytes: int):
+    """Registra el tamaño de los datos almacenados en caché."""
+    await track_cache_metrics(
+        data_type=data_type,
+        tenant_id=tenant_id,
+        metric_type=METRIC_CACHE_SIZE,
+        value=size_bytes
+    )
+
+# Funciones de serialización/deserialización
+
+def serialize_for_cache(value: Any, data_type: str) -> Any:
+    """
+    Serializa un valor para almacenar en caché según el tipo de datos.
+    
+    Implementa reglas específicas de serialización para cada tipo de dato
+    del sistema RAG, garantizando que todos los servicios sigan el mismo
+    patrón de serialización.
+    
+    Especialmente importante para:
+    - Embeddings: Convierte cualquier formato (numpy, tensor) a listas Python
+    - Vector stores: Maneja objetos complejos específicos del servicio
+    - Resultados de consulta: Asegura serialización compatible con JSON
+    
+    Args:
+        value: Valor a serializar
+        data_type: Tipo de datos ("embedding", "vector_store", etc.)
+        
+    Returns:
+        Any: Valor serializado listo para almacenar en caché
+    """
+    if value is None:
+        return None
+    
+    # Detectar arrays numpy o tensores y convertirlos a listas planas
+    if data_type == "embedding":
+        # Para numpy arrays
+        if 'numpy' in str(type(value)) and hasattr(value, 'tolist'):
+            return value.tolist()
+        
+        # Para tensores PyTorch o TensorFlow
+        if 'torch' in str(type(value)) and hasattr(value, 'detach') and hasattr(value, 'cpu') and hasattr(value, 'numpy'):
+            return value.detach().cpu().numpy().tolist()
+        
+        if 'tensorflow' in str(type(value)) and hasattr(value, 'numpy'):
+            return value.numpy().tolist()
+        
+        # Si ya es una lista, asegurarse de que los valores son nativos de Python
+        if isinstance(value, list):
+            # Verificar si hay floats32 o tipos similares de numpy
+            if value and hasattr(value[0], 'item') and callable(value[0].item):
+                return [float(v.item()) if hasattr(v, 'item') else float(v) for v in value]
+            return value
+    
+    # Para vector_store, se necesita manejar la serialización de objetos específicos
+    elif data_type == "vector_store":
+        # Muchos vector_stores no son serializables directamente
+        # Se recomienda que los servicios específicos definan sus propios serializadores
+        return value
+    
+    # Para resultados de consulta
+    elif data_type == "query_result":
+        # Asegurar que solo se guarden tipos serializables a JSON
+        try:
+            # Intentar serializar a JSON para verificar
+            json.dumps(value)
+            return value
+        except (TypeError, ValueError):
+            # Intentar convertir a dict serializable
+            if hasattr(value, "__dict__"):
+                return value.__dict__
+            # Para casos complejos, convertir a string
+            return str(value)
+    
+    # Para otros tipos de datos, intentar serializar directamente
+    try:
+        # Probar si es serializable a JSON como está
+        json.dumps(value)
+        return value
+    except (TypeError, ValueError):
+        # Si falla, intentar conversiones comunes
+        if hasattr(value, "to_dict"):
+            return value.to_dict()
+        elif hasattr(value, "__dict__"):
+            return value.__dict__
+        else:
+            # Último recurso: convertir a string
+            return str(value)
+    
+
+def deserialize_from_cache(value: Any, data_type: str) -> Any:
+    """
+    Deserializa un valor recuperado de caché según su tipo.
+    
+    La mayoría de los valores se pueden usar directamente
+    Pero algunos tipos pueden requerir conversiones especiales
+    Args:
+        value: Valor a deserializar
+        data_type: Tipo de dato ("embedding", "vector_store", etc.)
+        
+    Returns:
+        Any: Valor deserializado
+    """
+    if value is None:
+        return None
+    
+    # La mayoría de los valores se pueden usar directamente
+    # Pero algunos tipos pueden requerir conversiones especiales
+    if data_type == "embedding":
+        # Los embeddings siempre se almacenan como listas planas
+        # Aquí dejamos que el servicio decida si necesita convertirlos a otro formato
+        return value
+    
+    elif data_type == "vector_store":
+        # Para vector_stores, verificar si necesita procesamiento específico
+        # Por ahora, devolver tal cual, pero los servicios pueden proporcionar 
+        # sus propios deserializadores si es necesario
+        return value
+    
+    elif data_type == "query_result":
+        # Para resultados de consulta, asegurarse de que las estructuras estén correctas
+        # Si es un diccionario serializado desde un objeto, mantenerlo como dict
+        return value
+    
+    # Para otros tipos, retornar tal cual
+    return value
+
+# Funciones utilitarias
+
+def estimate_object_size(obj: Any) -> int:
+    """
+    Estima el tamaño en bytes de un objeto para métricas.
+    
+    Args:
+        obj: Objeto a medir
+        
+    Returns:
+        int: Tamaño estimado en bytes
+    """
+    # Constantes para tamaños predeterminados
+    DEFAULT_SIZE = 1000  # Tamaño predeterminado para objetos complejos
+    MIN_SIZE = 500       # Tamaño mínimo si hay error
+    
+    # Si el objeto es None, retornar tamaño mínimo
+    if obj is None:
+        return 0
+    
+    try:
+        # Para objetos simples
+        if isinstance(obj, (int, float, bool, str)):
+            return sys.getsizeof(obj)
+        
+        # Para objetos con método de tamaño propio
+        if hasattr(obj, '__sizeof__'):
+            return obj.__sizeof__()
+        
+        # Para objetos tipo numpy array o tensor
+        if 'numpy' in str(type(obj)) and hasattr(obj, 'nbytes'):
+            return getattr(obj, 'nbytes')
+            
+        # Para objetos serializables a JSON
+        try:
+            json_str = json.dumps(obj)
+            return sys.getsizeof(json_str)
+        except (TypeError, ValueError, OverflowError):
+            # Objeto no es JSON serializable
+            pass
+            
+        # Para objetos con __dict__
+        if hasattr(obj, '__dict__'):
+            # Estimamos basado en el tamaño del diccionario de atributos
+            return estimate_object_size(obj.__dict__)
+        
+        # Si llegamos aquí, usar valor predeterminado
+        logger.debug(f"Usando tamaño predeterminado para objeto tipo {type(obj)}")
+        return DEFAULT_SIZE
+        
+    except Exception as e:
+        logger.warning(f"Error estimando tamaño de objeto tipo {type(obj)}: {str(e)}")
+        return MIN_SIZE
+
+def get_default_ttl_for_data_type(data_type: str) -> int:
+    """
+    Obtiene el TTL predeterminado para un tipo de datos específico.
+    
+    Centraliza la lógica de asignación de TTL para evitar inconsistencias
+    entre diferentes partes del sistema RAG.
+    
+    Args:
+        data_type: Tipo de datos para el que se desea obtener el TTL
+        
+    Returns:
+        int: Valor TTL en segundos para el tipo de datos especificado
+    """
+    from common.cache import DEFAULT_TTL_MAPPING, TTL_STANDARD
+    
+    # Si el tipo existe en el mapeo, usar ese valor
+    if data_type in DEFAULT_TTL_MAPPING:
+        return DEFAULT_TTL_MAPPING[data_type]
+    
+    # Caso contrario, usar el valor estándar por defecto
+    return TTL_STANDARD
+
+def generate_resource_id_hash(data: Any) -> str:
+    """
+    Genera un hash consistente para usar como resource_id.
+    
+    Esta función puede aceptar cualquier tipo de dato, no solo strings.
+    Para datos que no son strings, los convierte a su representación
+    JSON antes de generar el hash.
+    
+    Args:
+        data: Dato a hashear (string, dict, list, etc.)
+        
+    Returns:
+        str: Hash SHA-256 hexadecimal
+    """
+    if isinstance(data, str):
+        text = data
+    else:
+        try:
+            # Intentar convertir a JSON para objetos no string
+            text = json.dumps(data, sort_keys=True)
+        except (TypeError, ValueError):
+            # Si no es serializable a JSON, usar repr
+            text = repr(data)
+    
+    return hashlib.sha256(text.encode()).hexdigest()

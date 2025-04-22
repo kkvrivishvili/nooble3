@@ -17,7 +17,7 @@ from common.errors import (
 from common.config import get_settings
 from common.config.tiers import get_available_embedding_models, get_available_llm_models
 from common.tracking import track_token_usage, estimate_prompt_tokens
-from common.cache import CacheManager
+from common.cache import generate_resource_id_hash  # Importación actualizada
 
 from models.embeddings import (
     EmbeddingRequest, EmbeddingResponse, 

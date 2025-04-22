@@ -11,7 +11,13 @@ from common.context import with_context, ContextManager, set_current_conversatio
 from common.auth import verify_tenant
 from common.db.rpc import create_conversation, add_chat_history
 from common.tracking import track_token_usage
-from common.cache import CacheManager
+from common.cache import (
+    CacheManager,
+    get_with_cache_aside,
+    invalidate_resource_cache,
+    track_cache_metrics,
+    generate_resource_id_hash
+)
 
 from services.agent_executor import execute_agent, stream_agent_response
 

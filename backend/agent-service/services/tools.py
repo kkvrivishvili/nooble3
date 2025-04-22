@@ -11,6 +11,13 @@ from pydantic import BaseModel
 from common.config import get_settings
 from common.context import with_context, Context, get_current_conversation_id
 from common.utils.http import call_service
+from common.cache import (
+    get_with_cache_aside,
+    generate_resource_id_hash,
+    track_cache_metrics,
+    serialize_for_cache,
+    deserialize_from_cache
+)
 from common.errors import (
     CollectionNotFoundError,
     RetrievalError,
@@ -212,28 +219,59 @@ async def create_agent_tools(agent_config: Dict[str, Any], tenant_id: str, agent
 @with_context(tenant=True)
 @handle_errors(error_type="service", log_traceback=True)
 async def get_available_collections(tenant_id: str) -> List[Dict[str, Any]]:
-    """Obtiene las colecciones disponibles para un tenant."""
-    try:
-        response = await call_service(
-            url=f"{settings.query_service_url}/collections",
-            method="GET",
-            headers={},
-            tenant_id=tenant_id,
-            include_context=True,
-            operation_type="query" 
-        )
+    """
+    Obtiene las colecciones disponibles para un tenant implementando el patrón Cache-Aside.
+    
+    Args:
+        tenant_id: ID del tenant
         
-        # Verificar éxito de la operación
-        if not response.get("success", False):
-            error_info = response.get("error", {})
-            error_msg = error_info.get("message", "Error desconocido obteniendo colecciones")
-            error_code = error_info.get("code", ErrorCode.GENERAL_ERROR)
+    Returns:
+        List[Dict[str, Any]]: Lista de colecciones disponibles
+    """
+    # Definir el tipo de datos y resource_id
+    data_type = "collection_list"
+    resource_id = "available_collections"
+    
+    # Función para buscar en Supabase (en este caso, llamada al servicio query)
+    async def fetch_collections_from_service(resource_id, tenant_id, ctx):
+        try:
+            response = await call_service(
+                url=f"{settings.query_service_url}/collections",
+                method="GET",
+                headers={},
+                tenant_id=tenant_id,
+                include_context=True,
+                operation_type="query" 
+            )
             
-            logger.warning(f"Error obteniendo colecciones: {error_msg} (código: {error_code})")
-            return []
-        
-        # Extraer datos de la respuesta estandarizada
-        return response.get("data", {}).get("collections", [])
-    except Exception as e:
-        logger.warning(f"Error obteniendo colecciones: {str(e)}")
-        return []
+            # Verificar éxito de la operación
+            if not response.get("success", False):
+                error_info = response.get("error", {})
+                error_msg = error_info.get("message", "Error desconocido obteniendo colecciones")
+                error_code = error_info.get("code", ErrorCode.GENERAL_ERROR)
+                
+                logger.warning(f"Error obteniendo colecciones: {error_msg} (código: {error_code})")
+                return None
+            
+            # Extraer datos de la respuesta estandarizada
+            return response.get("data", {}).get("collections", [])
+        except Exception as e:
+            logger.warning(f"Error obteniendo colecciones: {str(e)}")
+            return None
+    
+    # No necesitamos función de generación, solo obtenemos desde el servicio
+    async def generate_collections(resource_id, tenant_id, ctx):
+        return None
+    
+    # Implementar patrón Cache-Aside usando la función centralizada
+    collections, metrics = await get_with_cache_aside(
+        data_type=data_type,
+        resource_id=resource_id,
+        tenant_id=tenant_id,
+        fetch_from_db_func=fetch_collections_from_service,
+        generate_func=generate_collections,
+        # TTL se determina automáticamente por el tipo de datos
+    )
+    
+    # Retornar colecciones o lista vacía si no hay
+    return collections or []

@@ -6,7 +6,6 @@ con soporte de caché y contexto multitenancy.
 """
 
 import logging
-import hashlib
 from typing import List, Dict, Any, Optional
 
 from common.config import get_settings
@@ -17,9 +16,9 @@ from common.errors import (
     TextTooLargeError, BatchTooLargeError, InvalidEmbeddingParamsError
 )
 from common.context import with_context, Context
-from common.cache.manager import CacheManager
 from common.tracking import track_token_usage, estimate_prompt_tokens
 from common.auth.models import validate_model_access
+from common.cache import generate_resource_id_hash
 
 # Importar la nueva implementación compatible con el servicio de ingestión
 from services.llama_index_utils import generate_embeddings_with_llama_index
@@ -118,22 +117,6 @@ class CachedEmbeddingProvider:
                 message=f"Text exceeds maximum token limit for embedding: {estimated_tokens} > {self.max_token_length_per_text}",
                 details=error_context
             )
-    
-    def _generate_cache_key(self, text: str, model_name: str) -> str:
-        """
-        Genera una clave de caché consistente para un texto y modelo.
-        
-        Args:
-            text: Texto para el que se generará la clave
-            model_name: Nombre del modelo usado
-            
-        Returns:
-            str: Clave de caché única
-        """
-        import hashlib
-        # Usar SHA-256 para generar un hash consistente del texto
-        text_hash = hashlib.sha256(text.encode('utf-8')).hexdigest()
-        return f"{model_name}:{text_hash}"
     
     @handle_errors(error_type="simple", log_traceback=False, error_map={
         EmbeddingGenerationError: ("EMBEDDING_GENERATION_ERROR", 500),

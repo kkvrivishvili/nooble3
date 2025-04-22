@@ -21,8 +21,11 @@ from common.errors import (
 )
 from common.tracking import track_token_usage, estimate_prompt_tokens
 from common.llm.token_counters import count_tokens
-from common.cache import CacheManager
 from common.models import TenantInfo
+from common.cache import (
+    get_with_cache_aside,
+    generate_resource_id_hash
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +55,24 @@ async def process_query_with_sources(
     response_mode: str = "compact",
     ctx: Context = None
 ) -> Dict[str, Any]:
-    """Procesa una consulta y devuelve la respuesta con fuentes."""
+    """
+    Procesa una consulta y devuelve la respuesta con fuentes.
     
+    Implementa el patrón Cache-Aside centralizado para optimizar la recuperación
+    de resultados previamente calculados para la misma consulta.
+    
+    Args:
+        query_engine: Motor de consulta configurado
+        debug_handler: Handler para depuración
+        query: Consulta a procesar
+        filters: Filtros adicionales (opcional)
+        similarity_top_k: Número de documentos a recuperar
+        response_mode: Modo de respuesta (compact, verbose, etc.)
+        ctx: Contexto de la consulta
+        
+    Returns:
+        Dict[str, Any]: Resultado procesado con respuesta y fuentes
+    """
     # Acceder de forma segura al contexto
     tenant_id = ctx.get_tenant_id() if ctx else None
     collection_id = ctx.get_collection_id() if ctx else None
@@ -65,134 +84,120 @@ async def process_query_with_sources(
     if not collection_id:
         raise ValueError("Se requiere collection_id para procesar la consulta")
     
-    # Verificar caché primero con manejo de errores
-    try:
-        # Crear una clave estable para el caché
-        resource_id = f"{collection_id}_{query}_{similarity_top_k}_{response_mode}"
-        
-        cached_result = await CacheManager.get(
-            data_type="query_result",
-            resource_id=resource_id,
-            tenant_id=tenant_id,
-            agent_id=agent_id,
-            search_hierarchy=True,
-            use_memory=True
-        )
-        if cached_result:
-            logger.info(f"Resultado de consulta obtenido de caché para '{query[:30]}...'")
-            return cached_result
-    except Exception as cache_err:
-        logger.debug(f"Error accediendo a caché de consulta: {str(cache_err)}")
+    # Generar un identificador único para esta consulta
+    query_hash = generate_resource_id_hash(f"{query}_{similarity_top_k}_{response_mode}")
+    resource_id = f"{collection_id}:{query_hash}"
     
-    try:
-        start_time = time.time()
-        
-        # Ejecutar consulta
-        query_result = await query_engine.aquery(query)
-        
-        # Extraer respuesta
-        response = query_result.response
-        
-        # Calcular tokens aproximados
-        model_used = getattr(query_result, "model", "unknown")
-        if not model_used or model_used == "unknown":
-            # Intentar extraer del LLM
+    # Función para ejecutar la consulta si no está en caché
+    async def execute_query(resource_id, tenant_id, ctx):
+        try:
+            start_time = time.time()
+            
+            # Ejecutar consulta
+            query_result = await query_engine.aquery(query)
+            
+            # Extraer respuesta
+            response = query_result.response
+            
+            # Calcular tokens aproximados
+            model_used = getattr(query_result, "model", "unknown")
+            if not model_used or model_used == "unknown":
+                # Intentar extraer del LLM
+                try:
+                    model_used = query_engine.response_synthesizer.llm.model_name
+                except:
+                    # Usar el modelo por defecto si no podemos extraerlo
+                    model_used = get_settings().default_llm_model
+            
+            tokens_in = count_tokens(query, model_name=model_used)
+            tokens_out = count_tokens(response, model_name=model_used)
+            tokens_total = tokens_in + tokens_out
+            
+            # Tracking de tokens directamente usando la función centralizada
+            await track_token_usage(
+                tenant_id=tenant_id,
+                tokens=tokens_total,
+                model=model_used,
+                agent_id=agent_id,
+                conversation_id=None,
+                collection_id=collection_id,
+                token_type="llm",
+                operation="query",
+                metadata={
+                    "query": query,
+                    "tokens_in": tokens_in,
+                    "tokens_out": tokens_out,
+                    "elapsed_time": time.time() - start_time
+                }
+            )
+            
+            # Extraer fuentes si están disponibles
+            sources = []
             try:
-                model_used = query_engine.response_synthesizer.llm.model_name
-            except:
-                # Usar el modelo por defecto si no podemos extraerlo
-                model_used = get_settings().default_llm_model
-        
-        tokens_in = count_tokens(query, model_name=model_used)
-        tokens_out = count_tokens(response, model_name=model_used)
-        tokens_total = tokens_in + tokens_out
-        
-        # Tracking de tokens directamente usando la función centralizada
-        await track_token_usage(
-            tenant_id=tenant_id,
-            tokens=tokens_total,
-            model=model_used,
-            agent_id=agent_id,
-            conversation_id=None,
-            collection_id=collection_id,
-            token_type="llm",
-            operation="query",
-            metadata={
-                "query": query,
+                for node_with_score in query_result.source_nodes:
+                    source_text = node_with_score.node.get_content()
+                    source_meta = node_with_score.node.metadata.copy()
+                    source_score = node_with_score.score
+                    
+                    # Limpiar metadatos (opcional)
+                    if "embedding" in source_meta:
+                        del source_meta["embedding"]
+                    
+                    # Agregar a fuentes
+                    sources.append(
+                        QueryContextItem(
+                            text=source_text[:500] + "..." if len(source_text) > 500 else source_text,
+                            metadata=source_meta,
+                            score=source_score
+                        ).to_dict()
+                    )
+            except Exception as e:
+                logger.warning(f"Error extrayendo fuentes: {str(e)}")
+            
+            # Calcular tiempo de procesamiento
+            processing_time = time.time() - start_time
+            
+            # Construir resultado final
+            result = {
+                "response": response,
+                "sources": sources,
+                "model": model_used,
                 "tokens_in": tokens_in,
                 "tokens_out": tokens_out,
-                "elapsed_time": time.time() - start_time
+                "tokens_total": tokens_total,
+                "processing_time": processing_time
             }
-        )
-        
-        # Extraer fuentes si están disponibles
-        sources = []
-        try:
-            for node_with_score in query_result.source_nodes:
-                source_text = node_with_score.node.get_content()
-                source_meta = node_with_score.node.metadata.copy()
-                source_score = node_with_score.score
-                
-                # Limpiar metadatos (opcional)
-                if "embedding" in source_meta:
-                    del source_meta["embedding"]
-                
-                # Agregar a fuentes
-                sources.append(
-                    QueryContextItem(
-                        text=source_text[:500] + "..." if len(source_text) > 500 else source_text,
-                        metadata=source_meta,
-                        score=source_score
-                    ).to_dict()
-                )
-        except Exception as e:
-            logger.warning(f"Error extrayendo fuentes: {str(e)}")
-        
-        # Calcular tiempo de procesamiento
-        processing_time = time.time() - start_time
-        
-        # Construir resultado final
-        result = {
-            "response": response,
-            "sources": sources,
-            "model": model_used,
-            "tokens_in": tokens_in,
-            "tokens_out": tokens_out,
-            "tokens_total": tokens_total,
-            "processing_time": processing_time
-        }
-        
-        # Guardar en caché (1 hora) con manejo de errores
-        try:
-            # Crear una clave estable para el caché
-            resource_id = f"{collection_id}_{query}_{similarity_top_k}_{response_mode}"
             
-            await CacheManager.set(
-                data_type="query_result",
-                resource_id=resource_id,
-                value=result,
-                tenant_id=tenant_id,
-                agent_id=agent_id,
-                search_hierarchy=True,
-                use_memory=True,
-                ttl=3600
+            return result
+        except Exception as e:
+            logger.error(f"Error procesando consulta: {str(e)}")
+            raise QueryProcessingError(
+                message=f"Error procesando consulta: {str(e)}",
+                details={
+                    "query": query,
+                    "filters": filters,
+                    "similarity_top_k": similarity_top_k,
+                    "response_mode": response_mode
+                }
             )
-        except Exception as cache_set_err:
-            logger.debug(f"Error guardando resultado de consulta en caché: {str(cache_set_err)}")
-        
-        return result
     
-    except Exception as e:
-        logger.error(f"Error procesando consulta: {str(e)}")
-        raise QueryProcessingError(
-            message=f"Error procesando consulta: {str(e)}",
-            details={
-                "query": query,
-                "filters": filters,
-                "similarity_top_k": similarity_top_k,
-                "response_mode": response_mode
-            }
-        )
+    # Usar la implementación centralizada del patrón Cache-Aside
+    # No necesitamos función de generación alternativa
+    result, metrics = await get_with_cache_aside(
+        data_type="query_result",
+        resource_id=resource_id,
+        tenant_id=tenant_id,
+        fetch_from_db_func=lambda *args: None,  # No buscar en DB para resultados de consulta
+        generate_func=execute_query,
+        agent_id=agent_id,
+        ctx=ctx
+    )
+    
+    # Si tenemos contexto, añadir métricas para análisis
+    if ctx:
+        ctx.add_metric("query_cache_metrics", metrics)
+    
+    return result
 
 
 @with_context(tenant=True, collection=True, agent=True)
@@ -302,49 +307,20 @@ async def create_query_engine(
             
             return query_engine, debug_handler
             
-        except EmbeddingGenerationError as e:
-            # Re-propagar errores específicos de embedding
-            logger.error(f"Error de embedding al crear motor de consulta: {e.message}")
-            raise
-        
-        except EmbeddingModelError as e:
-            # Re-propagar errores específicos del modelo de embedding
-            logger.error(f"Error de modelo de embedding al crear motor de consulta: {e.message}")
-            raise
-        
-        except TextTooLargeError as e:
-            # Re-propagar errores de texto demasiado grande
-            logger.error(f"Texto demasiado grande para embeddings: {e.message}")
-            raise
-        
         except Exception as e:
-            # Convertir otros errores a tipo específico
-            if "llm" in str(e).lower() or "lenguaje" in str(e).lower():
-                logger.error(f"Error con modelo LLM: {str(e)}")
-                raise GenerationError(
-                    message=f"Error con modelo de lenguaje: {str(e)}",
-                    details={"model": model_name, "error_details": str(e)}
-                )
-            else:
-                logger.error(f"Error creando motor de consulta: {str(e)}")
-                raise QueryProcessingError(
-                    message=f"Error configurando motor de consulta: {str(e)}",
-                    details={
-                        "collection_id": collection_id,
-                        "model": model_name if 'model_name' in locals() else None,
-                        "similarity_top_k": similarity_top_k,
-                        "response_mode": response_mode
-                    }
-                )
-    
-    except (CollectionNotFoundError, RetrievalError, EmbeddingGenerationError, 
-            EmbeddingModelError, TextTooLargeError, GenerationError):
-        # Re-propagar errores específicos
-        raise
-    
+            logger.error(f"Error configurando LLM: {str(e)}")
+            raise GenerationError(
+                message=f"Error configurando modelo de generación: {str(e)}",
+                details={"model": model_name, "error_details": str(e)}
+            )
+            
     except Exception as e:
-        logger.error(f"Error inesperado creando motor de consulta: {str(e)}")
-        raise QueryProcessingError(
-            message=f"Error inesperado configurando motor de consulta: {str(e)}",
-            details={"collection_id": collection_id}
+        if isinstance(e, (CollectionNotFoundError, RetrievalError, GenerationError)):
+            raise
+            
+        logger.error(f"Error creando motor de consulta: {str(e)}")
+        raise ServiceError(
+            message=f"Error creando motor de consulta: {str(e)}",
+            error_code=ErrorCode.QUERY_ENGINE_ERROR,
+            details={"collection_id": collection_id, "tenant_id": tenant_id}
         )

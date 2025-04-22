@@ -1,4 +1,5 @@
 import logging
+import time
 
 from fastapi import FastAPI
 from .agents import router as agents_router
@@ -28,7 +29,7 @@ def register_routes(app: FastAPI):
         """Verifica el estado del servicio y sus dependencias."""
         from common.config import get_settings
         from common.db.supabase import get_supabase_client
-        from common.cache import CacheManager
+        from common.cache import CacheManager, get_with_cache_aside
         from main import http_client
         
         settings = get_settings()
@@ -36,8 +37,22 @@ def register_routes(app: FastAPI):
         # Verificar sistema de caché unificado
         cache_status = "unavailable"
         try:
-            await CacheManager.get(data_type="system", resource_id="health_check")
-            cache_status = "available"
+            # Verificar si el sistema de caché está disponible mediante un health check
+            resource_id = "health_check"
+            tenant_id = "system"  # Tenant especial para health checks
+            
+            # Usar función estándar en lugar de método directo
+            response, metrics = await get_with_cache_aside(
+                data_type="system",
+                resource_id=resource_id,
+                tenant_id=tenant_id,
+                fetch_from_db_func=lambda *args: None,  # No hay fallback a DB para health checks
+                generate_func=lambda *args: {"status": "healthy", "timestamp": time.time()}
+            )
+            
+            if response and response.get("status") == "healthy":
+                cache_status = "available"
+            
         except Exception as e:
             logger.warning(f"Cache no disponible: {str(e)}")
         

@@ -1,5 +1,5 @@
 import logging
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
 from fastapi import APIRouter, Depends, Path, Query
 
@@ -9,7 +9,12 @@ from common.context import with_context
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
 from common.auth import verify_tenant
-from common.cache import CacheManager
+from common.cache import (
+    CacheManager,
+    invalidate_resource_cache,
+    invalidate_coordinated,
+    track_cache_metrics
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -238,19 +243,21 @@ async def delete_conversation(
                 error_code="DELETE_FAILED"
             )
         
-        # Invalidar caché para esta conversación
-        await CacheManager.invalidate(
+        # Invalidar caché para esta conversación mediante invalidación coordinada
+        related_invalidations = [
+            {"data_type": "agent_response", "resource_id": "*", "agent_id": agent_id, "conversation_id": conversation_id},
+            {"data_type": "conversation_messages", "resource_id": "*", "agent_id": agent_id, "conversation_id": conversation_id}
+        ]
+        
+        invalidation_result = await invalidate_coordinated(
             tenant_id=tenant_id,
-            data_type="agent_response",
-            agent_id=agent_id,
-            conversation_id=conversation_id
+            primary_data_type="conversation",
+            primary_resource_id=conversation_id,
+            related_invalidations=related_invalidations,
+            agent_id=agent_id
         )
-        await CacheManager.invalidate(
-            tenant_id=tenant_id,
-            data_type="conversation_messages",
-            agent_id=agent_id,
-            conversation_id=conversation_id
-        )
+        
+        logger.info(f"Invalidadas {sum(invalidation_result.values())} entradas de caché para conversación {conversation_id}")
         
         return DeleteConversationResponse(
             success=True,
@@ -317,19 +324,21 @@ async def end_conversation(
                 error_code="UPDATE_FAILED"
             )
         
-        # Invalidar caché de respuestas y mensajes de esta conversación
-        await CacheManager.invalidate(
+        # Invalidar caché de respuestas y mensajes de esta conversación mediante invalidación coordinada
+        related_invalidations = [
+            {"data_type": "agent_response", "resource_id": "*", "agent_id": agent_id, "conversation_id": conversation_id},
+            {"data_type": "conversation_messages", "resource_id": "*", "agent_id": agent_id, "conversation_id": conversation_id}
+        ]
+        
+        invalidation_result = await invalidate_coordinated(
             tenant_id=tenant_id,
-            data_type="agent_response",
-            agent_id=agent_id,
-            conversation_id=conversation_id
+            primary_data_type="conversation",
+            primary_resource_id=conversation_id,
+            related_invalidations=related_invalidations,
+            agent_id=agent_id
         )
-        await CacheManager.invalidate(
-            tenant_id=tenant_id,
-            data_type="conversation_messages",
-            agent_id=agent_id,
-            conversation_id=conversation_id
-        )
+        
+        logger.info(f"Invalidadas {sum(invalidation_result.values())} entradas de caché para conversación {conversation_id}")
         
         return DeleteConversationResponse(
             success=True,

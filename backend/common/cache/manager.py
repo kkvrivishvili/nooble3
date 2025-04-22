@@ -9,17 +9,18 @@ import redis.asyncio as redis
 from ..context.vars import get_current_tenant_id, get_current_agent_id
 from ..context.vars import get_current_conversation_id, get_current_collection_id
 
+from common.cache import (
+    TTL_SHORT, TTL_STANDARD, TTL_EXTENDED, TTL_PERMANENT,
+    DEFAULT_TTL_MAPPING,
+    METRIC_SERIALIZATION_ERROR
+)
+from common.cache.helpers import generate_resource_id_hash, serialize_for_cache, deserialize_from_cache, get_default_ttl_for_data_type, track_cache_metrics
+
 logger = logging.getLogger(__name__)
 
 # Caché en memoria para acceso ultrarrápido
 _memory_cache: Dict[str, Any] = {}
 _memory_expiry: Dict[str, float] = {}
-
-# Mantener constantes para compatibilidad
-TTL_SHORT = 300       # 5 minutos (configuraciones, datos volátiles)
-TTL_MEDIUM = 3600     # 1 hora (resultados de consulta, datos moderadamente estables)
-TTL_LONG = 86400      # 24 horas (embeddings, datos altamente estables)
-TTL_PERMANENT = 0     # Sin expiración (datos persistentes)
 
 # Conexión Redis
 _redis_client = None
@@ -45,13 +46,6 @@ async def get_redis_client() -> Optional[Any]:
             return None
     return _redis_client
 
-def generate_hash(data: Any) -> str:
-    """Genera un hash MD5 para cualquier tipo de dato"""
-    if isinstance(data, str):
-        return hashlib.md5(data.encode()).hexdigest()
-    else:
-        return hashlib.md5(json.dumps(data).encode()).hexdigest()
-
 class CacheManager:
     """
     Gestor de caché centralizado. Proporciona métodos para almacenar y recuperar
@@ -76,16 +70,20 @@ class CacheManager:
         return cls._instance
     
     def __init__(self):
-        """Inicializa el CacheManager con valores desde settings"""
+        """Inicialización del gestor de caché."""
         from ..config import get_settings
         self.settings = get_settings()
-        self.memory_cache_size = self.settings.memory_cache_size
-        self.memory_cache_cleanup_percent = self.settings.memory_cache_cleanup_percent
-        self.ttl_short = self.settings.cache_ttl_short
-        self.ttl_standard = self.settings.cache_ttl_standard
-        self.ttl_extended = self.settings.cache_ttl_extended
-        self.ttl_permanent = self.settings.cache_ttl_permanent
+        
+        # Usar valores desde la configuración centralizada en config
+        self.ttl_short = TTL_SHORT
+        self.ttl_standard = TTL_STANDARD
+        self.ttl_extended = TTL_EXTENDED
+        self.ttl_permanent = TTL_PERMANENT
         self.use_memory_cache = self.settings.use_memory_cache
+        
+        # Cachear funciones auxiliares para evitar importaciones repetidas
+        self._serialize_for_cache = serialize_for_cache
+        self._deserialize_from_cache = deserialize_from_cache
     
     # Mutex para operaciones concurrentes
     _lock = asyncio.Lock()
@@ -186,19 +184,19 @@ class CacheManager:
         # 3. Nivel agente + colección
         if agent_id and collection_id:
             keys.append(CacheManager._build_key(
-                data_type, resource_id, tenant_id, agent_id, collection_id=collection_id))
-                
-        # 4. Nivel solo agente
+                data_type, resource_id, tenant_id, agent_id, None, collection_id))
+            
+        # 4. Nivel colección (importante para RAG)
+        if collection_id:
+            keys.append(CacheManager._build_key(
+                data_type, resource_id, tenant_id, None, None, collection_id))
+        
+        # 5. Nivel agente
         if agent_id:
             keys.append(CacheManager._build_key(
                 data_type, resource_id, tenant_id, agent_id))
-                
-        # 5. Nivel solo colección
-        if collection_id:
-            keys.append(CacheManager._build_key(
-                data_type, resource_id, tenant_id, collection_id=collection_id))
-                
-        # 6. Nivel base (solo tenant)
+            
+        # 6. Nivel tenant
         keys.append(CacheManager._build_key(
             data_type, resource_id, tenant_id))
             
@@ -228,8 +226,17 @@ class CacheManager:
         Returns:
             Any: Valor cacheado o None si no se encuentra
         """
-        # Usar contexto actual si necesario
+        # Validar parámetros obligatorios
         tenant_id = tenant_id or get_current_tenant_id()
+        if not tenant_id:
+            logger.warning(f"Tenant ID es obligatorio para obtener {data_type} de caché")
+            return None
+            
+        if not resource_id:
+            logger.warning(f"Resource ID es obligatorio para obtener {data_type} de caché")
+            return None
+        
+        # Usar contexto actual si necesario
         agent_id = agent_id or get_current_agent_id()
         conversation_id = conversation_id or get_current_conversation_id()
         collection_id = collection_id or get_current_collection_id()
@@ -273,12 +280,15 @@ class CacheManager:
             try:
                 value = await redis_client.get(key)
                 if value:
-                    # Deserializar JSON si es necesario
+                    # Usar la función de deserialización centralizada en lugar de importarla en cada llamada
                     try:
-                        result = json.loads(value)
+                        decoded = json.loads(value)
                     except json.JSONDecodeError:
-                        result = value
+                        # Si no es JSON válido, usar el valor tal cual
+                        decoded = value
                         
+                    result = self._deserialize_from_cache(decoded, data_type)
+                    
                     # Guardar en memoria para futuras consultas
                     if use_memory:
                         memory_key = search_keys[0]  # La clave más específica
@@ -326,27 +336,39 @@ class CacheManager:
         agent_id: Optional[str] = None,
         conversation_id: Optional[str] = None,
         collection_id: Optional[str] = None,
-        ttl: int = 3600,
+        ttl: Optional[int] = None,
         use_memory: bool = True
     ) -> bool:
         """
-        Guarda un valor en la caché multinivel.
+        Almacena un valor en la caché.
+        
+        El TTL se determina automáticamente si no se proporciona:
+        - Si es None: Se usa el TTL predeterminado para el tipo de datos desde DEFAULT_TTL_MAPPING
+        - Si es 0: La caché no expira
+        - Otro valor: Se usa el valor proporcionado (en segundos)
         
         Args:
-            data_type: Tipo de datos ("embedding", "query", "agent", etc.)
-            resource_id: ID del recurso específico
+            data_type: Tipo de datos ("embedding", "vector_store", etc.)
+            resource_id: ID único del recurso
             value: Valor a almacenar
-            tenant_id, agent_id, etc.: Componentes contextuales opcionales
-            ttl: Tiempo de vida en segundos
-            use_memory: Si debe guardar también en memoria
+            tenant_id: ID del tenant (opcional)
+            agent_id: ID del agente (opcional)
+            conversation_id: ID de la conversación (opcional)
+            collection_id: ID de la colección (opcional)
+            ttl: Tiempo de vida en segundos (opcional, usa el predeterminado para el tipo si es None)
+            use_memory: Flag para usar caché en memoria (opcional)
             
         Returns:
-            bool: True si se guardó correctamente
+            bool: True si se almacenó correctamente
         """
         tenant_id = tenant_id or get_current_tenant_id()
         agent_id = agent_id or get_current_agent_id()
         conversation_id = conversation_id or get_current_conversation_id()
         collection_id = collection_id or get_current_collection_id()
+        
+        # Determinar TTL si no se proporciona
+        if ttl is None:
+            ttl = get_default_ttl_for_data_type(data_type)
         
         # Generar clave completa
         key = CacheManager._build_key(
@@ -360,11 +382,25 @@ class CacheManager:
             return False
             
         try:
-            # Serializar a JSON si es necesario
-            if not isinstance(value, (str, bytes)):
-                serialized = json.dumps(value)
+            # Usar la función de serialización centralizada en lugar de importarla en cada llamada
+            try:
+                value_to_cache = self._serialize_for_cache(value, data_type)
+            except Exception as e:
+                logger.warning(f"Error de serialización al guardar {data_type} en caché: {e}")
+                await track_cache_metrics(
+                    data_type=data_type,
+                    tenant_id=tenant_id,
+                    metric_type=METRIC_SERIALIZATION_ERROR,
+                    value=1,
+                    metadata={"error": str(e)}
+                )
+                return False
+            
+            # Convertir a JSON si no es un tipo primitivo
+            if not isinstance(value_to_cache, (str, bytes)):
+                serialized = json.dumps(value_to_cache)
             else:
-                serialized = value
+                serialized = value_to_cache
                 
             # Guardar con TTL
             if ttl > 0:
@@ -374,7 +410,7 @@ class CacheManager:
                 
             # Guardar en memoria para acceso rápido
             if use_memory:
-                self._add_to_memory_cache(key, value, ttl)
+                self._add_to_memory_cache(key, value_to_cache, ttl)
                 
             return True
         except Exception as e:
@@ -390,7 +426,7 @@ class CacheManager:
         agent_id: Optional[str] = None,
         conversation_id: Optional[str] = None,
         collection_id: Optional[str] = None,
-        ttl: int = TTL_MEDIUM,  # Usando TTL_MEDIUM para compatibilidad
+        ttl: Optional[int] = None,
         use_memory: bool = True
     ) -> bool:
         """
@@ -409,15 +445,15 @@ class CacheManager:
             use_memory=use_memory
         )
     
-    def _add_to_memory_cache(self, key: str, value: Any, ttl: int = 3600):
+    def _add_to_memory_cache(self, key: str, value: Any, ttl: int = TTL_STANDARD):
         """
         Añade una entrada a la caché en memoria con TTL y limpieza de exceso de tamaño.
         """
         now = time.time()
         _memory_cache[key] = value
         _memory_expiry[key] = now + ttl
-        if len(_memory_cache) > self.memory_cache_size:
-            to_remove = int(len(_memory_cache) * self.memory_cache_cleanup_percent)
+        if len(_memory_cache) > self.settings.memory_cache_size:
+            to_remove = int(len(_memory_cache) * self.settings.memory_cache_cleanup_percent)
             sorted_items = sorted(_memory_expiry.items(), key=lambda item: item[1])
             for k, _ in sorted_items[:to_remove]:
                 _memory_cache.pop(k, None)
@@ -556,7 +592,7 @@ class CacheManager:
         """
         Obtiene un embedding vectorial almacenado en caché.
         """
-        text_hash = generate_hash(text)
+        text_hash = generate_resource_id_hash(text)
         resource_id = f"{model_name}:{text_hash}"
         return await self.get(
             data_type="embedding",
@@ -569,24 +605,29 @@ class CacheManager:
         """
         Almacena un embedding en la caché con TTL estándar para embeddings.
         """
-        text_hash = generate_hash(text)
+        text_hash = generate_resource_id_hash(text)
         resource_id = f"{model_name}:{text_hash}"
+        
+        ttl = DEFAULT_TTL_MAPPING.get("embedding", TTL_EXTENDED)
+        
         return await self.set(
             data_type="embedding",
             resource_id=resource_id,
             value=embedding,
             tenant_id=tenant_id,
             agent_id=agent_id,
-            ttl=self.ttl_standard,
+            ttl=ttl
         )
     
     async def get_query_result(self, query: str, collection_id: str, tenant_id: Optional[str] = None, agent_id: Optional[str] = None, similarity_top_k: int = 4, response_mode: str = "compact") -> Optional[Dict[str, Any]]:
         """
         Obtiene el resultado de una consulta de la caché.
         """
-        params_hash = generate_hash(f"{similarity_top_k}:{response_mode}")
-        query_hash = generate_hash(query)
+        params = {"similarity_top_k": similarity_top_k, "response_mode": response_mode}
+        params_hash = generate_resource_id_hash(params)
+        query_hash = generate_resource_id_hash(query)
         resource_id = f"{query_hash}:{params_hash}"
+        
         return await self.get(
             data_type="query_result",
             resource_id=resource_id,
@@ -599,9 +640,13 @@ class CacheManager:
         """
         Almacena el resultado de una consulta en la caché con TTL estándar para consultas.
         """
-        params_hash = generate_hash(f"{similarity_top_k}:{response_mode}")
-        query_hash = generate_hash(query)
+        params = {"similarity_top_k": similarity_top_k, "response_mode": response_mode}
+        params_hash = generate_resource_id_hash(params)
+        query_hash = generate_resource_id_hash(query)
         resource_id = f"{query_hash}:{params_hash}"
+        
+        ttl = DEFAULT_TTL_MAPPING.get("query_result", TTL_SHORT)
+        
         return await self.set(
             data_type="query_result",
             resource_id=resource_id,
@@ -609,7 +654,7 @@ class CacheManager:
             tenant_id=tenant_id,
             agent_id=agent_id,
             collection_id=collection_id,
-            ttl=self.ttl_standard,
+            ttl=ttl,
         )
     
     @staticmethod
@@ -659,6 +704,7 @@ class CacheManager:
             data_type="agent_config",
             resource_id=resource_id,
             tenant_id=tenant_id,
+            agent_id=agent_id,
             use_memory=use_memory
         )
 
@@ -667,20 +713,35 @@ class CacheManager:
         agent_id: str,
         config: Any,
         tenant_id: Optional[str] = None,
-        ttl: int = 3600,
+        ttl: Optional[int] = None,
         use_memory: bool = True
     ) -> bool:
         """
         Guarda la configuración del agente en cache.
+        
+        Args:
+            agent_id: ID del agente
+            config: Configuración a almacenar
+            tenant_id: ID del tenant (opcional)
+            ttl: Tiempo de vida en segundos (opcional, usa el valor predeterminado si no se proporciona)
+            use_memory: Si se debe usar la caché en memoria
+            
+        Returns:
+            bool: True si se guardó correctamente
         """
         tenant_id = tenant_id or get_current_tenant_id()
         resource_id = f"agent_config:{agent_id}"
+        
+        # Obtener TTL específico para configuraciones de agente desde el mapeo centralizado
+        agent_config_ttl = ttl or DEFAULT_TTL_MAPPING.get("agent_config", TTL_STANDARD)
+        
         return await self.set(
             data_type="agent_config",
             resource_id=resource_id,
             value=config,
             tenant_id=tenant_id,
-            ttl=ttl,
+            agent_id=agent_id,
+            ttl=agent_config_ttl,
             use_memory=use_memory
         )
 
@@ -694,10 +755,20 @@ class CacheManager:
     ) -> Optional[Any]:
         """
         Obtiene una respuesta de agente cacheada.
+        
+        Args:
+            agent_id: ID del agente
+            query: Consulta original
+            tenant_id: ID del tenant (opcional)
+            conversation_id: ID de la conversación (opcional)
+            use_memory: Si se debe usar la caché en memoria
+            
+        Returns:
+            Optional[Any]: Respuesta cacheada o None si no existe
         """
         tenant_id = tenant_id or get_current_tenant_id()
         conversation_id = conversation_id or get_current_conversation_id()
-        query_hash = generate_hash(query)
+        query_hash = generate_resource_id_hash(query)
         resource_id = f"{agent_id}:{conversation_id}:{query_hash}"
         return await self.get(
             data_type="agent_response",
@@ -715,16 +786,32 @@ class CacheManager:
         response: Any,
         tenant_id: Optional[str] = None,
         conversation_id: Optional[str] = None,
-        ttl: int = 3600,
+        ttl: Optional[int] = None,
         use_memory: bool = True
     ) -> bool:
         """
         Guarda una respuesta de agente en cache.
+        
+        Args:
+            agent_id: ID del agente
+            query: Consulta original
+            response: Respuesta a almacenar
+            tenant_id: ID del tenant (opcional)
+            conversation_id: ID de la conversación (opcional)
+            ttl: Tiempo de vida en segundos (opcional, usa el valor predeterminado si no se proporciona)
+            use_memory: Si se debe usar la caché en memoria
+            
+        Returns:
+            bool: True si se guardó correctamente
         """
         tenant_id = tenant_id or get_current_tenant_id()
         conversation_id = conversation_id or get_current_conversation_id()
-        query_hash = generate_hash(query)
+        query_hash = generate_resource_id_hash(query)
         resource_id = f"{agent_id}:{conversation_id}:{query_hash}"
+        
+        # Obtener TTL específico para respuestas de agente desde el mapeo centralizado
+        agent_response_ttl = ttl or DEFAULT_TTL_MAPPING.get("agent_response", TTL_SHORT)
+        
         return await self.set(
             data_type="agent_response",
             resource_id=resource_id,
@@ -732,7 +819,7 @@ class CacheManager:
             tenant_id=tenant_id,
             agent_id=agent_id,
             conversation_id=conversation_id,
-            ttl=ttl,
+            ttl=agent_response_ttl,
             use_memory=use_memory
         )
     
@@ -766,7 +853,7 @@ class CacheManager:
         messages: List[Dict[str, Any]],
         tenant_id: Optional[str] = None,
         agent_id: Optional[str] = None,
-        ttl: int = 3600
+        ttl: Optional[int] = None
     ) -> bool:
         """
         Almacena los mensajes de una conversación en la caché.
@@ -775,11 +862,14 @@ class CacheManager:
             conversation_id: ID de la conversación
             messages: Lista de mensajes a almacenar
             tenant_id, agent_id: Contexto opcional
-            ttl: Tiempo de vida en segundos
+            ttl: Tiempo de vida en segundos (opcional, usa el valor predeterminado si no se proporciona)
             
         Returns:
             bool: True si se guardó correctamente
         """
+        # Obtener TTL específico para conversaciones desde el mapeo centralizado
+        conversation_ttl = ttl or DEFAULT_TTL_MAPPING.get("conversation_messages", TTL_STANDARD)
+        
         return await self.set(
             data_type="conversation_messages",
             resource_id=conversation_id,
@@ -787,7 +877,7 @@ class CacheManager:
             tenant_id=tenant_id,
             agent_id=agent_id,
             conversation_id=conversation_id,
-            ttl=ttl
+            ttl=conversation_ttl
         )
 
     async def increment_counter(
@@ -818,13 +908,10 @@ class CacheManager:
         Returns:
             int: Nuevo valor del contador
         """
-        # Usar contexto actual si necesario
         tenant_id = tenant_id or get_current_tenant_id()
         
-        # Clave base del contador
         counter_key_parts = [tenant_id, f"counter:{counter_type}"]
         
-        # Añadir componentes adicionales
         if token_type:
             counter_key_parts.append(f"type:{token_type}")
         if agent_id:
@@ -834,30 +921,24 @@ class CacheManager:
         if collection_id:
             counter_key_parts.append(f"coll:{collection_id}")
             
-        # Añadir ID del recurso 
         counter_key_parts.append(resource_id)
         
-        # Formar clave final
         counter_key = ":".join(filter(None, counter_key_parts))
         
-        # Obtener cliente Redis
         redis_client = await get_redis_client()
         if not redis_client:
             logger.warning(f"Redis no disponible, no se puede incrementar contador {counter_key}")
             return amount  # Si no hay Redis, devolver el incremento como valor
         
         try:
-            # Incrementar contador
             new_value = await redis_client.incrby(counter_key, amount)
             
-            # Establecer TTL si es la primera vez
             if new_value == amount:
                 await redis_client.expire(
                     counter_key, 
                     ttl or self.ttl_extended
                 )
             
-            # Si hay metadatos, guardarlos
             if metadata:
                 metadata_key = f"{counter_key}:metadata"
                 await redis_client.hset(metadata_key, mapping=metadata)
@@ -967,24 +1048,35 @@ class CacheManager:
         collection_id: Optional[str] = None
     ) -> int:
         """
-        Obtiene el TTL de un valor en Redis.
+        Obtiene el tiempo de vida restante en segundos de una clave en Redis.
+        
+        Args:
+            data_type: Tipo de datos
+            resource_id: ID del recurso
+            tenant_id, agent_id, etc: Componentes contextuales de la clave
+            
+        Returns:
+            int: Tiempo restante en segundos, -2 si la clave no existe, -1 si no tiene TTL
         """
+        # Utilizar los valores de contexto actuales si no se proporcionan
         tenant_id = tenant_id or get_current_tenant_id()
-        agent_id = agent_id or get_current_agent_id()
-        conversation_id = conversation_id or get_current_conversation_id()
-        collection_id = collection_id or get_current_collection_id()
+        
+        # Construir la clave
         key = CacheManager._build_key(
-            data_type, resource_id, tenant_id, agent_id, conversation_id, collection_id
+            data_type, resource_id, tenant_id, agent_id, 
+            conversation_id, collection_id
         )
+        
+        # Obtener TTL de Redis
         redis_client = await get_redis_client()
         if not redis_client:
-            return -1
+            return -2
+            
         try:
-            ttl_value = await redis_client.ttl(key)
-            return ttl_value if ttl_value is not None else -1
+            return await redis_client.ttl(key)
         except Exception as e:
-            logger.warning(f"Error al obtener TTL de Redis con clave {key}: {e}")
-            return -1
+            logger.warning(f"Error obteniendo TTL para {key}: {str(e)}")
+            return -2
 
     async def invalidate_cache(
         self,
@@ -1003,13 +1095,11 @@ class CacheManager:
         if conversation_id: pattern_parts.append(f"conv:{conversation_id}")
         if collection_id: pattern_parts.append(f"coll:{collection_id}")
         pattern = ":".join(pattern_parts)
-        # Eliminar claves en Redis
         redis_client = await get_redis_client()
         keys = await redis_client.keys(f"{pattern}*")
         deleted = 0
         if keys:
             deleted += await redis_client.delete(*keys)
-        # Eliminar de caché en memoria
         to_delete = [k for k in _memory_cache if k.startswith(pattern)]
         for k in to_delete:
             _memory_cache.pop(k, None)
@@ -1199,27 +1289,23 @@ class CacheManager:
             set_name: Nombre del conjunto
             value: Valor a añadir
             tenant_id: ID del tenant
-            ttl: Tiempo de vida en segundos (None para usar ttl_extended)
+            ttl: Tiempo de vida en segundos (None para ttl_extended)
             
         Returns:
             int: Número de elementos añadidos (0 si ya existía, 1 si se añadió)
         """
         tenant_id = tenant_id or get_current_tenant_id() or "system"
         
-        # Construir clave del conjunto
         key = f"{tenant_id}:set:{set_name}"
         
-        # Obtener cliente Redis
         redis_client = await get_redis_client()
         if not redis_client:
             logger.warning(f"Redis no disponible, no se puede añadir a conjunto {set_name}")
             return 0
             
         try:
-            # Añadir al conjunto
             result = await redis_client.sadd(key, value)
             
-            # Establecer TTL si es necesario y no tiene uno ya
             if ttl is not None or await redis_client.ttl(key) < 0:
                 await redis_client.expire(key, ttl or self.ttl_extended)
                 
@@ -1247,10 +1333,8 @@ class CacheManager:
         """
         tenant_id = tenant_id or get_current_tenant_id() or "system"
         
-        # Construir clave del conjunto
         key = f"{tenant_id}:set:{set_name}"
         
-        # Obtener cliente Redis
         redis_client = await get_redis_client()
         if not redis_client:
             logger.warning(f"Redis no disponible, no se puede eliminar de conjunto {set_name}")
@@ -1279,10 +1363,8 @@ class CacheManager:
         """
         tenant_id = tenant_id or get_current_tenant_id() or "system"
         
-        # Construir clave del conjunto
         key = f"{tenant_id}:set:{set_name}"
         
-        # Obtener cliente Redis
         redis_client = await get_redis_client()
         if not redis_client:
             logger.warning(f"Redis no disponible, no se pueden obtener miembros de conjunto {set_name}")
@@ -1330,3 +1412,15 @@ class CacheManager:
         """
         instance = CacheManager.get_instance()
         return await instance.get_set_members(set_name, tenant_id)
+
+    @staticmethod
+    def _generate_hash(data: Any) -> str:
+        """
+        OBSOLETO: Usar generate_resource_id_hash() de helpers.py en su lugar.
+        
+        Mantiene compatibilidad con código existente.
+        
+        Nota: Esta función existe por compatibilidad. Se recomienda usar 
+        generate_resource_id_hash en su lugar para nuevas implementaciones.
+        """
+        return generate_resource_id_hash(data)

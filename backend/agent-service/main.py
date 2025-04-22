@@ -36,16 +36,15 @@ async def lifespan(app: FastAPI):
         init_supabase()
         
         # Inicializar sistema de caché
-        cache_ready = await CacheManager.initialize(
-            redis_url=settings.redis_url,
-            max_connections=settings.redis_max_connections,
-            memory_cache_size=settings.memory_cache_size,
-            memory_cache_cleanup_percent=settings.memory_cache_cleanup_percent
-        )
-        if cache_ready:
-            logger.info("CacheManager inicializado correctamente")
-        else:
-            logger.warning("CacheManager no disponible - servicio funcionará sin caché")
+        try:
+            cache_ready = await CacheManager.initialize()
+            if cache_ready:
+                logger.info("CacheManager inicializado correctamente")
+            else:
+                logger.warning("CacheManager no disponible - servicio funcionará sin caché")
+        except Exception as e:
+            logger.error(f"Error inicializando CacheManager: {str(e)}")
+            logger.warning("Servicio funcionará sin caché")
         
         # Inicializar cliente HTTP
         http_client = httpx.AsyncClient(timeout=30.0)

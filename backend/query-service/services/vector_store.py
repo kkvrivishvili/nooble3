@@ -1,224 +1,176 @@
-# Actualización de query-service/services/vector_store.py
+"""
+Servicios para la gestión de vector stores.
+
+Este módulo proporciona funciones para interactuar con los vector stores,
+incluyendo recuperación, búsqueda y manipulación de datos vectoriales.
+"""
 
 import logging
-import time
-import sys
 import json
-from typing import Optional, Any
+import time
+from typing import Optional, Dict, Any, List, Callable
 
+from common.context import Context, with_context
+from common.errors import handle_errors, ServiceError, ErrorCode
+from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
-from common.db.supabase import get_supabase_client, get_tenant_vector_store
-from common.cache import CacheManager
-from common.context import with_context, Context
-from common.errors import handle_errors, CollectionNotFoundError
+from common.tracking import track_operation
+from common.cache import (
+    get_with_cache_aside,
+    invalidate_resource_cache,
+    generate_resource_id_hash,
+    SOURCE_CACHE,
+    SOURCE_SUPABASE,
+    SOURCE_GENERATION
+)
+
+from llama_index.vector_stores.supabase import SupabaseVectorStore
 
 logger = logging.getLogger(__name__)
 
-@with_context(tenant=True, collection=True)
-@handle_errors(error_type="simple", log_traceback=False)
-async def get_vector_store_for_collection(tenant_id: str, collection_id: str, ctx: Context = None) -> Optional[Any]:
+@handle_errors(error_type="service", log_traceback=True)
+@with_context(tenant=True, validate_tenant=True)
+@track_operation(operation_name="get_vector_store", operation_type="query")
+async def get_vector_store_for_collection(
+    tenant_id: str,
+    collection_id: str,
+    ctx: Context = None
+) -> Dict[str, Any]:
     """
-    Obtiene un vector store para una colección específica siguiendo el patrón Cache-Aside optimizado.
+    Obtiene un vector store para una colección específica utilizando el patrón Cache-Aside.
     
-    1. Verificar caché primero
-    2. Si no está en caché, obtener de Supabase
-    3. Almacenar en caché para futuras consultas
+    Implementa el patrón centralizado para verificar primero en caché,
+    luego en Supabase, y finalmente crear si es necesario.
     
     Args:
         tenant_id: ID del tenant
         collection_id: ID de la colección
-        ctx: Contexto proporcionado por el decorador with_context
+        ctx: Contexto de la operación
         
     Returns:
-        Vector store para la colección o None si no se encuentra
+        Vector store configurado para la colección
+    
+    Raises:
+        ServiceError: Si no se puede obtener el vector store
     """
-    # Métricas para seguimiento de rendimiento
-    start_time = time.time()
-    metrics = {
-        "source": None,
-        "collection_id": collection_id
-    }
+    # Validar parámetros
+    if not tenant_id or not collection_id:
+        raise ServiceError(
+            message="Se requieren tenant_id y collection_id",
+            error_code=ErrorCode.INVALID_ARGUMENT
+        )
     
-    # 1. VERIFICAR CACHÉ - Paso 1 del patrón Cache-Aside
-    cache_check_start = time.time()
+    # Generar un identificador consistente para esta colección
+    resource_id = f"vector_store:{collection_id}"
     
-    # Buscar en caché unificada
-    vector_store = await CacheManager.get(
+    # Función para buscar en Supabase si no está en caché
+    async def fetch_vector_store_from_db(resource_id, tenant_id, ctx):
+        try:
+            # Obtener cliente Supabase
+            supabase = get_supabase_client()
+            
+            # Verificar que la colección existe
+            collections_table = get_table_name("collections")
+            collection_result = (supabase.table(collections_table)
+                                .select("id, name, description, embedding_model")
+                                .eq("id", collection_id)
+                                .eq("tenant_id", tenant_id)
+                                .limit(1)
+                                .execute())
+            
+            if not collection_result.data:
+                logger.warning(f"Colección no encontrada: {collection_id} para tenant {tenant_id}")
+                return None
+            
+            collection = collection_result.data[0]
+            
+            # Configurar vector store
+            table_name = get_table_name("document_chunks")
+            vector_store = SupabaseVectorStore(
+                client=supabase,
+                table_name=table_name,
+                tenant_id_filter=tenant_id,
+                collection_id_filter=collection_id
+            )
+            
+            # Preparar resultado con metadatos
+            result = {
+                "vector_store": vector_store,
+                "collection": collection,
+                "metadata": {
+                    "tenant_id": tenant_id,
+                    "collection_id": collection_id,
+                    "table_name": table_name
+                }
+            }
+            
+            return result
+        except Exception as e:
+            logger.error(f"Error obteniendo vector store desde Supabase: {str(e)}")
+            return None
+    
+    # No se requiere función de generación ya que no generamos vector stores,
+    # solo los configuramos desde datos existentes
+    async def generate_vector_store(resource_id, tenant_id, ctx):
+        # Este caso solo se alcanza si la colección no existe,
+        # lo que es un error que debería ser manejado
+        return None
+    
+    # Usar la implementación centralizada del patrón Cache-Aside
+    result, metrics = await get_with_cache_aside(
         data_type="vector_store",
-        resource_id=collection_id,
+        resource_id=resource_id,
         tenant_id=tenant_id,
+        fetch_from_db_func=fetch_vector_store_from_db,
+        generate_func=generate_vector_store,  # En este caso siempre será None si no está en DB
         agent_id=ctx.get_agent_id() if ctx else None,
-        search_hierarchy=True
+        ctx=ctx
     )
     
-    cache_check_time = time.time() - cache_check_start
-    
-    if vector_store:
-        logger.debug(f"Vector store para colección {collection_id} obtenido de caché")
-        
-        # Registrar acierto y latencia de caché
-        await track_cache_hit("vector_store", tenant_id, True)
-        await track_cache_metric(
-            data_type="vector_store",
-            tenant_id=tenant_id,
-            source="cache",
-            latency_ms=cache_check_time * 1000
+    # Verificar resultado y manejar caso de no encontrado
+    if not result:
+        raise ServiceError(
+            message=f"Colección no encontrada: {collection_id}",
+            error_code=ErrorCode.NOT_FOUND,
+            details={
+                "tenant_id": tenant_id,
+                "collection_id": collection_id
+            }
         )
-        
-        metrics["source"] = "cache"
-        metrics["latency_ms"] = cache_check_time * 1000
-        return vector_store
     
-    # Registrar fallo de caché
-    await track_cache_hit("vector_store", tenant_id, False)
+    # Agregar métricas al contexto si está disponible
+    if ctx:
+        ctx.add_metric("vector_store_metrics", metrics)
+        
+        # Registrar la fuente del vector store para análisis
+        ctx.add_metadata("vector_store_source", metrics.get("source", "unknown"))
     
-    # 2. OBTENER DE SUPABASE - Paso 2 del patrón Cache-Aside
-    db_start_time = time.time()
-    
-    try:
-        # Obtener cliente y tabla
-        supabase = get_supabase_client()
-        
-        # Obtener vector store de Supabase
-        vector_store = await get_tenant_vector_store(
-            tenant_id=tenant_id,
-            collection_id=collection_id,
-            ctx=ctx
-        )
-        
-        db_time = time.time() - db_start_time
-        
-        # Registrar latencia de Supabase
-        await track_cache_metric(
-            data_type="vector_store",
-            tenant_id=tenant_id,
-            source="supabase",
-            latency_ms=db_time * 1000
-        )
-        
-        if vector_store:
-            # 3. ALMACENAR EN CACHÉ - Paso 3 del patrón Cache-Aside
-            try:
-                # Estimar tamaño para métricas (aproximado)
-                try:
-                    size_estimate = sys.getsizeof(json.dumps(str(vector_store)))
-                except:
-                    size_estimate = 5000  # Valor estimado por defecto
-                
-                # Cachear para futuras solicitudes usando TTL estandarizado
-                await CacheManager.set(
-                    data_type="vector_store",
-                    resource_id=collection_id,
-                    value=vector_store,
-                    tenant_id=tenant_id,
-                    agent_id=ctx.get_agent_id() if ctx else None,
-                    ttl=CacheManager.ttl_standard  # 1 hora
-                )
-                
-                # Registrar tamaño en caché
-                await track_cache_size("vector_store", tenant_id, size_estimate)
-                
-                logger.debug(f"Vector store para colección {collection_id} almacenado en caché")
-            except Exception as cache_err:
-                logger.warning(f"Error al almacenar vector store en caché: {str(cache_err)}")
-            
-            metrics["source"] = "supabase"
-            metrics["latency_ms"] = db_time * 1000
-            return vector_store
-        else:
-            logger.warning(f"No se encontró vector store para colección {collection_id}")
-            metrics["source"] = "not_found"
-            return None
-            
-    except Exception as e:
-        logger.error(f"Error obteniendo vector store: {str(e)}")
-        metrics["source"] = "error"
-        metrics["error"] = str(e)
-        return None
-    finally:
-        # Registrar tiempo total
-        metrics["total_time_ms"] = (time.time() - start_time) * 1000
-        logger.debug(f"Métricas de vector_store: {json.dumps(metrics)}")
+    return result
 
-@with_context(tenant=True)
-@handle_errors(error_type="simple", log_traceback=False)
-async def invalidate_vector_store_cache(tenant_id: str, collection_id: str, ctx: Context = None) -> bool:
+@handle_errors(error_type="service")
+async def invalidate_vector_store_cache(tenant_id: str, collection_id: str):
     """
-    Invalida la caché del vector store para una colección.
+    Invalida la caché para un vector store específico.
     
-    Esta función debe llamarse cuando se modifican documentos en una colección.
+    Esta función debe llamarse cuando se modifica una colección o sus documentos
+    para asegurar que las consultas posteriores obtengan los datos más recientes.
     
     Args:
         tenant_id: ID del tenant
         collection_id: ID de la colección
-        ctx: Contexto proporcionado por el decorador with_context
-        
-    Returns:
-        bool: True si se invalidó correctamente
     """
-    try:
-        # Invalidar caché relacionada con esta colección usando CacheManager
-        # Incluye invalidación coordinada de vector store y cualquier consulta relacionada
-        invalidated_keys = 0
-        
-        # 1. Invalidar vector store
-        deleted = await CacheManager.invalidate(
-            tenant_id=tenant_id,
-            data_type="vector_store",
-            resource_id=collection_id
-        )
-        invalidated_keys += deleted
-        
-        # 2. Invalidar consultas relacionadas a esta colección
-        deleted_queries = await CacheManager.invalidate(
-            tenant_id=tenant_id,
-            data_type="query_result",
-            collection_id=collection_id
-        )
-        invalidated_keys += deleted_queries
-        
-        logger.info(f"Caché invalidada para colección {collection_id}: {invalidated_keys} claves eliminadas")
-        return True
-    except Exception as e:
-        logger.error(f"Error al invalidar caché para colección {collection_id}: {str(e)}")
-        return False
-
-# Funciones auxiliares para métricas - Consistentes con el patrón de métricas
-
-async def track_cache_hit(data_type: str, tenant_id: str, hit: bool):
-    """Registra un acierto o fallo de caché."""
-    metric_type = "cache_hit" if hit else "cache_miss"
-    try:
-        await CacheManager.increment_counter(
-            counter_type=metric_type,
-            amount=1,
-            resource_id=data_type,
-            tenant_id=tenant_id
-        )
-    except Exception as e:
-        logger.debug(f"Error al registrar métrica de caché: {str(e)}")
-
-async def track_cache_metric(data_type: str, tenant_id: str, source: str, latency_ms: float):
-    """Registra la latencia de recuperación de datos."""
-    try:
-        await CacheManager.increment_counter(
-            counter_type="latency",
-            amount=int(latency_ms),  # Convertir a entero para contador
-            resource_id=f"{data_type}_{source}",  # cache, supabase, generation
-            tenant_id=tenant_id,
-            metadata={"latency_ms": latency_ms}
-        )
-    except Exception as e:
-        logger.debug(f"Error al registrar métrica de latencia: {str(e)}")
-
-async def track_cache_size(data_type: str, tenant_id: str, size_bytes: int):
-    """Registra el tamaño de los datos almacenados en caché."""
-    try:
-        await CacheManager.increment_counter(
-            counter_type="cache_size",
-            amount=size_bytes,
-            resource_id=data_type,
-            tenant_id=tenant_id
-        )
-    except Exception as e:
-        logger.debug(f"Error al registrar métrica de tamaño: {str(e)}")
+    resource_id = f"vector_store:{collection_id}"
+    
+    # Usar la función centralizada de invalidación de caché
+    success = await invalidate_resource_cache(
+        data_type="vector_store",
+        resource_id=resource_id,
+        tenant_id=tenant_id
+    )
+    
+    if success:
+        logger.info(f"Caché invalidada para vector store: {collection_id} (tenant: {tenant_id})")
+    else:
+        logger.warning(f"No se pudo invalidar caché para vector store: {collection_id} (tenant: {tenant_id})")
+    
+    return success

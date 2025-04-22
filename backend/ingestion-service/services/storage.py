@@ -8,7 +8,10 @@ from typing import Dict, Any, Optional, List, Tuple
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
 from common.errors import ServiceError, DocumentProcessingError, handle_errors
-from common.cache.manager import CacheManager
+from common.cache import (
+    get_with_cache_aside,
+    generate_resource_id_hash
+)
 from common.context import with_context, Context
 
 logger = logging.getLogger(__name__)
@@ -162,6 +165,9 @@ async def invalidate_vector_store_cache(tenant_id: str, collection_id: str, ctx:
     """
     Invalida la caché del vector store para una colección específica.
     
+    Utiliza el enfoque centralizado para la invalidación de caché,
+    garantizando consistencia en todos los servicios.
+    
     Args:
         tenant_id: ID del tenant
         collection_id: ID de la colección
@@ -171,27 +177,40 @@ async def invalidate_vector_store_cache(tenant_id: str, collection_id: str, ctx:
         bool: True si se invalidó correctamente
     """
     try:
-        # Obtener instancia de CacheManager
-        cache_manager = CacheManager()
+        from common.cache.manager import CacheManager
+        import time
+        
+        # Crear claves estandarizadas
+        resource_id = collection_id
         
         # Invalidar caché de resultados de consultas
-        query_cache_key = f"query_result:{tenant_id}:{collection_id}"
-        await cache_manager.delete(query_cache_key)
+        await CacheManager.delete(
+            data_type="query_result", 
+            resource_id=f"{collection_id}*", 
+            tenant_id=tenant_id,
+            use_pattern=True
+        )
         
         # Invalidar caché del vector store
-        vector_store_key = f"vectorstore:{tenant_id}:{collection_id}"
-        await cache_manager.delete(vector_store_key)
+        await CacheManager.delete(
+            data_type="vectorstore", 
+            resource_id=resource_id, 
+            tenant_id=tenant_id
+        )
         
-        # También invalidar patrones globales
-        pattern = f"*:{tenant_id}:{collection_id}:*"
-        await cache_manager.delete_pattern(pattern)
+        # Registro de métricas de invalidación si hay contexto
+        if ctx:
+            ctx.add_metric("cache_invalidation", {
+                "collection_id": collection_id,
+                "tenant_id": tenant_id,
+                "timestamp": time.time()
+            })
         
         logger.info(f"Caché invalidada para colección {collection_id} del tenant {tenant_id}")
         return True
         
     except Exception as e:
         logger.error(f"Error invalidando caché: {str(e)}")
-        # Intentar continuar a pesar del error de caché
         return False
 
 @with_context(tenant=True)
@@ -200,56 +219,19 @@ async def get_document_with_cache(document_id: str, tenant_id: str, ctx: Context
     """
     Obtiene un documento con caché para mejorar rendimiento.
     
+    Implementa el patrón Cache-Aside centralizado para optimizar la recuperación
+    de documentos y mantener consistencia con otros servicios.
+    
     Args:
         document_id: ID del documento
         tenant_id: ID del tenant
+        ctx: Contexto de la operación
         
     Returns:
         Optional[Dict[str, Any]]: Datos del documento o None si no existe
     """
-    try:
-        # Primero intentar obtener de la caché
-        cached_doc = await CacheManager.get(
-            data_type="document",
-            resource_id=document_id,
-            tenant_id=tenant_id
-        )
-        
-        if cached_doc:
-            logger.debug(f"Documento {document_id} obtenido de caché")
-            return cached_doc
-        
-        # Si no está en caché, obtener de Supabase
-        supabase = get_supabase_client()
-        result = await supabase.table(get_table_name("documents")) \
-            .select("*") \
-            .eq("document_id", document_id) \
-            .eq("tenant_id", tenant_id) \
-            .single() \
-            .execute()
-            
-        if result.error:
-            logger.error(f"Error obteniendo documento: {result.error}")
-            return None
-            
-        document = result.data
-        
-        if document:
-            # Guardar en caché para futuras consultas
-            await CacheManager.set(
-                data_type="document",
-                resource_id=document_id,
-                value=document,
-                tenant_id=tenant_id,
-                ttl=3600
-            )
-            
-        return document
-        
-    except Exception as e:
-        logger.error(f"Error obteniendo documento con caché: {str(e)}")
-        
-        # Si hay error de caché, intentar obtener directamente de Supabase
+    # Función para obtener el documento de Supabase
+    async def fetch_document_from_db(resource_id, tenant_id, ctx=None):
         try:
             supabase = get_supabase_client()
             result = await supabase.table(get_table_name("documents")) \
@@ -260,8 +242,26 @@ async def get_document_with_cache(document_id: str, tenant_id: str, ctx: Context
                 .execute()
                 
             if result.error:
+                logger.error(f"Error obteniendo documento: {result.error}")
                 return None
                 
             return result.data
-        except:
+        except Exception as e:
+            logger.error(f"Error obteniendo documento de Supabase: {str(e)}")
             return None
+    
+    # Usar la implementación centralizada del patrón Cache-Aside
+    result, metrics = await get_with_cache_aside(
+        data_type="document",
+        resource_id=document_id,
+        tenant_id=tenant_id,
+        fetch_from_db_func=fetch_document_from_db,
+        generate_func=None,  # No necesitamos generar documentos si no existen
+        ctx=ctx
+    )
+    
+    # Si tenemos contexto, añadir métricas para análisis
+    if ctx:
+        ctx.add_metric("document_cache_metrics", metrics)
+    
+    return result
