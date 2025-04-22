@@ -9,14 +9,15 @@ from fastapi import APIRouter, Depends, Body, HTTPException
 
 from common.models.base import TenantInfo
 from common.auth import verify_tenant, validate_model_access
-from common.context import with_context, get_current_tenant_id, get_current_collection_id
+from common.context import with_context, Context
 from common.errors import (
-    handle_service_error_simple, ValidationError, EmbeddingGenerationError, RateLimitExceeded,
+    handle_errors, ValidationError, EmbeddingGenerationError, RateLimitExceeded,
     ServiceError, BatchTooLargeError, TextTooLargeError, EmbeddingModelError
 )
 from common.config import get_settings
 from common.config.tiers import get_available_embedding_models
-from common.tracking import track_token_usage
+from common.tracking import track_token_usage, estimate_prompt_tokens
+from common.cache import CacheManager
 
 from models.embeddings import (
     EmbeddingRequest, EmbeddingResponse, 
@@ -71,10 +72,11 @@ async def _validate_and_get_model(tenant_info: TenantInfo, requested_model: str,
 
 @router.post("/embeddings", response_model=EmbeddingResponse)
 @with_context(tenant=True, agent=True, conversation=True, collection=True)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 async def generate_embeddings(
     request: EmbeddingRequest,
-    tenant_info: TenantInfo = Depends(verify_tenant)
+    tenant_info: TenantInfo = Depends(verify_tenant),
+    ctx: Context = None
 ) -> EmbeddingResponse:
     """
     Genera embeddings vectoriales para una lista de textos.
@@ -98,11 +100,11 @@ async def generate_embeddings(
     
     # Obtener parámetros de la solicitud
     model_name = request.model or settings.default_embedding_model
-    collection_id = request.collection_id
     
-    # ID de agente y conversación (opcionales, solo para tracking)
-    agent_id = getattr(request, 'agent_id', None)
-    conversation_id = getattr(request, 'conversation_id', None)
+    # Obtener IDs de contexto directamente del objeto Context
+    agent_id = ctx.get_agent_id()  # Puede ser None si no hay contexto de agente
+    conversation_id = ctx.get_conversation_id()  # Puede ser None si no hay contexto de conversación
+    collection_id = ctx.get_collection_id() or request.collection_id  # Priorizar contexto, pero permitir override
     
     # Validar modelo usando la función estandarizada
     model_name, metadata = await _validate_and_get_model(tenant_info, model_name, "embedding")
@@ -114,21 +116,27 @@ async def generate_embeddings(
         # Generar embeddings con soporte de caché
         embeddings = await embedding_provider.get_batch_embeddings(texts)
         
-        # Registrar uso
-        tokens_estimate = sum(len(text.split()) * 1.3 for text in texts)  # Estimación de tokens
-        await track_token_usage(
-            tenant_id=tenant_id,
-            tokens=int(tokens_estimate),
-            model=model_name,
-            agent_id=agent_id,
-            conversation_id=conversation_id,
-            token_type="embedding",
-            operation="encode",
-            metadata={
-                "texts_count": len(texts),
-                "cached_count": 0
-            }
-        )
+        # Calcular total de tokens usando la función centralizada
+        total_tokens = 0
+        for text in texts:
+            total_tokens += await estimate_prompt_tokens(text)
+        
+        # Registrar uso de tokens con el sistema centralizado
+        try:
+            await track_token_usage(
+                tenant_id=tenant_id,
+                tokens=total_tokens,
+                model=model_name,
+                agent_id=agent_id,
+                conversation_id=conversation_id,
+                collection_id=collection_id,
+                token_type="embedding",
+                operation="query",
+                metadata={"num_texts": len(texts)}
+            )
+        except Exception as track_err:
+            logger.warning(f"Error al registrar uso de tokens: {str(track_err)}", 
+                         extra={"tenant_id": tenant_id, "error": str(track_err)})
         
         processing_time = time.time() - start_time
         logger.info(f"Generados {len(embeddings)} embeddings en {processing_time:.2f}s con modelo {model_name}")
@@ -156,10 +164,11 @@ async def generate_embeddings(
 
 @router.post("/embeddings/batch", response_model=BatchEmbeddingResponse)
 @with_context(tenant=True, agent=True, conversation=True, collection=True)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 async def batch_generate_embeddings(
     request: BatchEmbeddingRequest,
-    tenant_info: TenantInfo = Depends(verify_tenant)
+    tenant_info: TenantInfo = Depends(verify_tenant),
+    ctx: Context = None
 ) -> BatchEmbeddingResponse:
     """
     Procesa embeddings para lotes de elementos con texto y metadatos asociados.
@@ -231,21 +240,27 @@ async def batch_generate_embeddings(
         # Generar embeddings con soporte de caché
         embeddings = await embedding_provider.get_batch_embeddings(texts)
         
-        # Registrar uso
-        tokens_estimate = sum(len(text.split()) * 1.3 for text in texts)  # Estimación de tokens
-        await track_token_usage(
-            tenant_id=tenant_id,
-            tokens=int(tokens_estimate),
-            model=model_name,
-            agent_id=agent_id,
-            conversation_id=conversation_id,
-            token_type="embedding",
-            operation="encode",
-            metadata={
-                "texts_count": len(texts),
-                "cached_count": 0
-            }
-        )
+        # Calcular total de tokens usando la función centralizada
+        total_tokens = 0
+        for text in texts:
+            total_tokens += await estimate_prompt_tokens(text)
+        
+        # Registrar uso de tokens con el sistema centralizado
+        try:
+            await track_token_usage(
+                tenant_id=tenant_id,
+                tokens=total_tokens,
+                model=model_name,
+                agent_id=agent_id,
+                conversation_id=conversation_id,
+                collection_id=collection_id,
+                token_type="embedding",
+                operation="batch",
+                metadata={"batch_size": len(texts)}
+            )
+        except Exception as track_err:
+            logger.warning(f"Error al registrar uso de tokens de batch: {str(track_err)}", 
+                         extra={"tenant_id": tenant_id, "error": str(track_err)})
         
         # Construir respuesta asociando embeddings con sus metadatos originales
         result_embeddings = []
@@ -282,7 +297,7 @@ async def batch_generate_embeddings(
         )
 
 @router.post("/internal/embed", tags=["Internal"])
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 async def internal_embed(
     texts: List[str] = Body(..., description="Textos para generar embeddings"),
     model: Optional[str] = Body(None, description="Modelo de embedding"),
@@ -348,8 +363,24 @@ async def internal_embed(
         # Generar embeddings
         embeddings = await embedding_provider.get_batch_embeddings(texts)
         
-        # No hacemos tracking en llamadas internas para evitar doble conteo
-        # ya que el servicio que llama hará su propio tracking
+        # Calcular total de tokens usando la función centralizada
+        total_tokens = 0
+        for text in texts:
+            total_tokens += await estimate_prompt_tokens(text)
+        
+        # Registrar uso de tokens con el sistema centralizado
+        try:
+            await track_token_usage(
+                tenant_id=tenant_id,
+                tokens=total_tokens,
+                model=model_name,
+                token_type="embedding",
+                operation="internal",
+                metadata={"num_texts": len(texts), "source": "internal_api"}
+            )
+        except Exception as track_err:
+            logger.warning(f"Error al registrar uso de tokens interno: {str(track_err)}", 
+                         extra={"tenant_id": tenant_id, "error": str(track_err)})
         
         return {
             "success": True,

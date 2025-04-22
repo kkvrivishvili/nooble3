@@ -10,7 +10,6 @@ from common.config import (
     get_embedding_model_details
 )
 from common.models import HealthResponse
-from common.context import get_current_tenant_id
 
 def get_settings():
     """

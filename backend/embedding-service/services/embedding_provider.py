@@ -11,6 +11,7 @@ from common.errors import (
 )
 from common.context import with_context, Context
 from common.cache import CacheManager  # Importar desde el módulo correcto unificado
+from common.tracking import track_token_usage, estimate_prompt_tokens
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -60,55 +61,37 @@ class CachedEmbeddingProvider:
         BatchTooLargeError: ("BATCH_TOO_LARGE", 413)
     })
     @with_context(tenant=True, validate_tenant=True)
-    async def get_embedding(self, text: str, ctx: Context = None) -> List[float]:
+    async def get_embedding(self, text: str, tenant_id: Optional[str] = None, ctx: Context = None) -> List[float]:
         """
-        Obtiene un embedding con soporte de caché unificada.
+        Obtiene el embedding para un texto con soporte de caché.
         
         Args:
             text: Texto para generar embedding
+            tenant_id: ID del tenant
             ctx: Contexto proporcionado por el decorador with_context
             
         Returns:
             List[float]: Vector de embedding
-            
-        Raises:
-            EmbeddingGenerationError: Si hay errores al generar el embedding
-            TextTooLargeError: Si el texto excede el límite de tokens permitido
-            ServiceError: Si no hay tenant válido disponible en el contexto y no se proporcionó uno
         """
-        # Usar tenant_id proporcionado o el del contexto actual (validando que sea válido)
-        tenant_id = self.tenant_id
-        if tenant_id is None:
-            tenant_id = ctx.get_tenant_id()
-        
-        if not text.strip():
-            # Vector de ceros para texto vacío
+        if not text:
             return [0.0] * self.dimensions
         
-        # Validar longitud del texto antes de procesar
-        token_count = self._estimate_token_count(text)
-        if token_count > self.max_token_length_per_text:
-            error_context = {
-                "tenant_id": tenant_id,
-                "model": self.model_name,
-                "tokens": token_count,
-                "max_tokens": self.max_token_length_per_text
-            }
-            logger.warning(f"Texto demasiado grande para embedding: {token_count} tokens", extra=error_context)
-            raise TextTooLargeError(
-                message=f"Text exceeds maximum token limit for embedding: {token_count} > {self.max_token_length_per_text}",
-                details=error_context
-            )
+        # Verificar longitud del texto
+        await self._validate_text_length(text, tenant_id)
         
         # Verificar caché usando el sistema unificado con manejo de errores
         try:
-            cached_embedding = await CacheManager.get_embedding(
-                text=text,
-                model_name=self.model_name,
+            cached_embedding = await CacheManager.get(
+                data_type="embedding", 
+                resource_id=self._generate_cache_key(text, self.model_name),
                 tenant_id=tenant_id,
-                agent_id=ctx.get_agent_id()
+                agent_id=ctx.get_agent_id() if ctx else None,
+                search_hierarchy=True,  # Buscar en niveles superiores de contexto
+                use_memory=True        # Usar caché en memoria si está disponible
             )
             if cached_embedding:
+                logger.debug("Embedding recuperado de caché", 
+                           extra={"tenant_id": tenant_id, "model": self.model_name})
                 return cached_embedding
         except Exception as cache_err:
             # Manejo mejorado de errores de caché con categorización
@@ -138,13 +121,13 @@ class CachedEmbeddingProvider:
         
         # Guardar en caché unificada con manejo de errores
         try:
-            await CacheManager.set_embedding(
-                text=text,
-                embedding=embedding,
-                model_name=self.model_name,
+            await CacheManager.set(
+                data_type="embedding",
+                resource_id=self._generate_cache_key(text, self.model_name),
+                value=embedding,
                 tenant_id=tenant_id,
-                agent_id=ctx.get_agent_id(),
-                ttl=86400  # 24 horas
+                agent_id=ctx.get_agent_id() if ctx else None,
+                ttl=CacheManager.ttl_standard  # Usar valor estándar del CacheManager
             )
         except Exception as cache_set_err:
             # Manejo mejorado de errores al guardar en caché
@@ -162,6 +145,53 @@ class CachedEmbeddingProvider:
                 logger.debug(f"Error al guardar embedding en caché: {str(cache_set_err)}")
         
         return embedding
+    
+    async def _validate_text_length(self, text: str, tenant_id: Optional[str] = None) -> None:
+        """
+        Valida que el texto no exceda el límite máximo de tokens permitido.
+        
+        Args:
+            text: Texto a validar
+            tenant_id: ID del tenant para contextualizar logs
+            
+        Raises:
+            TextTooLargeError: Si el texto excede el límite máximo de tokens
+        """
+        if not text:
+            return
+            
+        # Usar función centralizada para estimar tokens
+        estimated_tokens = await estimate_prompt_tokens(text)
+        
+        if estimated_tokens > self.max_token_length_per_text:
+            error_context = {
+                "tenant_id": tenant_id,
+                "model": self.model_name,
+                "estimated_tokens": estimated_tokens,
+                "max_tokens": self.max_token_length_per_text
+            }
+            logger.warning(f"Texto demasiado grande para embedding: {estimated_tokens} tokens", 
+                         extra=error_context)
+            raise TextTooLargeError(
+                message=f"Text exceeds maximum token limit for embedding: {estimated_tokens} > {self.max_token_length_per_text}",
+                details=error_context
+            )
+    
+    def _generate_cache_key(self, text: str, model_name: str) -> str:
+        """
+        Genera una clave de caché consistente para un texto y modelo.
+        
+        Args:
+            text: Texto para el que se generará la clave
+            model_name: Nombre del modelo usado
+            
+        Returns:
+            str: Clave de caché única
+        """
+        import hashlib
+        # Usar SHA-256 para generar un hash consistente del texto
+        text_hash = hashlib.sha256(text.encode('utf-8')).hexdigest()
+        return f"{model_name}:{text_hash}"
     
     @handle_errors(error_type="simple", log_traceback=False, error_map={
         EmbeddingGenerationError: ("EMBEDDING_GENERATION_ERROR", 500),
@@ -216,10 +246,11 @@ class CachedEmbeddingProvider:
             if not text.strip():
                 continue
                 
-            token_count = self._estimate_token_count(text)
-            if token_count > self.max_token_length_per_text:
-                invalid_texts.append((i, token_count))
-            total_tokens += token_count
+            # Usar función centralizada para estimar tokens
+            estimated_tokens = await estimate_prompt_tokens(text)
+            if estimated_tokens > self.max_token_length_per_text:
+                invalid_texts.append((i, estimated_tokens))
+            total_tokens += estimated_tokens
         
         # Reportar textos inválidos si hay alguno
         if invalid_texts:
@@ -327,7 +358,7 @@ class CachedEmbeddingProvider:
                             model_name=self.model_name,
                             tenant_id=tenant_id,
                             agent_id=ctx.get_agent_id(),
-                            ttl=86400  # 24 horas
+                            ttl=CacheManager.ttl_standard  # Usar valor estándar del CacheManager
                         )
                     except Exception as cache_set_err:
                         # Manejo mejorado de errores al guardar en caché
@@ -434,22 +465,3 @@ class CachedEmbeddingProvider:
             gc.collect()
         
         return results
-    
-    def _estimate_token_count(self, text: str) -> int:
-        """
-        Estima el conteo de tokens para un texto.
-        
-        Args:
-            text: Texto para estimar tokens
-            
-        Returns:
-            int: Número estimado de tokens
-        """
-        if not text:
-            return 0
-            
-        # Estimación simple: aprox. 4 caracteres por token para modelos como GPT
-        estimated_tokens = len(text) // 4
-        
-        # Al menos 1 token para texto no vacío
-        return max(1, estimated_tokens)

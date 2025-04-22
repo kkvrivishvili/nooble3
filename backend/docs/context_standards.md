@@ -103,17 +103,20 @@ async def background_task(data, context: dict):
 Para asegurarse de que hay un tenant válido:
 
 ```python
-from common.context.vars import get_required_tenant_id
+from common.context import with_context, Context
 
-# Esta función lanzará error si no hay tenant o si es "default"
-tenant_id = get_required_tenant_id()
+@with_context(tenant=True)
+async def mi_funcion(tenant_id: str, ctx: Context = None):
+    # El tenant_id ya está validado por el decorador
+    # Si se requiere uso explícito del contexto:
+    validated_tenant = ctx.get_tenant_id()
 ```
 
 ## Buenas Prácticas
 
-1. **No mezclar enfoques**: Decide un enfoque para cada servicio y úsalo consistentemente
-2. **Documentar el contexto requerido**: Incluir en los docstrings qué valores de contexto requiere la función
-3. **Verificar el contexto temprano**: Validar la presencia del contexto requerido al principio de una función
+1. **Usar el decorador @with_context**: Define explícitamente en el decorador qué contextos requiere tu función
+2. **Orden correcto de decoradores**: Usa siempre `@router.xxx()` → `@with_context()` → `@handle_errors()`
+3. **Documentar el contexto requerido**: Incluir en los docstrings qué valores de contexto requiere la función
 4. **Establecer valores por defecto seguros**: Si una función puede funcionar con un valor por defecto, proporciónalo
 
 ## Adaptación a Servicios Existentes

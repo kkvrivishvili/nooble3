@@ -132,23 +132,16 @@ def reset_context(token: Token, name: str) -> None:
     if var and token:
         var.reset(token)
 
-# Alias para compatibilidad (NOTA: Estas funciones están obsoletas, usar @with_context)
-def get_required_tenant_id() -> str:
-    """
-    FUNCIÓN OBSOLETA: Utilizar el decorador @with_context(tenant=True) y ctx.get_tenant_id() en su lugar.
-    """
-    warnings.warn(
-        "get_required_tenant_id is deprecated, use @with_context(tenant=True) instead", 
-        DeprecationWarning, stacklevel=2)
-    from .validator import validate_current_tenant
-    return validate_current_tenant()
-
-def validate_tenant_context(tenant_id: str) -> str:
-    """
-    FUNCIÓN OBSOLETA: Utilizar el decorador @with_context(tenant=True) y ctx.get_tenant_id() en su lugar.
-    """
-    warnings.warn(
-        "validate_tenant_context is deprecated, use @with_context(tenant=True) instead", 
-        DeprecationWarning, stacklevel=2)
-    from .validator import validate_tenant_id
-    return validate_tenant_id(tenant_id)
+# NOTA: Las funciones alias obsoletas han sido eliminadas conforme al patrón
+# unificado de contexto. En su lugar, utilizar:
+#
+# - @with_context(tenant=True) como decorador para validación automática de contexto
+# - Inyección de parámetro ctx: Context en las funciones decoradas
+# - ctx.get_tenant_id(), ctx.get_agent_id() para acceso validado
+#
+# Ejemplo de uso correcto:
+#
+# @with_context(tenant=True, agent=True)
+# async def my_function(tenant_id: str, agent_id: str, ctx: Context = None):
+#     # El contexto ya está validado
+#     pass

@@ -28,31 +28,47 @@ class MiExcepcionPersonalizada(ServiceError):
 
 ## Decoradores de Manejo de Errores
 
-Todos los endpoints de API deben utilizar los decoradores de manejo de errores:
+Todos los endpoints de API deben utilizar el decorador unificado de manejo de errores:
 
 ```python
-from common.errors import handle_service_error_simple
+from common.errors import handle_errors
 
 @router.post("/mi-endpoint")
-@handle_service_error_simple
+@with_context(tenant=True)
+@handle_errors(error_type="simple", log_traceback=False)
 async def mi_endpoint():
     # Tu código aquí
     pass
 ```
 
-Para casos más complejos que requieran manejo personalizado:
+### Variantes del Decorador `handle_errors`
 
+El decorador `handle_errors` es parametrizable y admite diferentes configuraciones según el caso de uso:
+
+1. **Para endpoints públicos**:
 ```python
-from common.errors import handle_errors
+@handle_errors(error_type="simple", log_traceback=False)
+```
 
-@router.post("/mi-endpoint-complejo")
-@handle_errors(error_map={
-    ValueError: ("VALIDATION_ERROR", 422),
-    KeyError: ("NOT_FOUND", 404)
-})
-async def mi_endpoint_complejo():
-    # Tu código aquí
-    pass
+2. **Para servicios internos**:
+```python
+@handle_errors(error_type="service", log_traceback=True)
+```
+
+3. **Para funciones de configuración**:
+```python
+@handle_errors(error_type="config")
+```
+
+4. **Con mapeo personalizado de excepciones**:
+```python
+@handle_errors(
+    error_type="service",
+    error_map={
+        ValueError: ("VALIDATION_ERROR", 422),
+        KeyError: ("NOT_FOUND", 404)
+    }
+)
 ```
 
 ## Logging de Errores

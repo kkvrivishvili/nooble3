@@ -328,8 +328,9 @@ def handle_errors(
     
     return decorator
 
-# Aliases para decoración estandarizada de endpoints
-handle_service_error_simple = handle_errors(error_type="simple")  # Para endpoints públicos
-handle_service_error_internal = handle_errors(error_type="service")  # Para endpoints internos
-# Mantener alias antiguo para compatibilidad
-handle_service_error = handle_service_error_simple
+# NOTA: Los aliases antiguos han sido eliminados conforme al patrón
+# unificado de manejo de errores. Utilizar directamente handle_errors
+# con parámetros apropiados según el caso de uso:
+# - @handle_errors(error_type="simple", log_traceback=False) para endpoints públicos
+# - @handle_errors(error_type="service", log_traceback=True) para servicios internos
+# - @handle_errors(error_type="config") para funciones de configuración

@@ -93,8 +93,6 @@ Sistema de manejo de errores para todos los servicios.
 from .handlers import (
     setup_error_handling,
     handle_errors,
-    handle_service_error_simple,
-    handle_service_error_internal,
 )
 
 from .responses import (
@@ -147,8 +145,6 @@ __all__ = [
     # handlers
     "setup_error_handling",
     "handle_errors",
-    "handle_service_error_simple",
-    "handle_service_error_internal",
     # responses
     "create_error_response",
     "format_error_response",
