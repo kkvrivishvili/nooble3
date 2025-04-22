@@ -6,14 +6,14 @@ import uuid
 from fastapi import APIRouter, Depends, Path, Query, HTTPException
 
 from common.models import TenantInfo, AgentConfig, AgentRequest, AgentResponse, AgentListResponse, DeleteAgentResponse
-from common.errors import handle_service_error_simple, InvalidAgentIdError, AgentNotFoundError, AgentAlreadyExistsError, AgentSetupError, ErrorCode, AgentExecutionError
+from common.errors import handle_errors, InvalidAgentIdError, AgentNotFoundError, AgentAlreadyExistsError, AgentSetupError, ErrorCode, AgentExecutionError
 from common.context import with_context
 from common.config import get_settings, invalidate_settings_cache
 from common.config.tiers import get_available_llm_models
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
 from common.auth import verify_tenant, validate_model_access
-from common.cache import CacheManager, TTL_MEDIUM
+from common.cache import CacheManager
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -21,7 +21,7 @@ settings = get_settings()
 
 @router.post("", response_model=AgentResponse)
 @with_context(tenant=True)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 async def create_agent(
     request: AgentRequest, 
     tenant_info: TenantInfo = Depends(verify_tenant)
@@ -111,7 +111,7 @@ async def create_agent(
         )
         
         # Guardar en caché config de agente
-        await CacheManager.set_agent_config(created_agent["agent_id"], created_agent, tenant_id, TTL_MEDIUM)
+        await CacheManager.set_agent_config(created_agent["agent_id"], created_agent, tenant_id, CacheManager.ttl_standard)
         # Invalidar caché de configuraciones para este tenant
         invalidate_settings_cache(tenant_id)
         
@@ -132,7 +132,7 @@ async def create_agent(
 
 @router.get("/{agent_id}", response_model=AgentResponse)
 @with_context(tenant=True, agent=True)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 async def get_agent(
     agent_id: str, 
     tenant_info: TenantInfo = Depends(verify_tenant)
@@ -167,7 +167,7 @@ async def get_agent(
     agent_data = result.data
     
     # Guardar en caché
-    await CacheManager.set_agent_config(agent_id, agent_data, tenant_id, TTL_MEDIUM)
+    await CacheManager.set_agent_config(agent_id, agent_data, tenant_id, CacheManager.ttl_standard)
     
     return AgentResponse(
         success=True,
@@ -192,7 +192,7 @@ async def get_agent(
 
 @router.get("", response_model=AgentListResponse)
 @with_context(tenant=True)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 async def list_agents(
     tenant_info: TenantInfo = Depends(verify_tenant)
 ) -> AgentListResponse:
@@ -236,7 +236,7 @@ async def list_agents(
 
 @router.put("/{agent_id}", response_model=AgentResponse)
 @with_context(tenant=True, agent=True)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 async def update_agent(
     agent_id: str, 
     request: AgentRequest, 
@@ -318,7 +318,7 @@ async def update_agent(
             agent_id=agent_id,
             config=updated_agent,
             tenant_id=tenant_id,
-            ttl=TTL_MEDIUM
+            ttl=CacheManager.ttl_standard
         )
         
         # Invalidar caché de configuraciones para este tenant
@@ -356,7 +356,7 @@ async def update_agent(
 
 @router.delete("/{agent_id}", response_model=DeleteAgentResponse)
 @with_context(tenant=True, agent=True)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 async def delete_agent(
     agent_id: str, 
     tenant_info: TenantInfo = Depends(verify_tenant)

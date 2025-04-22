@@ -11,9 +11,9 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.agents import AgentExecutor, create_tool_calling_agent
 from langchain_openai import ChatOpenAI
 from common.config import get_service_settings
-from common.context import ContextManager, with_context, validate_tenant_context
+from common.context import ContextManager, with_context, Context
 from common.errors import (
-    ServiceError, handle_service_error_simple, ErrorCode,
+    ServiceError, handle_errors, ErrorCode,
     AgentNotFoundError, AgentInactiveError, AgentExecutionError, 
     AgentSetupError, AgentToolError
 )
@@ -22,7 +22,7 @@ from common.db.tables import get_table_name
 from common.db.rpc import add_chat_history
 from common.llm.token_counters import count_tokens
 from common.tracking import track_token_usage, track_usage
-from common.cache import CacheManager, TTL_MEDIUM
+from common.cache import CacheManager
 from common.utils.stream import stream_llm_response
 
 from services.callbacks import AgentCallbackHandler
@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 settings = get_service_settings()
 
 @with_context(tenant=True, agent=True)
+@handle_errors(error_type="service", log_traceback=True)
 async def get_agent_config(agent_id: str, tenant_id: str) -> Dict[str, Any]:
     """Obtiene la configuración de un agente desde Supabase."""
     
@@ -68,7 +69,7 @@ async def get_agent_config(agent_id: str, tenant_id: str) -> Dict[str, Any]:
     if str(result.data["tenant_id"]) != str(tenant_id):
         logger.warning(f"Intento de acceso a agente de otro tenant: {agent_id}")
         # Usar función centralizada para validación consistente
-        await validate_tenant_context(tenant_id, extra_context={
+        await Context(tenant_id).validate_tenant_context(extra_context={
             "agent_id": agent_id,
             "operation": "get_agent_config"
         })
@@ -86,7 +87,7 @@ async def get_agent_config(agent_id: str, tenant_id: str) -> Dict[str, Any]:
             agent_id=agent_id,
             config=result.data,
             tenant_id=tenant_id,
-            ttl=TTL_MEDIUM
+            ttl=CacheManager.ttl_standard
         )
     except Exception as cache_set_err:
         logger.debug(f"Error guardando configuración en caché: {str(cache_set_err)}")
@@ -94,6 +95,7 @@ async def get_agent_config(agent_id: str, tenant_id: str) -> Dict[str, Any]:
     return result.data
 
 @with_context(tenant=True, agent=True, conversation=True)
+@handle_errors(error_type="service", log_traceback=True)
 async def execute_agent(
     tenant_id: str,
     agent_id: str,
@@ -300,7 +302,7 @@ async def execute_agent(
                     response=agent_response,
                     tenant_id=tenant_id,
                     conversation_id=conversation_id,
-                    ttl=TTL_MEDIUM
+                    ttl=CacheManager.ttl_standard
                 )
             except Exception as cache_set_err:
                 logger.debug(f"Error guardando respuesta en caché: {str(cache_set_err)}")
@@ -339,6 +341,8 @@ async def execute_agent(
     logger.info(f"Ejecución de agente completada en {processing_time:.2f}s")
     return agent_response
 
+@with_context(tenant=True, agent=True, conversation=True)
+@handle_errors(error_type="service", log_traceback=True)
 async def stream_agent_response(
     tenant_id: str,
     agent_id: str,

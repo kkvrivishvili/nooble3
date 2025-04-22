@@ -8,7 +8,7 @@ from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, Depends
 
 from common.models import TenantInfo
-from common.errors import ServiceError, handle_service_error_simple
+from common.errors import ServiceError, handle_errors
 from common.context import with_context
 from common.auth import verify_tenant
 
@@ -23,8 +23,8 @@ logger = logging.getLogger(__name__)
     summary="Obtener herramientas RAG disponibles",
     description="Lista las colecciones disponibles como herramientas RAG"
 )
-@handle_service_error_simple
 @with_context(tenant=True)
+@handle_errors(error_type="simple", log_traceback=False)
 async def list_rag_tools(
     tenant_info: TenantInfo = Depends(verify_tenant)
 ):

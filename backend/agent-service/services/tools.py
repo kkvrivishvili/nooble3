@@ -9,19 +9,22 @@ from fastapi import HTTPException
 from pydantic import BaseModel
 
 from common.config import get_settings
-from common.context import get_current_conversation_id
+from common.context import with_context, Context, get_current_conversation_id
 from common.utils.http import call_service
 from common.errors import (
     CollectionNotFoundError,
     RetrievalError,
     QueryProcessingError,
     ServiceError,
-    ErrorCode
+    ErrorCode,
+    handle_errors
 )
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
 
+@with_context(tenant=True)
+@handle_errors(error_type="service", log_traceback=True)
 async def create_rag_tool(tool_config: Dict[str, Any], tenant_id: str, agent_id: Optional[str] = None) -> Callable:
     """
     Crea una herramienta RAG que consulta una colección específica.
@@ -162,6 +165,8 @@ async def create_rag_tool(tool_config: Dict[str, Any], tenant_id: str, agent_id:
     
     return rag_query_tool
 
+@with_context(tenant=True, agent=True)
+@handle_errors(error_type="service", log_traceback=True)
 async def create_agent_tools(agent_config: Dict[str, Any], tenant_id: str, agent_id: str) -> List[Callable]:
     """
     Crea todas las herramientas para un agente basado en su configuración.
@@ -204,6 +209,8 @@ async def create_agent_tools(agent_config: Dict[str, Any], tenant_id: str, agent
     return tools
 
 # Solo implementamos las funciones para colecciones si Query Service está disponible
+@with_context(tenant=True)
+@handle_errors(error_type="service", log_traceback=True)
 async def get_available_collections(tenant_id: str) -> List[Dict[str, Any]]:
     """Obtiene las colecciones disponibles para un tenant."""
     try:

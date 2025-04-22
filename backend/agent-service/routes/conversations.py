@@ -4,7 +4,7 @@ from typing import Optional, List
 from fastapi import APIRouter, Depends, Path, Query
 
 from common.models import TenantInfo, ConversationListResponse, MessageListResponse, DeleteConversationResponse, ChatMessage
-from common.errors import handle_service_error_simple, ConversationError, ServiceError
+from common.errors import handle_errors, ConversationError, ServiceError
 from common.context import with_context
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
@@ -16,7 +16,7 @@ router = APIRouter()
 
 @router.get("", response_model=ConversationListResponse)
 @with_context(tenant=True)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 async def list_conversations(
     agent_id: Optional[str] = None,
     tenant_info: TenantInfo = Depends(verify_tenant)
@@ -99,7 +99,7 @@ async def list_conversations(
 
 @router.get("/{conversation_id}/messages", response_model=MessageListResponse)
 @with_context(tenant=True, conversation=True)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 async def get_conversation_messages(
     conversation_id: str,
     limit: Optional[int] = Query(None, description="Número máximo de mensajes a devolver"), 
@@ -182,7 +182,7 @@ async def get_conversation_messages(
 
 @router.delete("/{conversation_id}", response_model=DeleteConversationResponse)
 @with_context(tenant=True, conversation=True)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 async def delete_conversation(
     conversation_id: str,
     tenant_info: TenantInfo = Depends(verify_tenant)
@@ -271,7 +271,7 @@ async def delete_conversation(
 
 @router.post("/{conversation_id}/end", response_model=DeleteConversationResponse)
 @with_context(tenant=True, conversation=True)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 async def end_conversation(
     conversation_id: str,
     tenant_info: TenantInfo = Depends(verify_tenant)

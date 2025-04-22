@@ -6,7 +6,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Query, Path
 from fastapi.responses import StreamingResponse
 
 from common.models import TenantInfo, ChatRequest, ChatResponse, ChatMessage
-from common.errors import handle_service_error_simple, ConversationError
+from common.errors import handle_errors, ConversationError
 from common.context import with_context, ContextManager, set_current_conversation_id
 from common.auth import verify_tenant
 from common.db.rpc import create_conversation, add_chat_history
@@ -21,7 +21,7 @@ router = APIRouter()
 
 @router.post("/agents/{agent_id}/chat", response_model=ChatResponse)
 @with_context(tenant=True, agent=True, conversation=True)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 async def chat_with_agent(
     agent_id: str,
     request: ChatRequest,
@@ -170,8 +170,8 @@ async def chat_with_agent(
     )
 
 @router.post("/conversations/{conversation_id}/end", response_model=ChatResponse)
-@handle_service_error_simple
 @with_context(tenant=True, conversation=True)
+@handle_errors(error_type="simple", log_traceback=False)
 async def end_conversation(
     conversation_id: str,
     tenant_info: TenantInfo = Depends(verify_tenant)

@@ -2,12 +2,16 @@ import logging
 from typing import Optional
 
 from common.models import PublicTenantInfo
-from common.errors import ServiceError
+from common.errors import ServiceError, handle_errors
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
+from common.context import with_context
+from common.cache import CacheManager
+from common.db.rpc import record_public_session
 
 logger = logging.getLogger(__name__)
 
+@handle_errors(error_type="service", log_traceback=True)
 async def verify_public_tenant(tenant_slug: str) -> PublicTenantInfo:
     """
     Verifica que un tenant exista y sea público basado en su slug.
@@ -65,6 +69,8 @@ async def verify_public_tenant(tenant_slug: str) -> PublicTenantInfo:
             details={"error": str(e)}
         )
 
+@with_context(tenant=True)
+@handle_errors(error_type="service", log_traceback=True)
 async def register_public_session(tenant_id: str, session_id: str, agent_id: str, tokens_used: int = 0) -> str:
     """
     Registra o actualiza una sesión pública y contabiliza tokens utilizados.
@@ -85,7 +91,6 @@ async def register_public_session(tenant_id: str, session_id: str, agent_id: str
     
     try:
         # Llamar a la función de Supabase para registrar sesión
-        from ..db.rpc import record_public_session
         result = await record_public_session(
             tenant_id=tenant_id,
             session_id=session_id,
@@ -98,14 +103,18 @@ async def register_public_session(tenant_id: str, session_id: str, agent_id: str
         
         # Cachear información de la sesión para futuras consultas
         try:
-            from ..cache.conversation import cache_conversation
-            await cache_conversation(
-                conversation_id=session_id,
+            await CacheManager.set(
+                data_type="conversation", 
+                resource_id=session_id,
+                value={
+                    "agent_id": agent_id,
+                    "tenant_id": tenant_id,
+                    "is_public": True,
+                    "session_id": session_id
+                },
+                tenant_id=tenant_id,
                 agent_id=agent_id,
-                owner_tenant_id=tenant_id,
-                is_public=True,
-                session_id=session_id,
-                ttl=86400  # 24 horas
+                ttl=CacheManager.ttl_extended  # Usar propiedad estándar
             )
         except Exception as cache_error:
             logger.warning(f"Error caching session info: {str(cache_error)}")
