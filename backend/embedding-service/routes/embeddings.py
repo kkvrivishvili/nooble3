@@ -272,13 +272,20 @@ async def batch_generate_embeddings(
 async def internal_embed(
     texts: List[str] = Body(..., description="Textos para generar embeddings"),
     model: Optional[str] = Body(None, description="Modelo de embedding"),
-    tenant_id: str = Body(..., description="ID del tenant")
+    tenant_id: str = Body(..., description="ID del tenant"),
+    subscription_tier: Optional[str] = Body(None, description="Nivel de suscripción del tenant")
 ) -> Dict[str, Any]:
     """
     Endpoint interno para uso exclusivo de los servicios de query y agent.
     
     Este endpoint está optimizado para alta eficiencia y bajo overhead, generando
     embeddings para textos sin validaciones complejas de permisos de usuario.
+    
+    Args:
+        texts: Lista de textos para generar embeddings
+        model: Modelo de embedding a utilizar (opcional)
+        tenant_id: ID del tenant
+        subscription_tier: Nivel de suscripción del tenant (opcional)
     
     Returns:
         Dict con formato estandarizado:
@@ -291,13 +298,15 @@ async def internal_embed(
         }
     """
     try:
-        # Crear tenant_info mínimo para validación interna
-        tenant_info = TenantInfo(tenant_id=tenant_id, subscription_tier="business")
+        # Crear tenant_info con el tier proporcionado o un tier seguro por defecto
+        # en lugar de asumir "business"
+        tier = subscription_tier or "free"
+        tenant_info = TenantInfo(tenant_id=tenant_id, subscription_tier=tier)
         
         # Validar el modelo solicitado
         model_name = model or settings.default_embedding_model
         try:
-            validated_model = await validate_model_access(tenant_info, model_name, "embedding", tenant_id=tenant_id)
+            validated_model = await validate_model_access(tenant_info, model_name, "embedding")
         except ServiceError as e:
             # Si el modelo no está permitido, usar el modelo por defecto para su tier
             logger.info(f"Cambiando al modelo de embedding por defecto: {e.message}", extra=e.context)

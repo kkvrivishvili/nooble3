@@ -151,7 +151,26 @@ class CacheManager:
         conversation_id: Optional[str] = None,
         collection_id: Optional[str] = None
     ) -> List[str]:
-        """Genera claves de búsqueda en orden jerárquico (más específica a más general)."""
+        """
+        Genera claves de búsqueda en orden jerárquico (más específica a más general).
+        
+        Esta función sigue un patrón explícito y predecible para generar claves:
+        1. Clave completa con todos los parámetros disponibles (más específica)
+        2. Claves con combinaciones relevantes de contexto
+        3. Clave base solo con tenant_id (más general)
+        
+        Cada clave tiene un formato consistente y documentado:
+        tenant_id:data_type:agent:agent_id:conv:conversation_id:coll:collection_id:resource_id
+        
+        Args:
+            data_type: Tipo de datos (embedding, query, etc.)
+            resource_id: ID del recurso
+            tenant_id: ID del tenant (obligatorio)
+            agent_id, conversation_id, collection_id: Contexto opcional
+            
+        Returns:
+            Lista de claves en orden de más específica a más general
+        """
         keys = []
         
         # 1. Clave más específica (todos los niveles disponibles)

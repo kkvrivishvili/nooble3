@@ -12,15 +12,14 @@ from ..config.tiers import get_available_llm_models, get_available_embedding_mod
 logger = logging.getLogger(__name__)
 
 
-async def validate_model_access(tenant_info: TenantInfo, model_id: str, model_type: str = "llm", tenant_id: Optional[str] = None) -> str:
+async def validate_model_access(tenant_info: TenantInfo, model_id: str, model_type: str = "llm") -> str:
     """
     Valida que un tenant pueda acceder a un modelo.
     
     Args:
-        tenant_info: Información del tenant
+        tenant_info: Información del tenant (incluye tenant_id y subscription_tier)
         model_id: ID del modelo solicitado
         model_type: Tipo de modelo ('llm' o 'embedding')
-        tenant_id: ID opcional del tenant para personalización (si no se proporciona, se usa tenant_info.tenant_id)
         
     Returns:
         str: ID del modelo autorizado
@@ -29,18 +28,16 @@ async def validate_model_access(tenant_info: TenantInfo, model_id: str, model_ty
         ServiceError: Si el modelo solicitado no está permitido para el tier del tenant
     """
     tier = tenant_info.subscription_tier
-    
-    # Si no se proporciona tenant_id explícitamente, usamos el de tenant_info
-    actual_tenant_id = tenant_id or tenant_info.tenant_id
+    tenant_id = tenant_info.tenant_id
     
     # Obtenemos los modelos permitidos directamente de las funciones en tiers.py
     if model_type == "llm":
-        allowed_models = get_available_llm_models(tier, tenant_id=actual_tenant_id)
+        allowed_models = get_available_llm_models(tier, tenant_id=tenant_id)
     elif model_type == "embedding":
-        allowed_models = get_available_embedding_models(tier, tenant_id=actual_tenant_id)
+        allowed_models = get_available_embedding_models(tier, tenant_id=tenant_id)
     else:
         logger.warning(f"Tipo de modelo desconocido: {model_type}, usando LLM por defecto")
-        allowed_models = get_available_llm_models(tier, tenant_id=actual_tenant_id)
+        allowed_models = get_available_llm_models(tier, tenant_id=tenant_id)
     
     # Si el modelo solicitado está permitido, lo devolvemos
     if model_id in allowed_models:
@@ -48,7 +45,7 @@ async def validate_model_access(tenant_info: TenantInfo, model_id: str, model_ty
         
     # Crear contexto para el error
     error_context = {
-        "tenant_id": actual_tenant_id,
+        "tenant_id": tenant_id,
         "subscription_tier": tier,
         "requested_model": model_id,
         "model_type": model_type,
@@ -56,7 +53,7 @@ async def validate_model_access(tenant_info: TenantInfo, model_id: str, model_ty
     }
     
     logger.warning(
-        f"Modelo {model_id} no permitido para tenant {actual_tenant_id} en tier {tier}",
+        f"Modelo {model_id} no permitido para tenant {tenant_id} en tier {tier}",
         extra=error_context
     )
     
