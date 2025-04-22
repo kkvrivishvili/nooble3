@@ -12,9 +12,11 @@ import json
 import hashlib
 from typing import Dict, List, Any, Optional, Callable, Tuple, Union, TypeVar
 
-from common.cache.manager import CacheManager
+# Eliminamos la importación circular
+# from common.cache.manager import CacheManager
 from common.context import Context
-from common.db.supabase import get_supabase_client
+# Eliminamos la importación circular
+# from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
 
 # Importar constantes desde el módulo principal
@@ -110,6 +112,7 @@ async def get_with_cache_aside(
     cache_check_start = time.time()
     
     try:
+        from common.cache.manager import CacheManager
         cached_value = await CacheManager.get(
             data_type=data_type,
             resource_id=resource_id,
@@ -214,6 +217,7 @@ async def get_with_cache_aside(
             
             # Guardar en caché para futuras consultas
             try:
+                from common.cache.manager import CacheManager
                 # Estimar tamaño para métricas
                 size_estimate = estimate_object_size(cache_value)
                 
@@ -299,6 +303,7 @@ async def get_with_cache_aside(
                 
             # Guardar en caché
             try:
+                from common.cache.manager import CacheManager
                 # Estimar tamaño para métricas
                 size_estimate = estimate_object_size(cache_value)
                 
@@ -375,6 +380,7 @@ async def invalidate_coordinated(
     
     # 1. Invalidar recurso principal
     try:
+        from common.cache.manager import CacheManager
         # Registrar métrica de invalidación coordinada
         await track_cache_metrics(
             data_type=primary_data_type,
@@ -414,6 +420,7 @@ async def invalidate_coordinated(
                 invalidation_counts[rel_type] = 0
                 
             try:
+                from common.cache.manager import CacheManager
                 deleted = await CacheManager.invalidate(
                     tenant_id=tenant_id,
                     data_type=rel_type,
@@ -463,6 +470,7 @@ async def invalidate_resource_cache(
     
     # Registrar métrica de invalidación antes de intentar la operación
     try:
+        from common.cache.manager import CacheManager
         # Registrar métrica de invalidación
         await track_cache_metrics(
             data_type=data_type,
@@ -587,6 +595,7 @@ async def get_embeddings_batch_with_cache(
     
     for i, cache_key in enumerate(cache_keys):
         try:
+            from common.cache.manager import CacheManager
             val = await CacheManager.get(
                 data_type="embedding",
                 resource_id=cache_key,
@@ -660,6 +669,7 @@ async def get_embeddings_batch_with_cache(
             
             # Guardar en caché
             cache_key = cache_keys[i]
+            from common.cache.manager import CacheManager
             await CacheManager.set(
                 data_type="embedding",
                 resource_id=cache_key,
@@ -777,6 +787,7 @@ async def track_cache_metrics(
             counter_type = metric_type
         
         # Usar la función centralizada de incremento de contador
+        from common.cache.manager import CacheManager
         await CacheManager.increment_counter(
             counter_type=counter_type,
             amount=amount,
@@ -792,29 +803,31 @@ async def track_cache_metrics(
 
 async def track_cache_hit(data_type: str, tenant_id: str, hit: bool):
     """Registra un acierto o fallo de caché."""
+    from common.cache.manager import CacheManager
     await track_cache_metrics(
         data_type=data_type,
         tenant_id=tenant_id,
-        metric_type=METRIC_CACHE_HIT if hit else METRIC_CACHE_MISS,
+        metric_type="cache_hit" if hit else "cache_miss",
         value=hit
     )
-
+    
 async def track_cache_metric(data_type: str, tenant_id: str, source: str, latency_ms: float):
     """Registra la latencia de recuperación de datos."""
+    from common.cache.manager import CacheManager
     await track_cache_metrics(
         data_type=data_type,
         tenant_id=tenant_id,
-        metric_type=METRIC_LATENCY,
-        value=latency_ms,
-        metadata={"source": source}
+        metric_type=f"latency_{source}",
+        value=latency_ms
     )
-
+    
 async def track_cache_size(data_type: str, tenant_id: str, size_bytes: int):
     """Registra el tamaño de los datos almacenados en caché."""
+    from common.cache.manager import CacheManager
     await track_cache_metrics(
         data_type=data_type,
         tenant_id=tenant_id,
-        metric_type=METRIC_CACHE_SIZE,
+        metric_type="cache_size",
         value=size_bytes
     )
 

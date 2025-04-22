@@ -10,10 +10,15 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Instalar dependencias de Python
+# Instalar dependencias de Python en dos pasos para resolver conflictos
 COPY query-service/requirements.txt ./query-service/requirements.txt
+
+# Primero actualizar pip e instalar paquetes base
 RUN pip install --no-cache-dir -U pip && \
-    pip install --no-cache-dir -r ./query-service/requirements.txt
+    pip install --no-cache-dir fastapi==0.115.12 uvicorn==0.34.0 pydantic==2.10.6 pydantic-settings==2.8.1 httpx==0.28.1
+
+# Luego instalar el resto de dependencias
+RUN pip install --no-cache-dir -r ./query-service/requirements.txt
 
 # Copiar código común y específico
 COPY common/ ./common/
@@ -22,6 +27,8 @@ COPY .env.example ./.env
 
 # Hacer ejecutables los scripts
 RUN chmod +x /app/common/init_ollama.sh /app/common/wait-for-it.sh
+# Asegurar que los scripts siempre tengan permisos ejecutables
+RUN find /app -name "*.sh" -type f -exec chmod +x {} \;
 
 # Configurar variables de entorno
 ENV PYTHONPATH=/app

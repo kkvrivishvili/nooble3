@@ -39,8 +39,7 @@ from .exceptions import (
     TextTooLargeError,
     BatchTooLargeError,
     InvalidEmbeddingParamsError,
-    ConfigurationError,
-    setup_error_handling
+    ConfigurationError
 )
 
 __all__ = [
@@ -82,8 +81,7 @@ __all__ = [
     "TextTooLargeError",
     "BatchTooLargeError",
     "InvalidEmbeddingParamsError",
-    "ConfigurationError",
-    "setup_error_handling"
+    "ConfigurationError"
 ]
 
 """

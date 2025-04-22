@@ -34,6 +34,7 @@ services:
     volumes:
       - ./common:/app/common
       - ./embedding-service:/app/embedding-service
+      - ./logs:/app/logs
     dns:
       - 8.8.8.8
       - 1.1.1.1
@@ -46,6 +47,7 @@ services:
       
       # Variables de identificación del servicio
       - SERVICE_NAME=embedding-service
+      - DOCKER_CONTAINER=true
       
       # Variables de conexión con servicios
       - REDIS_URL=redis://redis:6379/0
@@ -77,6 +79,7 @@ services:
     volumes:
       - ./common:/app/common
       - ./query-service:/app/query-service
+      - ./logs:/app/logs
     dns:
       - 8.8.8.8
       - 1.1.1.1
@@ -89,6 +92,7 @@ services:
       
       # Variables de identificación del servicio
       - SERVICE_NAME=query-service
+      - DOCKER_CONTAINER=true
       
       # Variables de conexión con servicios
       - REDIS_URL=redis://redis:6379/0
@@ -123,6 +127,7 @@ services:
     volumes:
       - ./common:/app/common
       - ./agent-service:/app/agent-service
+      - ./logs:/app/logs
     dns:
       - 8.8.8.8
       - 1.1.1.1
@@ -135,6 +140,7 @@ services:
       
       # Variables de identificación del servicio
       - SERVICE_NAME=agent-service
+      - DOCKER_CONTAINER=true
       
       # Variables de conexión con servicios
       - REDIS_URL=redis://redis:6379/0
@@ -173,6 +179,7 @@ services:
     volumes:
       - ./common:/app/common
       - ./ingestion-service:/app/ingestion-service
+      - ./logs:/app/logs
     dns:
       - 8.8.8.8
       - 1.1.1.1
@@ -185,6 +192,7 @@ services:
       
       # Variables de identificación del servicio
       - SERVICE_NAME=ingestion-service
+      - DOCKER_CONTAINER=true
       
       # Variables de conexión con servicios
       - REDIS_URL=redis://redis:6379/0
@@ -211,6 +219,61 @@ services:
       ollama:
         condition: service_started
 
+  worker-service:
+    build:
+      context: .
+      dockerfile: docker/services/Dockerfile.worker
+    restart: always
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./common:/app/common
+      - ./worker-service:/app/worker-service
+      - ./logs:/app/logs
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    environment:
+      # Variables de credenciales
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - SUPABASE_URL=${SUPABASE_URL:-https://example.supabase.co}
+      - SUPABASE_KEY=${SUPABASE_KEY:-dummy-key-for-testing}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY:-dummy-service-key-for-testing}
+      
+      # Variables de identificación del servicio
+      - SERVICE_NAME=worker-service
+      - DOCKER_CONTAINER=true
+      
+      # Variables de conexión con servicios
+      - REDIS_URL=redis://redis:6379/0
+      - EMBEDDING_SERVICE_URL=http://embedding-service:8001
+      - QUERY_SERVICE_URL=http://query-service:8002
+      - AGENT_SERVICE_URL=http://agent-service:8003
+      - INGESTION_SERVICE_URL=http://ingestion-service:8000
+      - OLLAMA_API_URL=http://ollama:11434
+      - JOB_LOCK_EXPIRE_SECONDS=600
+      
+      # Variables de configuración multi-tenant
+      - TENANT_ID=default
+      - CONFIG_ENVIRONMENT=development
+      - LOAD_CONFIG_FROM_SUPABASE=false
+      
+      # Variables de configuración general
+      - LOG_LEVEL=INFO
+      - MAX_WORKERS=3
+    depends_on:
+      redis:
+        condition: service_healthy
+      embedding-service:
+        condition: service_started
+      query-service:
+        condition: service_started
+      agent-service:
+        condition: service_started
+      ingestion-service:
+        condition: service_started
+
 volumes:
   redis-data:
   ollama-data:
+  logs:

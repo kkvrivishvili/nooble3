@@ -12,7 +12,7 @@ class BaseModel(PydanticBaseModel):
     
     class Config:
         """Configuración para todos los modelos."""
-        orm_mode = True
+        from_attributes = True  # Antes era orm_mode = True en Pydantic V1
         arbitrary_types_allowed = True
         extra = "ignore"  # Ignorar campos extra
 

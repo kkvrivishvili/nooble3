@@ -19,12 +19,12 @@ pandas==2.1.0
 
 # LlamaIndex - Núcleo y extensiones
 llama-index==0.12.26
-llama-index-core==0.12.1
-llama-index-readers-file==0.1.6
-llama-index-readers-web==0.1.6
-llama-index-embeddings-openai==0.1.5
-llama-index-vector-stores-supabase==0.1.4
-llama-index-llms-openai==0.1.5
+llama-index-core==0.12.26
+llama-index-readers-file==0.4.7
+llama-index-readers-web==0.3.9
+llama-index-embeddings-openai==0.3.0
+llama-index-vector-stores-supabase==0.3.0
+llama-index-llms-openai==0.3.0
 tiktoken==0.9.0
 tenacity==9.0.0
 

@@ -6,11 +6,12 @@ siguiendo el patrón Cache-Aside para todos los servicios RAG.
 """
 
 from common.config import get_settings
+import asyncio
 
 # Función para obtener configuraciones de caché del sistema centralizado
-def _get_cache_settings():
+async def _get_cache_settings():
     """Obtiene configuraciones de caché desde el sistema centralizado."""
-    settings = get_settings()
+    settings = await get_settings()
     return {
         "ttl_extended": settings.cache_ttl_extended,       # 24 horas
         "ttl_standard": settings.cache_ttl_standard,       # 1 hora
@@ -36,13 +37,34 @@ METRIC_CACHE_INVALIDATION_COORDINATED = "cache_invalidation_coordinated"
 METRIC_SERIALIZATION_ERROR = "serialization_error"
 METRIC_DESERIALIZATION_ERROR = "deserialization_error"
 
-# Constantes para TTL (tiempos de vida)
-# Obtenemos valores iniciales desde configuración centralizada
-cache_settings = _get_cache_settings()
-TTL_SHORT = cache_settings["ttl_short"]       # 5 minutos por defecto (configuraciones, datos volátiles)
-TTL_STANDARD = cache_settings["ttl_standard"] # 1 hora por defecto (resultados de consulta, datos moderadamente estables)
-TTL_EXTENDED = cache_settings["ttl_extended"] # 24 horas por defecto (embeddings, datos altamente estables)
-TTL_PERMANENT = cache_settings["ttl_permanent"] # Sin expiración (datos persistentes)
+# Valores predeterminados para TTL mientras se carga la configuración
+TTL_SHORT = 300       # 5 minutos por defecto
+TTL_STANDARD = 3600   # 1 hora por defecto
+TTL_EXTENDED = 86400  # 24 horas por defecto
+TTL_PERMANENT = None  # Sin expiración
+
+# Inicializar de forma asíncrona los valores de configuración
+# Ejecutaremos esto más tarde cuando se importe el módulo en un contexto async
+def initialize_cache_settings():
+    loop = asyncio.get_event_loop()
+    if loop.is_running():
+        # Si el bucle ya está en ejecución, creamos una tarea futura
+        asyncio.create_task(_initialize_cache_settings_async())
+    else:
+        # Si no hay bucle en ejecución, usamos los valores por defecto
+        pass
+
+async def _initialize_cache_settings_async():
+    global TTL_SHORT, TTL_STANDARD, TTL_EXTENDED, TTL_PERMANENT
+    try:
+        cache_settings = await _get_cache_settings()
+        TTL_SHORT = cache_settings["ttl_short"]
+        TTL_STANDARD = cache_settings["ttl_standard"]
+        TTL_EXTENDED = cache_settings["ttl_extended"]
+        TTL_PERMANENT = cache_settings["ttl_permanent"]
+    except Exception as e:
+        print(f"Error initializing cache settings: {e}")
+        # Mantener los valores por defecto en caso de error
 
 # Mapeo de tipos de datos a TTL predeterminados
 DEFAULT_TTL_MAPPING = {

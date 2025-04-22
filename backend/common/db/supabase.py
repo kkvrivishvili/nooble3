@@ -10,7 +10,8 @@ import traceback
 from typing import Dict, Any, List, Optional
 from supabase import create_client, Client
 
-from ..cache.manager import CacheManager
+# Eliminamos la importación circular
+# from ..cache.manager import CacheManager 
 from ..errors.exceptions import DatabaseError, ConfigurationError, ServiceError, ErrorCode
 from ..errors.handlers import handle_errors
 
@@ -197,16 +198,13 @@ async def get_tenant_configurations(
             cache_key += f":{scope_id}"
         cache_key += f":{environment}"
         
-        cached_configs = await CacheManager.get(
-            tenant_id=tenant_id, 
-            data_type="configurations",
-            resource_id=cache_key
-        )
+        # Eliminamos la importación circular
+        # cached_configs = await CacheManager.get(
+        #     tenant_id=tenant_id, 
+        #     data_type="configurations",
+        #     resource_id=cache_key
+        # )
         
-        if cached_configs:
-            logger.debug(f"Usando configuraciones en caché para {tenant_id}")
-            return cached_configs
-            
         # Si no está en caché, obtener de Supabase
         logger.debug(f"Obteniendo configuraciones para tenant {tenant_id} desde Supabase")
         
@@ -255,13 +253,14 @@ async def get_tenant_configurations(
                 configurations[config_key] = config_value
         
         # Guardar en caché para futuras solicitudes
-        await CacheManager.set(
-            tenant_id=tenant_id,
-            data_type="configurations",
-            resource_id=cache_key,
-            data=configurations,
-            ttl=3600  # 1 hora
-        )
+        # Eliminamos la importación circular
+        # await CacheManager.set(
+        #     tenant_id=tenant_id,
+        #     data_type="configurations",
+        #     resource_id=cache_key,
+        #     data=configurations,
+        #     ttl=3600  # 1 hora
+        # )
         
         return configurations
     except Exception as e:
