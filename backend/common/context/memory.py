@@ -10,6 +10,7 @@ from typing import Dict, Any, List, Optional, Set, Union
 
 # Eliminamos la importación circular
 # from common.cache import AgentMemory
+from common.cache import CacheManager, get_with_cache_aside, generate_resource_id_hash
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,9 @@ class ContextManager:
     - Estado de herramientas
     """
     
+    # Registro centralizado de instancias
+    _registry = {}
+    
     def __init__(
         self,
         tenant_id: str,
@@ -38,286 +42,171 @@ class ContextManager:
         self.conversation_id = conversation_id
         self.user_id = user_id
         self.session_id = session_id
-        self._memory = None
-        self._agent_config = None
         self._collections = set()
-        self._tools = {}
-    
-    # Registro de instancias para reutilización basada en claves de contexto
-    _registry: Dict[Tuple[Optional[str], Optional[str], Optional[str], Optional[str], Optional[str]], "ContextManager"] = {}
-    
+        
     @classmethod
-    def get_or_create(
+    def get_instance(
         cls,
         tenant_id: str,
         agent_id: Optional[str] = None,
         conversation_id: Optional[str] = None,
         user_id: Optional[str] = None,
         session_id: Optional[str] = None
-    ) -> "ContextManager":
+    ) -> 'ContextManager':
         """
-        Retorna una instancia única de ContextManager para el conjunto de IDs dado.
-        Si no existe, la crea y la registra.
+        Obtiene una instancia única del gestor de contexto.
+        
+        Args:
+            tenant_id: ID del tenant
+            agent_id: ID del agente
+            conversation_id: ID de la conversación
+            user_id: ID del usuario
+            session_id: ID de la sesión
+            
+        Returns:
+            ContextManager: Instancia única
         """
         key = (tenant_id, agent_id, conversation_id, user_id, session_id)
         if key not in cls._registry:
             cls._registry[key] = cls(tenant_id, agent_id, conversation_id, user_id, session_id)
         return cls._registry[key]
     
-    @property
-    async def memory(self) -> AgentMemory:
+    async def get_conversation_history(self) -> List[Dict[str, Any]]:
         """
-        Obtiene el objeto de memoria del agente.
+        Obtiene el historial de la conversación actual.
         
         Returns:
-            AgentMemory: Objeto para gestionar la memoria del agente
+            List[Dict[str, Any]]: Lista de mensajes
         """
-        if not self._memory and self.agent_id:
-            from common.cache import AgentMemory  # Importamos AgentMemory aquí
-            self._memory = AgentMemory(
+        # Definir identificador único para esta conversación
+        conversation_resource_id = f"conversation:{self.conversation_id}"
+        
+        # Obtener IDs de mensajes
+        message_ids = await CacheManager.get(
+            data_type="conversation_messages",
+            resource_id=conversation_resource_id,
+            tenant_id=self.tenant_id,
+            agent_id=self.agent_id,
+            conversation_id=self.conversation_id
+        ) or []
+        
+        # Obtener contenido de cada mensaje
+        messages = []
+        for msg_id in message_ids:
+            message = await CacheManager.get(
+                data_type="agent_message",
+                resource_id=msg_id,
                 tenant_id=self.tenant_id,
                 agent_id=self.agent_id,
-                conversation_id=self.conversation_id,
-                user_id=self.user_id,
-                session_id=self.session_id
+                conversation_id=self.conversation_id
             )
-            
-            # Cargar colecciones desde la memoria
-            if self._memory:
-                collections = await self._memory.get_collections()
-                self._collections.update(collections)
+            if message:
+                messages.append(message)
         
-        return self._memory
+        return messages
     
-    async def get_agent_config(self) -> Dict[str, Any]:
+    async def add_message(self, message: Dict[str, Any]) -> str:
         """
-        Obtiene la configuración del agente.
-        
-        Returns:
-            Dict[str, Any]: Configuración completa del agente
-        """
-        if not self.agent_id:
-            return {}
-        
-        if not self._agent_config:
-            # Cargar desde Supabase
-            from ..db.supabase import get_supabase_client
-            from ..db.tables import get_table_name
-            
-            supabase = get_supabase_client()
-            
-            result = await supabase.table(get_table_name("agent_configs")) \
-                .select("*") \
-                .eq("agent_id", self.agent_id) \
-                .eq("tenant_id", self.tenant_id) \
-                .execute()
-            
-            if result.data:
-                self._agent_config = result.data[0]
-                
-                # Registrar colecciones del agente
-                if "tools" in self._agent_config:
-                    tools = self._agent_config["tools"]
-                    if isinstance(tools, list):
-                        for tool in tools:
-                            if tool.get("type") == "rag" and "metadata" in tool:
-                                coll_id = tool["metadata"].get("collection_id")
-                                if coll_id:
-                                    self._collections.add(coll_id)
-                                    
-                                    # Registrar en memoria también
-                                    memory = await self.memory
-                                    if memory:
-                                        await memory.register_collection(coll_id)
-        
-        return self._agent_config or {}
-    
-    async def add_user_message(self, content: str, metadata: Optional[Dict[str, Any]] = None) -> str:
-        """
-        Añade un mensaje del usuario a la conversación.
+        Añade un mensaje a la conversación actual.
         
         Args:
-            content: Contenido del mensaje
-            metadata: Metadatos adicionales
+            message: Mensaje a añadir, con campos role, content, etc.
             
         Returns:
             str: ID del mensaje
         """
+        # Generar ID único para el mensaje
         message_id = str(uuid.uuid4())
         
-        memory = await self.memory
-        if memory:
-            await memory.add_message({
-                "role": "user",
-                "content": content,
-                "timestamp": time.time(),
-                "message_id": message_id,
-                "metadata": metadata or {}
-            })
+        # Guardar el mensaje en caché
+        await CacheManager.set(
+            data_type="agent_message",
+            resource_id=message_id,
+            value=message,
+            tenant_id=self.tenant_id,
+            agent_id=self.agent_id,
+            conversation_id=self.conversation_id
+        )
+        
+        # Añadir a la lista de mensajes de la conversación
+        conversation_resource_id = f"conversation:{self.conversation_id}"
+        messages_list = await CacheManager.get(
+            data_type="conversation_messages",
+            resource_id=conversation_resource_id,
+            tenant_id=self.tenant_id,
+            agent_id=self.agent_id,
+            conversation_id=self.conversation_id
+        ) or []
+        
+        messages_list.append(message_id)
+        
+        await CacheManager.set(
+            data_type="conversation_messages",
+            resource_id=conversation_resource_id,
+            value=messages_list,
+            tenant_id=self.tenant_id,
+            agent_id=self.agent_id,
+            conversation_id=self.conversation_id
+        )
         
         return message_id
     
-    async def add_assistant_message(self, content: str, metadata: Optional[Dict[str, Any]] = None) -> str:
+    async def register_collection(self, collection_id: str) -> None:
         """
-        Añade un mensaje del asistente a la conversación.
+        Registra una colección como usada en esta conversación.
         
         Args:
-            content: Contenido del mensaje
-            metadata: Metadatos adicionales
-            
-        Returns:
-            str: ID del mensaje
+            collection_id: ID de la colección
         """
-        message_id = str(uuid.uuid4())
+        # Añadir a la lista interna
+        self._collections.add(collection_id)
         
-        memory = await self.memory
-        if memory:
-            await memory.add_message({
-                "role": "assistant",
-                "content": content,
-                "timestamp": time.time(),
-                "message_id": message_id,
-                "metadata": metadata or {}
-            })
-        
-        return message_id
+        # Guardar en caché
+        collection_resource_id = f"collection:{collection_id}"
+        await CacheManager.set(
+            data_type="agent_collection",
+            resource_id=collection_resource_id,
+            value={"collection_id": collection_id, "last_accessed": time.time()},
+            tenant_id=self.tenant_id,
+            agent_id=self.agent_id,
+            conversation_id=self.conversation_id
+        )
     
-    async def get_context_summary(self) -> Dict[str, Any]:
+    async def get_collections(self) -> Set[str]:
         """
-        Obtiene un resumen del contexto actual para diagnóstico.
+        Obtiene las colecciones registradas para esta conversación.
         
         Returns:
-            Dict[str, Any]: Resumen de contexto
+            Set[str]: Conjunto de IDs de colecciones
         """
-        memory = await self.memory
-        history = await memory.get_conversation_history() if memory else []
+        # Si ya tenemos colecciones en memoria, devolverlas
+        if self._collections:
+            return self._collections
         
-        collections = list(self._collections)
-        if not collections and memory:
-            collections = await memory.get_collections()
+        # Buscar colecciones en caché
+        collections_pattern = f"agent_collection:*"
+        collection_keys = await CacheManager.get_keys_by_pattern(
+            pattern=collections_pattern,
+            tenant_id=self.tenant_id,
+            agent_id=self.agent_id,
+            conversation_id=self.conversation_id
+        )
         
-        agent_config = await self.get_agent_config()
+        # Extraer IDs de colecciones
+        for key in collection_keys:
+            # Formato esperado: agent_collection:collection:{collection_id}
+            parts = key.split(':')
+            if len(parts) >= 3:
+                collection_id = parts[2]
+                self._collections.add(collection_id)
         
-        return {
-            "tenant_id": self.tenant_id,
-            "agent_id": self.agent_id,
-            "conversation_id": self.conversation_id,
-            "user_id": self.user_id,
-            "session_id": self.session_id,
-            "collections": collections,
-            "agent_type": agent_config.get("agent_type") if agent_config else None,
-            "message_count": len(history),
-            "tools_configured": len(agent_config.get("tools", [])) if agent_config else 0
-        }
+        return self._collections
     
-    async def get_conversation_history(
-        self, 
-        format_for_llm: bool = False,
-        max_messages: Optional[int] = None
-    ) -> Union[List[Dict[str, Any]], str]:
-        """
-        Obtiene el historial de conversación.
+    def clear(self) -> None:
+        """Limpia el contexto actual"""
+        self._collections = set()
         
-        Args:
-            format_for_llm: Si se debe formatear para entrada a LLM
-            max_messages: Número máximo de mensajes a incluir
-            
-        Returns:
-            Union[List[Dict[str, Any]], str]: Historial formateado o lista de mensajes
-        """
-        memory = await self.memory
-        history = await memory.get_conversation_history() if memory else []
-        
-        if max_messages:
-            history = history[-max_messages:]
-        
-        if format_for_llm:
-            formatted = []
-            for msg in history:
-                role = msg.get("role", "user")
-                content = msg.get("content", "")
-                formatted.append(f"{role.capitalize()}: {content}")
-            
-            return "\n\n".join(formatted)
-        
-        return history
-    
-    async def register_tool_use(self, tool_id: str, input_data: Any, result: Any) -> None:
-        """
-        Registra el uso de una herramienta durante la conversación.
-        
-        Args:
-            tool_id: ID de la herramienta
-            input_data: Datos de entrada
-            result: Resultado de la herramienta
-        """
-        memory = await self.memory
-        if memory:
-            await memory.update_tool_state(tool_id, {
-                "last_used": time.time(),
-                "last_input": input_data,
-                "last_result": result,
-                "usage_count": self._tools.get(tool_id, {}).get("usage_count", 0) + 1
-            })
-            
-            # Actualizar cache local
-            if tool_id not in self._tools:
-                self._tools[tool_id] = {}
-            
-            self._tools[tool_id]["usage_count"] = self._tools.get(tool_id, {}).get("usage_count", 0) + 1
-    
-    async def get_rag_context(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
-        """
-        Obtiene contexto RAG para una consulta.
-        
-        Args:
-            query: Consulta de usuario
-            limit: Número máximo de resultados
-            
-        Returns:
-            List[Dict[str, Any]]: Contexto encontrado
-        """
-        if not self._collections:
-            return []
-        
-        results = []
-        try:
-            from ..utils.http import call_service
-            from ..config.settings import get_settings
-            
-            settings = get_settings()
-            
-            for collection_id in self._collections:
-                # Llamar al servicio de query con la nueva función estandarizada
-                response = await call_service(
-                    url=f"{settings.query_service_url}/internal/search",
-                    data={
-                        "tenant_id": self.tenant_id,
-                        "query": query,
-                        "collection_id": collection_id,
-                        "limit": limit
-                    },
-                    tenant_id=self.tenant_id,
-                    agent_id=self.agent_id,
-                    conversation_id=self.conversation_id,
-                    collection_id=collection_id,
-                    operation_type="rag_search",
-                    use_cache=True,  # Aprovechar caché para consultas recientes
-                    cache_ttl=1800  # 30 minutos de TTL para resultados RAG
-                )
-                
-                # Verificar éxito y extraer datos según el formato estandarizado
-                if response.get("success", False) and response.get("data") is not None:
-                    response_data = response.get("data", {})
-                    if "results" in response_data:
-                        results.extend(response_data["results"])
-        except Exception as e:
-            logger.error(f"Error obteniendo contexto RAG: {str(e)}")
-        
-        # Limitar a los mejores resultados
-        if len(results) > limit:
-            # Ordenar por relevancia
-            results = sorted(results, key=lambda x: x.get("score", 0), reverse=True)
-            results = results[:limit]
-        
-        return results
+        # Eliminar de registro centralizado
+        key = (self.tenant_id, self.agent_id, self.conversation_id, self.user_id, self.session_id)
+        if key in self._registry:
+            del self._registry[key]

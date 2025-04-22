@@ -52,6 +52,8 @@ class ErrorCode(Enum):
     # Errores de servicios externos (4xxx)
     SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE"
     EXTERNAL_API_ERROR = "EXTERNAL_API_ERROR"
+    COMMUNICATION_ERROR = "COMMUNICATION_ERROR"
+    TIMEOUT_ERROR = "TIMEOUT_ERROR"
     DATABASE_ERROR = "DATABASE_ERROR"
     CACHE_ERROR = "CACHE_ERROR"  # Añadido para unificar excepciones
     
@@ -118,8 +120,10 @@ ERROR_CODES = {
     # Errores de servicios externos (4xxx)
     ErrorCode.SERVICE_UNAVAILABLE.value: {"code": 4000, "message": "Servicio no disponible", "status": 503},
     ErrorCode.EXTERNAL_API_ERROR.value: {"code": 4001, "message": "Error en API externa", "status": 502},
-    ErrorCode.DATABASE_ERROR.value: {"code": 4002, "message": "Error de base de datos", "status": 503},
-    ErrorCode.CACHE_ERROR.value: {"code": 4003, "message": "Error de caché", "status": 503},
+    ErrorCode.COMMUNICATION_ERROR.value: {"code": 4002, "message": "Error de comunicación", "status": 503},
+    ErrorCode.TIMEOUT_ERROR.value: {"code": 4003, "message": "Tiempo de espera agotado", "status": 504},
+    ErrorCode.DATABASE_ERROR.value: {"code": 4004, "message": "Error de base de datos", "status": 503},
+    ErrorCode.CACHE_ERROR.value: {"code": 4005, "message": "Error de caché", "status": 503},
     
     # Errores específicos de LLM (5xxx)
     ErrorCode.LLM_GENERATION_ERROR.value: {"code": 5000, "message": "Error generando texto con LLM", "status": 500},
@@ -266,6 +270,15 @@ class PermissionError(ServiceError):
             details=details
         )
 
+class AuthorizationError(ServiceError):
+    """Error de autorización."""
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            message=message,
+            error_code=ErrorCode.AUTHENTICATION_FAILED,
+            details=details
+        )
+
 class ResourceNotFoundError(ServiceError):
     """Error de recurso no encontrado."""
     def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
@@ -328,6 +341,24 @@ class ExternalApiError(ServiceError):
         super().__init__(
             message=message,
             error_code=ErrorCode.EXTERNAL_API_ERROR,
+            details=details
+        )
+
+class CommunicationError(ServiceError):
+    """Error de comunicación con servicios externos."""
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            message=message,
+            error_code=ErrorCode.COMMUNICATION_ERROR,
+            details=details
+        )
+
+class TimeoutError(ServiceError):
+    """Error por tiempo de espera agotado."""
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            message=message,
+            error_code=ErrorCode.TIMEOUT_ERROR,
             details=details
         )
 

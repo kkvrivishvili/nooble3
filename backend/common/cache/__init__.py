@@ -58,7 +58,7 @@ async def _initialize_cache_settings_async():
         print(f"Error initializing cache settings: {e}")
         # Mantener los valores por defecto en caso de error
 
-from .manager import CacheManager
+from .manager import CacheManager, get_redis_client
 from .helpers import (
     get_with_cache_aside,
     serialize_for_cache,
@@ -92,6 +92,15 @@ __all__ = [
     "estimate_object_size",
     "get_default_ttl_for_data_type",
     
+    # Constantes de TTL y métricas
+    "TTL_SHORT",
+    "TTL_STANDARD", 
+    "TTL_EXTENDED",
+    "TTL_PERMANENT",
+    
+    # Función para obtener cliente Redis
+    "get_redis_client",
+    
     # Constantes de fuentes
     "SOURCE_CACHE",
     "SOURCE_SUPABASE",
@@ -108,9 +117,5 @@ __all__ = [
     "METRIC_DESERIALIZATION_ERROR",
     
     # Constantes de TTL
-    "TTL_SHORT",
-    "TTL_STANDARD",
-    "TTL_EXTENDED",
-    "TTL_PERMANENT",
     "DEFAULT_TTL_MAPPING"
 ]

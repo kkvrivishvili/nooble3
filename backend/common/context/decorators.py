@@ -8,8 +8,7 @@ para bloques de código que necesitan mantener información de contexto.
 import logging
 import contextvars
 import functools
-from typing import TypeVar, Callable, Awaitable, Optional, List, Tuple
-
+from typing import TypeVar, Callable, Awaitable, Optional, List, Tuple, Any
 from .vars import (
     current_tenant_id, current_agent_id, current_conversation_id, current_collection_id,
     set_current_tenant_id, set_current_agent_id, set_current_conversation_id, set_current_collection_id,

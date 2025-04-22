@@ -7,7 +7,7 @@ siguiendo el Principio de Inversión de Dependencias.
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, List, Any, Optional, Callable, TypeVar, Generic, Union, Tuple
+from typing import Dict, List, Any, Optional, Callable, TypeVar, Generic, Union, Tuple, Type
 
 # Tipos genéricos para los adaptadores
 T = TypeVar('T')
