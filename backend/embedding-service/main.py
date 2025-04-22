@@ -23,7 +23,7 @@ from routes import register_routes
 # Configuración
 settings = get_settings()
 logger = logging.getLogger("embedding_service")
-init_logging(settings.log_level)
+init_logging(settings.log_level, service_name="embedding-service")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

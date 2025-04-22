@@ -33,7 +33,7 @@ from services.worker import start_worker_pool, stop_worker_pool
 # Configuración
 settings = get_settings()
 logger = logging.getLogger("ingestion_service")
-init_logging(settings.log_level)
+init_logging(settings.log_level, service_name="ingestion-service")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

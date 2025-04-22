@@ -19,7 +19,7 @@ from routes import register_routes
 # Configuración
 settings = get_settings()
 logger = logging.getLogger("agent_service")
-init_logging(settings.log_level)
+init_logging(settings.log_level, service_name="agent-service")
 
 # Cliente HTTP compartido
 http_client = None

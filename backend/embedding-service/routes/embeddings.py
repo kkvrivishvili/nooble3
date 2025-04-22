@@ -4,14 +4,15 @@ Endpoints para generación de embeddings vectoriales.
 
 import logging
 import time
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from fastapi import APIRouter, Depends, Body, HTTPException
 
 from common.models.base import TenantInfo
 from common.auth import verify_tenant, validate_model_access
 from common.context import with_context, get_current_tenant_id, get_current_collection_id
 from common.errors import (
-    handle_service_error_simple, ValidationError, EmbeddingGenerationError, RateLimitExceeded
+    handle_service_error_simple, ValidationError, EmbeddingGenerationError, RateLimitExceeded,
+    ServiceError, BatchTooLargeError, TextTooLargeError, EmbeddingModelError
 )
 from common.config import get_settings
 from common.config.tiers import get_available_embedding_models
@@ -20,7 +21,7 @@ from common.tracking import track_token_usage
 from models.embeddings import (
     EmbeddingRequest, EmbeddingResponse, 
     BatchEmbeddingRequest, BatchEmbeddingResponse,
-    InternalEmbeddingResponse
+    InternalEmbeddingResponse, BatchEmbeddingItem, BatchEmbeddingResult
 )
 from services.embedding_provider import CachedEmbeddingProvider
 from services.exceptions import TextLengthExceeded, ModelError
@@ -28,6 +29,45 @@ from services.exceptions import TextLengthExceeded, ModelError
 router = APIRouter()
 settings = get_settings()
 logger = logging.getLogger(__name__)
+
+async def _validate_and_get_model(tenant_info: TenantInfo, requested_model: str, model_type: str) -> Tuple[str, Dict]:
+    """
+    Valida y obtiene el modelo apropiado, estandarizando el manejo de modelos no permitidos.
+    
+    Args:
+        tenant_info: Información del tenant
+        requested_model: Modelo solicitado por el usuario
+        model_type: Tipo de modelo ('embedding' o 'llm')
+        
+    Returns:
+        Tuple[str, Dict]: Modelo validado y metadatos
+    """
+    try:
+        validated_model = await validate_model_access(tenant_info, requested_model, model_type, tenant_id=tenant_info.tenant_id)
+        return validated_model, {}  # Modelo validado sin downgrade
+    except ServiceError as e:
+        # Comportamiento estándar: downgrade al modelo permitido
+        error_context = {
+            "tenant_id": tenant_info.tenant_id,
+            "requested_model": requested_model,
+            "model_type": model_type,
+            "tier": tenant_info.subscription_tier
+        }
+        logger.info(f"Cambiando al modelo predeterminado: {e.message}", extra=error_context)
+        
+        # Obtener modelos disponibles según el tipo
+        if model_type == "embedding":
+            allowed_models = get_available_embedding_models(tenant_info.subscription_tier, tenant_id=tenant_info.tenant_id)
+            default_model = settings.default_embedding_model
+        else:  # llm
+            allowed_models = get_available_llm_models(tenant_info.subscription_tier, tenant_id=tenant_info.tenant_id)
+            default_model = settings.default_llm_model
+            
+        # Usar el primer modelo disponible o el predeterminado
+        validated_model = allowed_models[0] if allowed_models else default_model
+        
+        # Información sobre el downgrade para la respuesta
+        return validated_model, {"model_downgraded": True, "requested_model": requested_model}
 
 @router.post("/embeddings", response_model=EmbeddingResponse)
 @with_context(tenant=True, agent=True, conversation=True, collection=True)
@@ -61,23 +101,11 @@ async def generate_embeddings(
     collection_id = request.collection_id
     
     # ID de agente y conversación (opcionales, solo para tracking)
-    agent_id = request.agent_id if hasattr(request, 'agent_id') else None
-    conversation_id = request.conversation_id if hasattr(request, 'conversation_id') else None
+    agent_id = getattr(request, 'agent_id', None)
+    conversation_id = getattr(request, 'conversation_id', None)
     
-    # Validar acceso al modelo solicitado
-    try:
-        validated_model = await validate_model_access(tenant_info, model_name, "embedding", tenant_id=tenant_info.tenant_id)
-    except ServiceError as e:
-        # Si el modelo no está permitido, usar el modelo por defecto para su tier
-        logger.info(f"Cambiando al modelo de embedding por defecto: {e.message}", extra=e.context)
-        allowed_models = get_available_embedding_models(tenant_info.subscription_tier, tenant_id=tenant_info.tenant_id)
-        validated_model = allowed_models[0] if allowed_models else settings.default_embedding_model
-        # Agregar información sobre el downgrade a la respuesta
-        metadata = {"model_downgraded": True}
-    else:
-        metadata = {}
-    
-    model_name = validated_model  # Asignar el modelo validado
+    # Validar modelo usando la función estandarizada
+    model_name, metadata = await _validate_and_get_model(tenant_info, model_name, "embedding")
     
     # Crear proveedor de embeddings con caché
     embedding_provider = CachedEmbeddingProvider(model_name=model_name, tenant_id=tenant_id)
@@ -160,23 +188,11 @@ async def batch_generate_embeddings(
     collection_id = request.collection_id
     
     # ID de agente y conversación (opcionales, solo para tracking)
-    agent_id = request.agent_id if hasattr(request, 'agent_id') else None
-    conversation_id = request.conversation_id if hasattr(request, 'conversation_id') else None
+    agent_id = getattr(request, 'agent_id', None)
+    conversation_id = getattr(request, 'conversation_id', None)
     
-    # Validar acceso al modelo solicitado
-    try:
-        validated_model = await validate_model_access(tenant_info, model_name, "embedding", tenant_id=tenant_info.tenant_id)
-    except ServiceError as e:
-        # Si el modelo no está permitido, usar el modelo por defecto para su tier
-        logger.info(f"Cambiando al modelo de embedding por defecto: {e.message}", extra=e.context)
-        allowed_models = get_available_embedding_models(tenant_info.subscription_tier, tenant_id=tenant_info.tenant_id)
-        validated_model = allowed_models[0] if allowed_models else settings.default_embedding_model
-        # Agregar información sobre el downgrade a la respuesta
-        metadata = {"model_downgraded": True}
-    else:
-        metadata = {}
-        
-    model_name = validated_model  # Asignar el modelo validado
+    # Validar modelo usando la función estandarizada
+    model_name, metadata = await _validate_and_get_model(tenant_info, model_name, "embedding")
     
     # Separar textos y metadatos, mantener índices originales
     original_indices = []
@@ -265,9 +281,7 @@ async def batch_generate_embeddings(
             details=error_details
         )
 
-# Endpoint simplificado para uso interno por los servicios de query y agent
 @router.post("/internal/embed", tags=["Internal"])
-@with_context(tenant=True, agent=True, conversation=True, collection=True)
 @handle_service_error_simple
 async def internal_embed(
     texts: List[str] = Body(..., description="Textos para generar embeddings"),
@@ -297,31 +311,40 @@ async def internal_embed(
             "error": Dict[str, Any]    # Presente solo en caso de error
         }
     """
-    try:
-        # Crear tenant_info con el tier proporcionado o un tier seguro por defecto
-        # en lugar de asumir "business"
-        tier = subscription_tier or "free"
-        tenant_info = TenantInfo(tenant_id=tenant_id, subscription_tier=tier)
+    start_time = time.time()
+    
+    # Verificar entrada
+    if not texts:
+        return {
+            "success": False,
+            "message": "No se proporcionaron textos para generar embeddings",
+            "data": None,
+            "error": {
+                "message": "No se proporcionaron textos para generar embeddings",
+                "code": "VALIDATION_ERROR"
+            }
+        }
+    
+    # Asignar modelo predeterminado si no se proporciona
+    model_name = model or settings.default_embedding_model
+    metadata = {}
+    
+    # Crear tenant_info mínimo para validación si se proporciona tier
+    if subscription_tier:
+        tenant_info = TenantInfo(tenant_id=tenant_id, subscription_tier=subscription_tier)
         
-        # Validar el modelo solicitado
-        model_name = model or settings.default_embedding_model
+        # Validar modelo usando la función estandarizada
         try:
-            validated_model = await validate_model_access(tenant_info, model_name, "embedding")
-        except ServiceError as e:
-            # Si el modelo no está permitido, usar el modelo por defecto para su tier
-            logger.info(f"Cambiando al modelo de embedding por defecto: {e.message}", extra=e.context)
-            allowed_models = get_available_embedding_models(tenant_info.subscription_tier, tenant_id=tenant_id)
-            validated_model = allowed_models[0] if allowed_models else settings.default_embedding_model
-            # Agregar información sobre el downgrade a la respuesta
-            metadata = {"model_downgraded": True, "original_model": model_name}
-        else:
-            metadata = {}
-            
-        model_name = validated_model
-        
-        # Crear proveedor de embeddings
-        embedding_provider = CachedEmbeddingProvider(model_name=model_name, tenant_id=tenant_id)
-        
+            model_name, metadata = await _validate_and_get_model(tenant_info, model_name, "embedding")
+        except Exception as validation_err:
+            # En caso de error usar modelo predeterminado
+            model_name = settings.default_embedding_model
+            metadata = {"model_downgraded": True, "validation_error": str(validation_err)}
+    
+    # Crear proveedor de embeddings
+    embedding_provider = CachedEmbeddingProvider(model_name=model_name, tenant_id=tenant_id)
+    
+    try:
         # Generar embeddings
         embeddings = await embedding_provider.get_batch_embeddings(texts)
         
@@ -349,23 +372,23 @@ async def internal_embed(
             if "too large" in str(e).lower() or "demasiado grande" in str(e).lower():
                 if len(texts) > 1:
                     specific_error = BatchTooLargeError(
-                        message=f"Lote de textos demasiado grande para procesar: {len(texts)} elementos",
-                        details={"texts_count": len(texts)}
+                        message=f"Lote demasiado grande para procesar: {str(e)}",
+                        details={"texts_count": len(texts), "tenant_id": tenant_id}
                     )
                 else:
                     specific_error = TextTooLargeError(
-                        message=f"Texto demasiado grande para procesar",
-                        details={"text_length": len(texts[0]) if texts and len(texts) > 0 else 0}
+                        message=f"Texto demasiado grande para generar embedding: {str(e)}",
+                        details={"text_length": len(texts[0]) if texts else 0, "tenant_id": tenant_id}
                     )
-            elif "model" in str(e).lower() or "modelo" in str(e).lower():
+            elif "embedding" in str(e).lower() or "model" in str(e).lower():
                 specific_error = EmbeddingModelError(
                     message=f"Error con el modelo de embedding: {str(e)}",
-                    details={"model_requested": model}
+                    details={"model": model_name, "tenant_id": tenant_id}
                 )
             else:
                 specific_error = EmbeddingGenerationError(
-                    message=f"Error al generar embeddings: {str(e)}",
-                    details={"texts_count": len(texts) if texts else 0}
+                    message=f"Error generando embeddings: {str(e)}",
+                    details={"model": model_name, "texts_count": len(texts), "tenant_id": tenant_id}
                 )
         else:
             specific_error = e

@@ -17,18 +17,13 @@ from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 
 from common.config import get_settings
+from common.utils.logging import init_logging
 from services.scheduler import initialize_scheduler
 
-# Configuración de logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
-)
-
-logger = logging.getLogger(__name__)
+# Configuración
+settings = get_settings()
+logger = logging.getLogger("worker_service")
+init_logging(settings.log_level, service_name="worker-service")
 
 # Variables globales para mantener referencias a recursos
 scheduler = None
@@ -111,7 +106,6 @@ if __name__ == "__main__":
     import uvicorn
     
     # Obtener configuración
-    settings = get_settings()
     port = int(os.environ.get("PORT", 8080))
     
     # Iniciar servidor

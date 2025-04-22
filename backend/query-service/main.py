@@ -24,7 +24,7 @@ from routes.health import router as health_router
 # Configuración
 settings = get_settings()
 logger = logging.getLogger("query_service")
-init_logging(settings.log_level)
+init_logging(settings.log_level, service_name="query-service")
 
 # Variable global para registrar el inicio del servicio
 service_start_time = time.time()

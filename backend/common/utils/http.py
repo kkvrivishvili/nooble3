@@ -14,7 +14,9 @@ import logging
 import asyncio
 import time
 import json
+import random
 from typing import Dict, Any, Optional, List, Union
+from urllib.parse import urlparse
 
 import httpx
 
@@ -124,6 +126,9 @@ def create_error_response(error_message: str, error_details: Any = None) -> Dict
         }
     }
 
+_circuit_breakers = {}
+_circuit_breaker_lock = asyncio.Lock()
+
 async def call_service(
     url: str,
     data: Dict[str, Any],
@@ -136,7 +141,8 @@ async def call_service(
     max_retries: int = 3,
     custom_timeout: Optional[float] = None,
     use_cache: bool = False,
-    cache_ttl: Optional[int] = None
+    cache_ttl: Optional[int] = None,
+    method: str = "POST"
 ) -> Dict[str, Any]:
     """
     Función unificada para la comunicación entre servicios.
@@ -154,6 +160,7 @@ async def call_service(
         custom_timeout: Timeout personalizado (opcional)
         use_cache: Si se debe utilizar caché para esta llamada
         cache_ttl: Tiempo de vida en segundos para la caché (si use_cache=True)
+        method: Método HTTP a utilizar (default: POST)
         
     Returns:
         Dict: Respuesta del servicio en formato estándar
@@ -173,31 +180,61 @@ async def call_service(
     async with ctx:
         request_headers = add_context_to_headers(request_headers)
     
-    # Asegurar que tenant_id esté incluido en los datos
-    if "tenant_id" not in data and tenant_id:
+    # Asegurar que tenant_id esté incluido en los datos si es POST
+    if method.upper() == "POST" and "tenant_id" not in data and tenant_id:
         data["tenant_id"] = tenant_id
+    
+    # Extraer nombre de servicio de la URL para circuit breaker
+    service_name = urlparse(url).netloc
+    
+    # Verificar si el circuit breaker está abierto para este servicio
+    async with _circuit_breaker_lock:
+        if service_name in _circuit_breakers and _circuit_breakers[service_name]["open"]:
+            last_failure = _circuit_breakers[service_name]["last_failure"]
+            # Permitir reintentos después de 30 segundos (half-open state)
+            if time.time() - last_failure < 30:
+                logger.warning(f"Circuit breaker abierto para {service_name}, rechazando solicitud")
+                return create_error_response(
+                    ServiceUnavailableError(
+                        message=f"Servicio temporalmente no disponible: {service_name}",
+                        details={"circuit_breaker": "open", "service": service_name}
+                    ), 
+                    None
+                )
+            # Intentar de nuevo (half-open state)
+            logger.info(f"Circuit breaker en estado half-open para {service_name}, permitiendo solicitud")
+            _circuit_breakers[service_name]["open"] = False
     
     # Verificar caché si está habilitado
     if use_cache and tenant_id:
         cache_key = f"service_call:{url}:{json.dumps(data, sort_keys=True)}"
         
         # Intentar obtener de caché
-        cached_result = await CacheManager.get(
-            data_type="service_call",
-            resource_id=cache_key,
-            tenant_id=tenant_id
-        )
-        
-        if cached_result:
-            logger.debug(f"Resultado obtenido de caché para llamada a {url}")
-            return cached_result
+        try:
+            cached_result = await CacheManager.get(
+                data_type="service_call",
+                resource_id=cache_key,
+                tenant_id=tenant_id
+            )
+            
+            if cached_result:
+                logger.debug(f"Resultado obtenido de caché para llamada a {url}")
+                return cached_result
+        except Exception as cache_err:
+            logger.debug(f"Error accediendo a caché para llamada a servicio: {str(cache_err)}")
     
     # Realizar la solicitud con reintentos
     async with httpx.AsyncClient(timeout=timeout) as client:
         for attempt in range(max_retries):
             try:
                 logger.debug(f"Llamando a servicio {url} (intento {attempt+1}/{max_retries})")
-                response = await client.post(url, json=data, headers=request_headers)
+                
+                # Usar método apropiado según el parámetro
+                if method.upper() == "GET":
+                    response = await client.get(url, params=data, headers=request_headers)
+                else:
+                    response = await client.post(url, json=data, headers=request_headers)
+                
                 response.raise_for_status()
                 
                 # Convertir respuesta a formato estándar
@@ -205,13 +242,22 @@ async def call_service(
                 
                 # Guardar en caché si está habilitado
                 if use_cache and tenant_id and result["success"]:
-                    await CacheManager.set(
-                        data_type="service_call",
-                        resource_id=cache_key,
-                        value=result,
-                        tenant_id=tenant_id,
-                        ttl=cache_ttl or 300  # Default: 5 minutos
-                    )
+                    try:
+                        await CacheManager.set(
+                            data_type="service_call",
+                            resource_id=cache_key,
+                            value=result,
+                            tenant_id=tenant_id,
+                            ttl=cache_ttl or 300  # Default: 5 minutos
+                        )
+                    except Exception as cache_set_err:
+                        logger.debug(f"Error guardando resultado en caché: {str(cache_set_err)}")
+                
+                # Resetear estado de circuit breaker en caso de éxito
+                async with _circuit_breaker_lock:
+                    if service_name in _circuit_breakers and _circuit_breakers[service_name].get("failures", 0) > 0:
+                        logger.info(f"Reseteando circuit breaker para {service_name} tras llamada exitosa")
+                        _circuit_breakers[service_name] = {"open": False, "failures": 0, "last_success": time.time()}
                 
                 return result
                 
@@ -254,11 +300,17 @@ async def call_service(
                             message=f"Error HTTP {e.response.status_code} llamando al servicio: {url}",
                             details=error_details
                         )
+                    
+                    # Actualizar circuit breaker en último intento fallido
+                    await _update_circuit_breaker(service_name, is_failure=True)
                         
                     error_response = create_error_response(specific_error, error_details)
                     return error_response
                 
-                await asyncio.sleep(1 * (attempt + 1))  # Backoff lineal
+                # Backoff exponencial con jitter para evitar tormentas de reintentos
+                retry_delay = min(2 ** attempt, 32)  # Exponencial con límite de 32 segundos
+                jitter = random.uniform(0, 0.3 * retry_delay)  # Añadir jitter aleatorio (0-30%)
+                await asyncio.sleep(retry_delay + jitter)
                 
             except httpx.TimeoutException as e:
                 logger.error(f"Timeout llamando a {url}: {str(e)}")
@@ -268,12 +320,18 @@ async def call_service(
                         message=f"Timeout al llamar al servicio: {url}",
                         details={"operation_type": operation_type, "timeout": timeout}
                     )
+                    
+                    # Actualizar circuit breaker en último intento fallido
+                    await _update_circuit_breaker(service_name, is_failure=True)
+                    
                     error_response = create_error_response(specific_error, None)
                     return error_response
                 
-                # Incrementar timeout para el siguiente intento
+                # Incrementar timeout para el siguiente intento con backoff exponencial
                 timeout = min(timeout * 1.5, 60.0)  # Máximo 60 segundos
-                await asyncio.sleep(1 * (attempt + 1))  # Backoff lineal
+                retry_delay = min(2 ** attempt, 32)
+                jitter = random.uniform(0, 0.3 * retry_delay)
+                await asyncio.sleep(retry_delay + jitter)
                 
             except Exception as e:
                 logger.error(f"Error llamando a {url}: {str(e)}")
@@ -283,10 +341,69 @@ async def call_service(
                         message=f"Error llamando al servicio: {url}",
                         details={"error_type": e.__class__.__name__, "error_message": str(e)}
                     )
+                    
+                    # Actualizar circuit breaker en último intento fallido
+                    await _update_circuit_breaker(service_name, is_failure=True)
+                    
                     error_response = create_error_response(specific_error, None)
                     return error_response
                 
-                await asyncio.sleep(1 * (attempt + 1))  # Backoff lineal
+                # Backoff exponencial con jitter
+                retry_delay = min(2 ** attempt, 32)
+                jitter = random.uniform(0, 0.3 * retry_delay)
+                await asyncio.sleep(retry_delay + jitter)
+
+async def _update_circuit_breaker(service_name: str, is_failure: bool) -> None:
+    """
+    Actualiza el estado del circuit breaker local.
+    
+    Args:
+        service_name: Nombre del servicio
+        is_failure: Si la llamada resultó en fallo
+    """
+    async with _circuit_breaker_lock:
+        now = time.time()
+        
+        # Inicializar estado si no existe
+        if service_name not in _circuit_breakers:
+            _circuit_breakers[service_name] = {
+                "open": False, 
+                "failures": 0, 
+                "reset_time": now,
+                "last_failure": 0,
+                "last_success": now
+            }
+        
+        # Resetear contador si ha pasado la ventana de tiempo (60 segundos)
+        if now - _circuit_breakers[service_name].get("reset_time", 0) > 60:
+            _circuit_breakers[service_name]["failures"] = 0
+            _circuit_breakers[service_name]["reset_time"] = now
+        
+        if is_failure:
+            # Incrementar contador de fallos
+            _circuit_breakers[service_name]["failures"] = _circuit_breakers[service_name].get("failures", 0) + 1
+            _circuit_breakers[service_name]["last_failure"] = now
+            
+            # Verificar si debemos abrir el circuit breaker (5+ fallos en 60 segundos)
+            if _circuit_breakers[service_name]["failures"] >= 5:
+                prev_state = _circuit_breakers[service_name].get("open", False)
+                _circuit_breakers[service_name]["open"] = True
+                
+                if not prev_state:  # Si estaba cerrado y ahora lo abrimos
+                    logger.warning(f"Circuit breaker ABIERTO para {service_name} tras {_circuit_breakers[service_name]['failures']} fallos")
+        else:
+            # Éxito - resetear contador si el breaker estaba en estado half-open
+            if _circuit_breakers[service_name].get("open", False):
+                _circuit_breakers[service_name] = {
+                    "open": False, 
+                    "failures": 0, 
+                    "reset_time": now,
+                    "last_success": now
+                }
+                logger.info(f"Circuit breaker CERRADO para {service_name} tras llamada exitosa")
+            
+            # Actualizar último éxito
+            _circuit_breakers[service_name]["last_success"] = now
 
 async def check_service_health(
     service_url: str, 

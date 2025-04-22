@@ -111,7 +111,24 @@ class CachedEmbeddingProvider:
             if cached_embedding:
                 return cached_embedding
         except Exception as cache_err:
-            logger.debug(f"Error al obtener embedding de caché: {str(cache_err)}")
+            # Manejo mejorado de errores de caché con categorización
+            error_context = {
+                "tenant_id": tenant_id,
+                "model": self.model_name,
+                "error_type": type(cache_err).__name__,
+                "cache_operation": "get_embedding"
+            }
+            
+            # Distinguir entre tipos de errores para mejor diagnóstico
+            if "connection" in str(cache_err).lower() or "timeout" in str(cache_err).lower():
+                # Error de conexión a Redis - más crítico
+                logger.warning(f"Error de conexión con caché: {str(cache_err)}", extra=error_context)
+            elif "key" in str(cache_err).lower() and "not found" in str(cache_err).lower():
+                # Cache miss normal, nivel debug
+                logger.debug(f"Embedding no encontrado en caché: {str(cache_err)}")
+            else:
+                # Otros errores
+                logger.debug(f"Error al obtener embedding de caché: {str(cache_err)}")
         
         # Obtener embedding desde el backend
         if hasattr(self, 'openai_embed'):
@@ -130,7 +147,19 @@ class CachedEmbeddingProvider:
                 ttl=86400  # 24 horas
             )
         except Exception as cache_set_err:
-            logger.debug(f"Error al guardar embedding en caché: {str(cache_set_err)}")
+            # Manejo mejorado de errores al guardar en caché
+            error_context = {
+                "tenant_id": tenant_id,
+                "model": self.model_name, 
+                "error_type": type(cache_set_err).__name__,
+                "cache_operation": "set_embedding"
+            }
+            
+            # Distinguir entre tipos de errores
+            if "connection" in str(cache_set_err).lower() or "timeout" in str(cache_set_err).lower():
+                logger.warning(f"Error de conexión al guardar en caché: {str(cache_set_err)}", extra=error_context)
+            else:
+                logger.debug(f"Error al guardar embedding en caché: {str(cache_set_err)}")
         
         return embedding
     
@@ -243,7 +272,24 @@ class CachedEmbeddingProvider:
                 if val:
                     cached_embeddings[i] = val
             except Exception as cache_err:
-                logger.debug(f"Error al obtener embedding de caché para texto {i}: {str(cache_err)}")
+                # Manejo mejorado de errores de caché con categorización
+                error_context = {
+                    "tenant_id": tenant_id,
+                    "model": self.model_name,
+                    "error_type": type(cache_err).__name__,
+                    "cache_operation": "get_embedding"
+                }
+                
+                # Distinguir entre tipos de errores para mejor diagnóstico
+                if "connection" in str(cache_err).lower() or "timeout" in str(cache_err).lower():
+                    # Error de conexión a Redis - más crítico
+                    logger.warning(f"Error de conexión con caché: {str(cache_err)}", extra=error_context)
+                elif "key" in str(cache_err).lower() and "not found" in str(cache_err).lower():
+                    # Cache miss normal, nivel debug
+                    logger.debug(f"Embedding no encontrado en caché: {str(cache_err)}")
+                else:
+                    # Otros errores
+                    logger.debug(f"Error al obtener embedding de caché: {str(cache_err)}")
         
         # Identificar textos no cacheados que necesitan procesamiento
         texts_to_process = []
@@ -284,7 +330,19 @@ class CachedEmbeddingProvider:
                             ttl=86400  # 24 horas
                         )
                     except Exception as cache_set_err:
-                        logger.debug(f"Error al guardar embedding en caché: {str(cache_set_err)}")
+                        # Manejo mejorado de errores al guardar en caché
+                        error_context = {
+                            "tenant_id": tenant_id,
+                            "model": self.model_name, 
+                            "error_type": type(cache_set_err).__name__,
+                            "cache_operation": "set_embedding"
+                        }
+                        
+                        # Distinguir entre tipos de errores
+                        if "connection" in str(cache_set_err).lower() or "timeout" in str(cache_set_err).lower():
+                            logger.warning(f"Error de conexión al guardar en caché: {str(cache_set_err)}", extra=error_context)
+                        else:
+                            logger.debug(f"Error al guardar embedding en caché: {str(cache_set_err)}")
             except Exception as e:
                 error_context = {
                     "tenant_id": tenant_id,
