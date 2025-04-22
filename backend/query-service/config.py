@@ -6,7 +6,7 @@ from typing import Dict, Any, Optional, List
 
 from common.config import get_service_settings
 from common.models import HealthResponse
-from common.context import get_current_tenant_id
+from common.context import Context
 
 def get_settings():
     """
@@ -37,12 +37,13 @@ def get_health_status() -> HealthResponse:
         timestamp=None  # Se generará automáticamente
     )
 
-def get_collection_config(collection_id: str) -> Dict[str, Any]:
+def get_collection_config(collection_id: str, ctx: Optional[Context] = None) -> Dict[str, Any]:
     """
     Obtiene la configuración específica para una colección.
     
     Args:
         collection_id: ID de la colección
+        ctx: Contexto opcional con información del tenant
         
     Returns:
         Dict[str, Any]: Configuración de la colección

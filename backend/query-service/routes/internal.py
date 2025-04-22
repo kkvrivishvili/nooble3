@@ -11,14 +11,14 @@ from pydantic import BaseModel, Field
 
 from common.models import TenantInfo, QueryContextItem
 from common.errors import (
-    ServiceError, handle_service_error_simple, ErrorCode,
+    handle_errors, ErrorCode,
     QueryProcessingError, CollectionNotFoundError, 
     RetrievalError, GenerationError, InvalidQueryParamsError,
     EmbeddingGenerationError, EmbeddingModelError, TextTooLargeError
 )
-from common.context import with_context, get_current_tenant_id
+from common.context import with_context, Context
 from common.auth import verify_tenant, validate_model_access
-from common.tracking import track_query
+from common.tracking import track_token_usage
 
 from services.query_engine import create_query_engine, process_query_with_sources
 
@@ -55,9 +55,14 @@ class InternalSearchRequest(BaseModel):
     description="Endpoint para uso exclusivo del Agent Service"
 )
 @with_context(tenant=True, collection=True, agent=True, conversation=True)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False, error_map={
+    QueryProcessingError: ("QUERY_PROCESSING_ERROR", 500),
+    RetrievalError: ("RETRIEVAL_ERROR", 500),
+    CollectionNotFoundError: ("COLLECTION_NOT_FOUND", 404)
+})
 async def internal_query(
-    request: InternalQueryRequest = Body(...)
+    request: InternalQueryRequest = Body(...),
+    ctx: Context = None
 ):
     """
     Procesa una consulta RAG para uso interno del Agent Service.
@@ -67,6 +72,7 @@ async def internal_query(
     
     Args:
         request: Solicitud de consulta interna
+        ctx: Contexto de la solicitud con información de tenant, agent, etc.
         
     Returns:
         Dict con formato estandarizado:
@@ -78,20 +84,24 @@ async def internal_query(
             "error": Dict[str, Any]    # Presente solo en caso de error
         }
     """
-    # Establecer contexto explícitamente basado en la solicitud
-    tenant_id = request.tenant_id
+    # Obtener tenant_id del contexto propagado (con fallback a la solicitud)
+    tenant_id = ctx.get_tenant_id() or request.tenant_id
+    agent_id = ctx.get_agent_id() or request.agent_id
+    conversation_id = ctx.get_conversation_id() or request.conversation_id
+    collection_id = ctx.get_collection_id() or request.collection_id
     
     # Obtener tiempo de inicio para medición
     start_time = time.time()
     
     try:
-        # Crear tenant_info mínima para el motor de consulta
+        # Crear tenant_info con información completa
         tenant_info = TenantInfo(tenant_id=tenant_id)
         
         # Crear motor de consulta
         query_engine, debug_handler = await create_query_engine(
+            ctx=ctx,
             tenant_info=tenant_info,
-            collection_id=request.collection_id,
+            collection_id=collection_id,
             llm_model=request.llm_model,
             similarity_top_k=request.similarity_top_k,
             response_mode=request.response_mode
@@ -114,14 +124,25 @@ async def internal_query(
             sources = sources[:request.max_sources]
         
         # Registrar uso de tokens para facturación
-        await track_query(
+        total_tokens = result.get("tokens_total", 0)
+        if total_tokens <= 0:
+            # Si no tenemos tokens_total, sumar tokens_in y tokens_out
+            total_tokens = result.get("tokens_in", 0) + result.get("tokens_out", 0)
+            
+        await track_token_usage(
             tenant_id=tenant_id,
-            operation_type="agent_tool_query",
+            tokens=total_tokens,
             model=result.get("model", request.llm_model),
-            tokens_in=result.get("tokens_in", 0),
-            tokens_out=result.get("tokens_out", 0),
-            agent_id=request.agent_id,
-            conversation_id=request.conversation_id
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+            collection_id=collection_id,
+            token_type="llm",
+            operation="query",
+            metadata={
+                "processing_time": processing_time,
+                "tokens_in": result.get("tokens_in", 0),
+                "tokens_out": result.get("tokens_out", 0)
+            }
         )
         
         # Construir respuesta en formato estandarizado
@@ -145,7 +166,7 @@ async def internal_query(
                 "tokens_out": result.get("tokens_out", 0),
                 "similarity_top_k": request.similarity_top_k,
                 "response_mode": request.response_mode,
-                "collection_id": request.collection_id,
+                "collection_id": collection_id,
                 "timestamp": time.time()
             }
         }
@@ -170,7 +191,7 @@ async def internal_query(
                         message=f"Error generando embeddings para la consulta: {str(e)}",
                         details={
                             "query": request.query,
-                            "collection_id": request.collection_id,
+                            "collection_id": collection_id,
                             "query_length": len(request.query) if request.query else 0
                         }
                     )
@@ -179,7 +200,7 @@ async def internal_query(
                     message=f"Error procesando consulta RAG: {str(e)}",
                     details={
                         "query": request.query,
-                        "collection_id": request.collection_id,
+                        "collection_id": collection_id,
                         "similarity_top_k": request.similarity_top_k,
                         "response_mode": request.response_mode
                     }
@@ -194,14 +215,16 @@ async def internal_query(
             "data": None,
             "metadata": {
                 "query": request.query,
-                "collection_id": request.collection_id,
+                "collection_id": collection_id,
                 "timestamp": time.time()
             },
             "error": {
                 "message": specific_error.message,
                 "details": {
                     "error_type": specific_error.__class__.__name__,
-                    "error_code": specific_error.error_code
+                    "error_code": specific_error.error_code,
+                    "description": str(specific_error),
+                    "context": getattr(specific_error, "context", {})
                 },
                 "timestamp": time.time()
             }
@@ -215,9 +238,13 @@ async def internal_query(
     description="Endpoint para búsqueda rápida entre documentos, para uso exclusivo de otros servicios"
 )
 @with_context(tenant=True, collection=True, agent=True, conversation=True)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False, error_map={
+    RetrievalError: ("RETRIEVAL_ERROR", 500),
+    CollectionNotFoundError: ("COLLECTION_NOT_FOUND", 404)
+})
 async def internal_search(
-    request: InternalSearchRequest = Body(...)
+    request: InternalSearchRequest = Body(...),
+    ctx: Context = None
 ):
     """
     Procesa una búsqueda rápida para uso interno de otros servicios.
@@ -337,7 +364,9 @@ async def internal_search(
                 "message": specific_error.message,
                 "details": {
                     "error_type": specific_error.__class__.__name__,
-                    "error_code": specific_error.error_code
+                    "error_code": specific_error.error_code,
+                    "description": str(specific_error),
+                    "context": getattr(specific_error, "context", {})
                 },
                 "timestamp": time.time()
             }

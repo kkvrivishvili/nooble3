@@ -11,16 +11,21 @@ from common.models import TenantInfo
 from common.auth import validate_model_access
 from common.config import get_settings
 from common.llm.ollama import get_llm_model
+from common.context import with_context, Context
+from common.errors import handle_errors, ErrorCode
 
 logger = logging.getLogger(__name__)
 
-async def get_llm_for_tenant(tenant_info: TenantInfo, requested_model: Optional[str] = None) -> Any:
+@with_context(tenant=True)
+@handle_errors(error_type="simple", log_traceback=False)
+async def get_llm_for_tenant(tenant_info: TenantInfo, requested_model: Optional[str] = None, ctx: Context = None) -> Any:
     """
     Obtiene un modelo LLM apropiado para un tenant según su nivel de suscripción.
     
     Args:
         tenant_info: Información del tenant
         requested_model: Modelo solicitado (opcional)
+        ctx: Contexto de la solicitud (proporcionado por el decorador with_context)
         
     Returns:
         Modelo LLM configurado compatible con LlamaIndex
@@ -55,18 +60,19 @@ async def get_llm_for_tenant(tenant_info: TenantInfo, requested_model: Optional[
             **common_params
         )
 
-async def generate_embedding_via_service(text: str) -> Dict[str, Any]:
+@with_context(tenant=True, agent=True, conversation=True)
+@handle_errors(error_type="detailed", log_traceback=True)
+async def generate_embedding_via_service(text: str, ctx: Context = None) -> Dict[str, Any]:
     """
     Genera un embedding para un texto a través del servicio de embeddings.
     
     Args:
         text: Texto para generar embedding
+        ctx: Contexto de la solicitud (proporcionado por el decorador with_context)
         
     Returns:
         Dict: Respuesta del servicio de embeddings con vector y metadatos
     """
-    from common.context.vars import get_current_tenant_id, get_current_agent_id
-    from common.context.vars import get_current_conversation_id
     from common.utils.http import call_service
     from common.errors import (
         EmbeddingGenerationError, EmbeddingModelError, 
@@ -74,9 +80,18 @@ async def generate_embedding_via_service(text: str) -> Dict[str, Any]:
     )
     
     settings = get_settings()
-    tenant_id = get_current_tenant_id()
-    agent_id = get_current_agent_id()
-    conversation_id = get_current_conversation_id()
+    
+    # Obtener valores del contexto usando el patrón recomendado
+    tenant_id = ctx.get_tenant_id() if ctx else None
+    agent_id = ctx.get_agent_id() if ctx else None
+    conversation_id = ctx.get_conversation_id() if ctx else None
+    
+    if not tenant_id:
+        raise ErrorCode(
+            message="Se requiere tenant_id para generar embeddings",
+            error_code="MISSING_TENANT_ID",
+            status_code=400
+        )
     
     try:
         # Preparar solicitud al servicio de embeddings

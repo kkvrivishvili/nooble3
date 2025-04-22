@@ -14,11 +14,11 @@ from common.models import (
     CollectionStatsResponse, DeleteCollectionResponse
 )
 from common.errors import (
-    ServiceError, handle_service_error_simple, ErrorCode,
+    handle_errors, ErrorCode,
     CollectionNotFoundError, InvalidQueryParamsError, 
     QueryProcessingError, RetrievalError
 )
-from common.context import with_context
+from common.context import with_context, Context
 from common.auth import verify_tenant
 from common.db.supabase import get_supabase_client, get_tenant_collections, get_table_name
 
@@ -32,10 +32,11 @@ logger = logging.getLogger(__name__)
     description="Obtiene la lista de colecciones disponibles para el tenant"
 )
 @with_context(tenant=True)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 async def list_collections(
-    tenant_info: TenantInfo = Depends(verify_tenant)
-):
+    tenant_info: TenantInfo = Depends(verify_tenant),
+    ctx: Context = None
+) -> CollectionsListResponse:
     """
     Lista todas las colecciones para el tenant actual.
     
@@ -84,12 +85,13 @@ async def list_collections(
     description="Crea una nueva colección para organizar documentos"
 )
 @with_context(tenant=True)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 async def create_collection(
     name: str,
     description: Optional[str] = None,
-    tenant_info: TenantInfo = Depends(verify_tenant)
-):
+    tenant_info: TenantInfo = Depends(verify_tenant),
+    ctx: Context = None
+) -> CollectionCreationResponse:
     """
     Crea una nueva colección para el tenant actual.
     
@@ -151,14 +153,15 @@ async def create_collection(
     description="Modifica una colección existente"
 )
 @with_context(tenant=True, collection=True)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 async def update_collection(
     collection_id: str,
     name: str,
     description: Optional[str] = None,
     is_active: bool = True,
-    tenant_info: TenantInfo = Depends(verify_tenant)
-):
+    tenant_info: TenantInfo = Depends(verify_tenant),
+    ctx: Context = None
+) -> CollectionUpdateResponse:
     """
     Actualiza una colección existente.
     
@@ -241,11 +244,12 @@ async def update_collection(
     description="Elimina una colección y todos sus documentos"
 )
 @with_context(tenant=True, collection=True)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 async def delete_collection(
     collection_id: str,
-    tenant_info: TenantInfo = Depends(verify_tenant)
-):
+    tenant_info: TenantInfo = Depends(verify_tenant),
+    ctx: Context = None
+) -> DeleteCollectionResponse:
     """
     Elimina una colección completa y todos sus documentos asociados.
     
@@ -320,11 +324,12 @@ async def delete_collection(
     description="Obtiene estadísticas detalladas de una colección"
 )
 @with_context(tenant=True, collection=True)
-@handle_service_error_simple
+@handle_errors(error_type="simple", log_traceback=False)
 async def get_collection_stats(
     collection_id: str,
-    tenant_info: TenantInfo = Depends(verify_tenant)
-):
+    tenant_info: TenantInfo = Depends(verify_tenant),
+    ctx: Context = None
+) -> CollectionStatsResponse:
     """
     Obtiene estadísticas detalladas de una colección.
     

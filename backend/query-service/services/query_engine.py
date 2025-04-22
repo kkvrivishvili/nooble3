@@ -11,16 +11,18 @@ from langchain.retrievers import RetrieverQueryEngine
 from llama_index.callbacks import LlamaDebugHandler
 
 from common.config import get_settings
-from common.context import with_context
+from common.context import with_context, Context
 from common.errors import (
-    ErrorCode, ServiceError, 
+    ErrorCode,
+    ServiceError, 
     QueryProcessingError, CollectionNotFoundError, 
     RetrievalError, GenerationError, InvalidQueryParamsError,
     EmbeddingGenerationError, EmbeddingModelError, TextTooLargeError
 )
-from common.tracking import track_token_usage, track_query
+from common.tracking import track_token_usage, estimate_prompt_tokens
 from common.llm.token_counters import count_tokens
 from common.cache import CacheManager
+from common.models import TenantInfo
 
 logger = logging.getLogger(__name__)
 
@@ -48,23 +50,33 @@ async def process_query_with_sources(
     filters: Optional[Dict[str, Any]] = None,
     similarity_top_k: int = 4,
     response_mode: str = "compact",
-    ctx=None
+    ctx: Context = None
 ) -> Dict[str, Any]:
     """Procesa una consulta y devuelve la respuesta con fuentes."""
     
-    tenant_id = ctx.get_tenant_id()
-    collection_id = ctx.get_collection_id()
-    agent_id = ctx.get_agent_id()
+    # Acceder de forma segura al contexto
+    tenant_id = ctx.get_tenant_id() if ctx else None
+    collection_id = ctx.get_collection_id() if ctx else None
+    agent_id = ctx.get_agent_id() if ctx else None
+    
+    if not tenant_id:
+        raise ValueError("Se requiere tenant_id para procesar la consulta")
+        
+    if not collection_id:
+        raise ValueError("Se requiere collection_id para procesar la consulta")
     
     # Verificar caché primero con manejo de errores
     try:
-        cached_result = await CacheManager.get_query_result(
-            query=query,
-            collection_id=collection_id,
+        # Crear una clave estable para el caché
+        resource_id = f"{collection_id}_{query}_{similarity_top_k}_{response_mode}"
+        
+        cached_result = await CacheManager.get(
+            data_type="query_result",
+            resource_id=resource_id,
             tenant_id=tenant_id,
             agent_id=agent_id,
-            similarity_top_k=similarity_top_k,
-            response_mode=response_mode
+            search_hierarchy=True,
+            use_memory=True
         )
         if cached_result:
             logger.info(f"Resultado de consulta obtenido de caché para '{query[:30]}...'")
@@ -95,22 +107,22 @@ async def process_query_with_sources(
         tokens_out = count_tokens(response, model_name=model_used)
         tokens_total = tokens_in + tokens_out
         
-        # Tracking de tokens async
-        await _track_usage(
-            query_input={
-                "tenant_id": tenant_id,
-                "agent_id": agent_id,
-                "conversation_id": None,
+        # Tracking de tokens directamente usando la función centralizada
+        await track_token_usage(
+            tenant_id=tenant_id,
+            tokens=tokens_total,
+            model=model_used,
+            agent_id=agent_id,
+            conversation_id=None,
+            collection_id=collection_id,
+            token_type="llm",
+            operation="query",
+            metadata={
                 "query": query,
-                "collection_id": collection_id
-            },
-            result={
-                "tokens": tokens_total,
-                "model": model_used
-            },
-            model_name=model_used,
-            elapsed_time=time.time() - start_time,
-            query_type="query"
+                "tokens_in": tokens_in,
+                "tokens_out": tokens_out,
+                "elapsed_time": time.time() - start_time
+            }
         )
         
         # Extraer fuentes si están disponibles
@@ -152,14 +164,18 @@ async def process_query_with_sources(
         
         # Guardar en caché (1 hora) con manejo de errores
         try:
-            await CacheManager.set_query_result(
-                query=query,
-                result=result,
-                collection_id=collection_id,
+            # Crear una clave estable para el caché
+            resource_id = f"{collection_id}_{query}_{similarity_top_k}_{response_mode}"
+            
+            await CacheManager.set(
+                data_type="query_result",
+                resource_id=resource_id,
+                value=result,
                 tenant_id=tenant_id,
                 agent_id=agent_id,
-                similarity_top_k=similarity_top_k,
-                response_mode=response_mode
+                search_hierarchy=True,
+                use_memory=True,
+                ttl=3600
             )
         except Exception as cache_set_err:
             logger.debug(f"Error guardando resultado de consulta en caché: {str(cache_set_err)}")
@@ -179,85 +195,25 @@ async def process_query_with_sources(
         )
 
 
-async def _track_usage(query_input: dict, result: dict, model_name: str, elapsed_time: float, query_type: str = "query") -> None:
-    """
-    Registra el uso de tokens para esta consulta.
-
-    Args:
-        query_input: Datos de entrada de la consulta
-        result: Resultados de la consulta
-        model_name: Nombre del modelo utilizado
-        elapsed_time: Tiempo de ejecución en segundos
-        query_type: Tipo de consulta (query, chat, etc.)
-    """
-    try:
-        tokens = result.get("tokens", 0)
-        tenant_id = query_input.get("tenant_id")
-        agent_id = query_input.get("agent_id")
-        conversation_id = query_input.get("conversation_id")
-        collection_id = query_input.get("collection_id")
-        
-        if tokens <= 0:
-            logger.debug(f"No se registrarán tokens: valor de tokens ({tokens}) inválido")
-            return
-            
-        if not tenant_id:
-            logger.warning("No se registrarán tokens: tenant_id no disponible")
-            return
-        
-        # Usar el sistema centralizado de tracking
-        tracking_success = await track_token_usage(
-            tenant_id=tenant_id,
-            tokens=tokens,
-            model=model_name,
-            agent_id=agent_id,
-            conversation_id=conversation_id,
-            collection_id=collection_id,
-            token_type="llm",
-            operation=query_type,
-            metadata={
-                "elapsed_time": elapsed_time,
-                "query_type": query_type
-            }
-        )
-        
-        if not tracking_success:
-            logger.warning(f"No se pudo registrar el uso de tokens para tenant {tenant_id}")
-        
-        # También registrar la consulta para análisis
-        query_text = query_input.get("query", "")
-        if query_text:
-            await track_query(
-                tenant_id=tenant_id,
-                query_text=query_text,
-                metadata={
-                    "agent_id": agent_id,
-                    "conversation_id": conversation_id,
-                    "model": model_name,
-                    "elapsed_time": elapsed_time,
-                    "tokens": tokens,
-                    "query_type": query_type
-                }
-            )
-        
-    except Exception as e:
-        logger.error(f"Error al registrar el uso de tokens: {str(e)}", exc_info=True)
-
 @with_context(tenant=True, collection=True, agent=True)
 async def create_query_engine(
-    ctx=None,
+    tenant_info=None,
+    collection_id: Optional[str] = None,
     llm_model: Optional[str] = None,
     similarity_top_k: int = 4,
-    response_mode: str = "compact"
+    response_mode: str = "compact",
+    ctx: Context = None
 ) -> Tuple[RetrieverQueryEngine, LlamaDebugHandler]:
     """
     Crea un motor de consulta para una colección específica.
     
     Args:
-        ctx: Contexto de la consulta
+        tenant_info: Información del tenant (opcional, se puede obtener del contexto)
+        collection_id: ID de la colección (opcional, se puede obtener del contexto)
         llm_model: Modelo de lenguaje a utilizar (opcional)
         similarity_top_k: Número de documentos a recuperar
         response_mode: Modo de respuesta (compact, verbose, etc.)
+        ctx: Contexto de la consulta proporcionado por el decorador
         
     Returns:
         Tuple[RetrieverQueryEngine, LlamaDebugHandler]: Motor de consulta y handler de debug
@@ -267,12 +223,26 @@ async def create_query_engine(
         EmbeddingGenerationError: Si hay problemas generando embeddings
         RetrievalError: Si hay problemas recuperando documentos
     """
+    # Obtener tenant_id y collection_id del contexto si no se proporcionan
+    tenant_id = None
+    if tenant_info:
+        tenant_id = tenant_info.tenant_id
+    elif ctx:
+        tenant_id = ctx.get_tenant_id()
+    
+    if not tenant_id:
+        raise ValueError("Se requiere tenant_id para crear el motor de consulta")
+        
+    if not collection_id and ctx:
+        collection_id = ctx.get_collection_id()
+        
+    if not collection_id:
+        raise ValueError("Se requiere collection_id para crear el motor de consulta")
+    
     from services.vector_store import get_vector_store_for_collection
-    from services.llm import get_llm_for_model
+    from services.llm import get_llm_for_tenant
     from common.llm.llamaindex import create_response_synthesizer
     
-    tenant_id = ctx.get_tenant_id()
-    collection_id = ctx.get_collection_id()
     settings = get_settings()
     
     try:
@@ -309,7 +279,12 @@ async def create_query_engine(
         try:
             # Si no se especifica modelo, usar el default
             model_name = llm_model if llm_model else settings.default_llm_model
-            llm = get_llm_for_model(model_name)
+            
+            # Crear tenant_info si no existe
+            if not tenant_info:
+                tenant_info = TenantInfo(tenant_id=tenant_id)
+                
+            llm = await get_llm_for_tenant(tenant_info, model_name, ctx)
             
             # Crear sintetizador de respuestas
             response_synthesizer = create_response_synthesizer(

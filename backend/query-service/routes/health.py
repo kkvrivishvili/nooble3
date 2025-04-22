@@ -10,7 +10,8 @@ from datetime import timedelta
 from fastapi import APIRouter
 
 from common.models import HealthResponse, ServiceStatusResponse
-from common.errors import handle_service_error_simple
+from common.errors import handle_errors
+from common.context import with_context, Context
 from common.config import get_settings
 from common.utils.http import check_service_health
 
@@ -30,8 +31,15 @@ service_start_time = time.time()
     summary="Estado del servicio",
     description="Verifica el estado operativo del servicio"
 )
-@handle_service_error_simple
-async def health_check():
+@router.get(
+    "/status",
+    response_model=HealthResponse,
+    summary="Estado del servicio (alias)",
+    description="Alias para /health para mantener compatibilidad entre servicios"
+)
+@with_context(tenant=False)
+@handle_errors(error_type="simple", log_traceback=False)
+async def health_check(ctx: Context = None) -> HealthResponse:
     """
     Verifica el estado básico del servicio.
     
@@ -70,8 +78,9 @@ async def health_check():
     summary="Estado detallado",
     description="Proporciona información detallada sobre el estado del servicio"
 )
-@handle_service_error_simple
-async def service_status():
+@with_context(tenant=False)
+@handle_errors(error_type="simple", log_traceback=False)
+async def service_status(ctx: Context = None) -> ServiceStatusResponse:
     """
     Obtiene el estado detallado del servicio con métricas adicionales.
     
