@@ -165,7 +165,10 @@ async def process_query_with_sources(
                 "tokens_in": tokens_in,
                 "tokens_out": tokens_out,
                 "tokens_total": tokens_total,
-                "processing_time": processing_time
+                "processing_time": processing_time,
+                "query": query,
+                "similarity_top_k": similarity_top_k,
+                "response_mode": response_mode
             }
             
             return result
@@ -182,7 +185,8 @@ async def process_query_with_sources(
             )
     
     # Usar la implementación centralizada del patrón Cache-Aside
-    # No necesitamos función de generación alternativa
+    # No necesitamos función de fetch_from_db, ya que los resultados de consulta
+    # no se almacenan en Supabase
     result, metrics = await get_with_cache_aside(
         data_type="query_result",
         resource_id=resource_id,
@@ -190,6 +194,7 @@ async def process_query_with_sources(
         fetch_from_db_func=lambda *args: None,  # No buscar en DB para resultados de consulta
         generate_func=execute_query,
         agent_id=agent_id,
+        collection_id=collection_id,
         ctx=ctx
     )
     

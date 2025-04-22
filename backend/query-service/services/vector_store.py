@@ -18,10 +18,7 @@ from common.tracking import track_operation
 from common.cache import (
     get_with_cache_aside,
     invalidate_resource_cache,
-    generate_resource_id_hash,
-    SOURCE_CACHE,
-    SOURCE_SUPABASE,
-    SOURCE_GENERATION
+    generate_resource_id_hash
 )
 
 from llama_index.vector_stores.supabase import SupabaseVectorStore

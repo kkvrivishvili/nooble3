@@ -21,6 +21,7 @@ from common.config import get_settings
 from common.config.tiers import get_tier_limits, get_available_embedding_models
 from common.tracking import track_token_usage
 from common.cache.manager import CacheManager
+from common.cache import get_with_cache_aside, invalidate_document_update
 
 # Importaciones de LlamaIndex
 from llama_index.core import (
@@ -475,10 +476,9 @@ async def generate_embeddings_with_llama_index(
         # Usar modelo solicitado o modelo por defecto
         model_name = model_name or settings.default_embedding_model
         
-        # Validar acceso al modelo según el tier siguiendo el patrón de la memoria fbcc4004
+        # Validar acceso al modelo según el tier
         available_models = get_available_embedding_models(tier, tenant_id)
         
-        # Usar la función validate_model_access como se recomienda en la memoria fbcc4004
         from common.auth.models import validate_model_access
         if not validate_model_access(model_name, available_models):
             allowed_models = ", ".join(available_models)
@@ -492,144 +492,87 @@ async def generate_embeddings_with_llama_index(
                 }
             )
         
-        # Crear hashes para los textos - usando método consistent con embedding-service
+        # Procesar embeddings en batch siguiendo el patrón centralizado
+        all_embeddings = []
+        all_metrics = {}
+        
+        # Calcular hashes para los textos de manera consistente con embedding-service
         import hashlib
         text_hashes = [hashlib.sha256(text.encode('utf-8')).hexdigest() for text in texts]
         
-        # Generar claves de caché compatibles con embedding-service
-        cache_keys = []
-        embeddings_from_cache = {}
-        
-        # Verificar caché para cada texto individualmente
         for i, text in enumerate(texts):
-            # Crear clave de caché usando el mismo formato que embedding-service
+            # Crear clave de caché consistente usando el mismo formato que embedding-service
             resource_id = f"{model_name}:{text_hashes[i]}"
             
-            cache_keys.append(resource_id)
-            
-            # Intentar obtener embedding de caché
-            try:
-                val = await CacheManager.get(
-                    data_type="embedding",
-                    resource_id=resource_id,
-                    tenant_id=tenant_id,
-                    agent_id=ctx.get_agent_id() if ctx else None,
-                    search_hierarchy=True,
-                    use_memory=True
-                )
-                if val:
-                    embeddings_from_cache[i] = val
-            except Exception as cache_err:
-                # Solo log en debug para errores de caché
-                logger.debug(f"Error al obtener embedding de caché: {str(cache_err)}")
+            # Función para obtener embedding de la base de datos (no usamos DB para embeddings)
+            async def fetch_embedding_from_db(resource_id, tenant_id, ctx=None):
+                return None
                 
-        # Si todos los embeddings están en caché, devolverlos directamente
-        if len(embeddings_from_cache) == len(texts):
-            logger.info(f"Embeddings obtenidos de caché para {len(texts)} textos")
-            embeddings = [embeddings_from_cache[i] for i in range(len(texts))]
+            # Función para generar el embedding si no está en caché
+            async def generate_embedding(resource_id, tenant_id, ctx=None):
+                # Configurar modelo de embeddings
+                embed_model = OpenAIEmbedding(
+                    model=model_name,
+                    embed_batch_size=1,
+                    api_key=settings.openai_api_key
+                )
+                
+                # Estimar tokens para la operación
+                import tiktoken
+                encoder = tiktoken.encoding_for_model(model_name)
+                token_count = len(encoder.encode(text))
+                
+                # Generar embedding
+                start_time = __import__('time').time()
+                embedding = embed_model.get_text_embedding(text)
+                processing_time = __import__('time').time() - start_time
+                
+                # Registrar uso de tokens
+                await track_token_usage(
+                    tenant_id=tenant_id,
+                    tokens=token_count,
+                    model=model_name,
+                    token_type="embedding",
+                    operation="generate",
+                    metadata={
+                        "processing_time": processing_time
+                    }
+                )
+                
+                return embedding
             
-            # Registrar uso desde caché (menor costo) según patrón de memoria 05f79c43
-            await track_token_usage(
+            # Usar la implementación centralizada del patrón Cache-Aside
+            embedding, metrics = await get_with_cache_aside(
+                data_type="embedding",
+                resource_id=resource_id,
                 tenant_id=tenant_id,
-                tokens=0,  # Sin costo adicional por usar caché
-                model=model_name,
-                token_type="embedding",
-                operation="cache_hit",
-                metadata={"texts_count": len(texts)}
+                fetch_from_db_func=fetch_embedding_from_db,
+                generate_func=generate_embedding,
+                agent_id=ctx.get_agent_id() if ctx and ctx.has_agent_id() else None,
+                ctx=ctx
             )
             
-            return embeddings, {"model": model_name, "cached": True}
-            
-        # Identificar textos que necesitan procesamiento
-        texts_to_process = []
-        indices_to_process = []
+            all_embeddings.append(embedding)
+            all_metrics[i] = metrics
         
-        for i, text in enumerate(texts):
-            if i not in embeddings_from_cache:
-                texts_to_process.append(text)
-                indices_to_process.append(i)
+        # Calcular métricas consolidadas del procesamiento batch
+        cached_count = sum(1 for m in all_metrics.values() if m.get("cache_hit", False))
         
-        # Configurar modelo de embeddings
-        embed_model = OpenAIEmbedding(
-            model=model_name,
-            embed_batch_size=min(len(texts_to_process), 100),  # Tamaño de batch óptimo
-            api_key=settings.openai_api_key
-        )
-        
-        # Estimar tokens para la operación
-        import tiktoken
-        encoder = tiktoken.encoding_for_model(model_name)
-        total_tokens = sum(len(encoder.encode(text)) for text in texts_to_process)
-        
-        # Generar los embeddings solo para textos no cacheados
-        start_time = __import__('time').time()
-        
-        # Método por lotes
-        new_embeddings = embed_model.get_text_embedding_batch(texts_to_process)
-        
-        processing_time = __import__('time').time() - start_time
-        
-        # Registrar uso de tokens siguiendo el patrón de la memoria 05f79c43
-        await track_token_usage(
-            tenant_id=tenant_id,
-            tokens=total_tokens,
-            model=model_name,
-            token_type="embedding",
-            operation="generate",
-            metadata={
-                "texts_count": len(texts_to_process),
-                "processing_time": processing_time
-            }
-        )
-        
-        # Almacenar nuevos embeddings en caché
-        for idx, (i, embedding) in enumerate(zip(indices_to_process, new_embeddings)):
-            resource_id = cache_keys[i]
-            
-            try:
-                await CacheManager.set(
-                    data_type="embedding",
-                    resource_id=resource_id,
-                    value=embedding,
-                    tenant_id=tenant_id,
-                    agent_id=ctx.get_agent_id() if ctx else None,
-                    ttl=86400  # 24 horas
-                )
-            except Exception as cache_set_err:
-                # Solo log en debug para errores de caché
-                logger.debug(f"Error al guardar embedding en caché: {str(cache_set_err)}")
-        
-        # Combinar embeddings de caché y nuevos
-        final_embeddings = [None] * len(texts)
-        
-        # Primero colocar los de caché
-        for i, emb in embeddings_from_cache.items():
-            final_embeddings[i] = emb
-            
-        # Luego colocar los nuevos
-        for idx, i in enumerate(indices_to_process):
-            final_embeddings[i] = new_embeddings[idx]
-        
-        # Metadatos del proceso
         metadata = {
             "model": model_name,
-            "token_count": total_tokens,
             "texts_count": len(texts),
-            "cached_count": len(embeddings_from_cache),
-            "processing_time": processing_time,
-            "cached": False
+            "cached_count": cached_count,
+            "cached": cached_count == len(texts)
         }
         
-        logger.info(f"Embeddings generados con LlamaIndex: {len(texts)} textos ({len(embeddings_from_cache)} de caché)")
-        return final_embeddings, metadata
+        logger.info(f"Embeddings generados con LlamaIndex: {len(texts)} textos ({cached_count} de caché)")
+        return all_embeddings, metadata
         
     except Exception as e:
         logger.error(f"Error generando embeddings con LlamaIndex: {str(e)}")
         if isinstance(e, ServiceError):
             raise
         
-        # Usar el decorador handle_errors que convertirá automáticamente esto
-        # siguiendo el patrón de la memoria 5cce8e0b
         raise ServiceError(
             message=f"Error generando embeddings: {str(e)}",
             error_code=ErrorCode.EMBEDDING_ERROR,
@@ -760,17 +703,23 @@ async def store_chunks_in_vector_store(
         processing_time = __import__('time').time() - start_time
         stored_count = len(documents)
         
-        # 6. Invalidar caché para esta colección
-        cache_manager = CacheManager()
-        cache_key = f"vectorstore:{tenant_id}:{collection_id}"
-        await cache_manager.delete(cache_key)
+        # 6. Aplicar invalidación coordinada según el patrón establecido
+        # Esto reemplaza la invalidación manual anterior
+        invalidation_results = await invalidate_document_update(
+            tenant_id=tenant_id,
+            document_id=document_id,
+            collection_id=collection_id
+        )
+        
+        logger.info(f"Invalidación coordinada aplicada: {invalidation_results}")
         
         stats = {
             "chunks_processed": len(chunks),
             "chunks_stored": stored_count,
             "embedding_model": metadata.get("model"),
             "processing_time": processing_time,
-            "average_chunk_length": sum(len(c["text"]) for c in chunks) / len(chunks)
+            "average_chunk_length": sum(len(c["text"]) for c in chunks) / len(chunks),
+            "invalidation_results": invalidation_results
         }
         
         logger.info(f"Procesados {stored_count} fragmentos en {processing_time:.2f}s con LlamaIndex")

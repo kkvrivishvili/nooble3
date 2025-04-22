@@ -533,6 +533,203 @@ async def invalidate_document_update(
         collection_id=collection_id
     )
 
+async def get_embeddings_batch_with_cache(
+    texts: List[str],
+    tenant_id: str,
+    model_name: str,
+    embedding_provider: Callable,
+    agent_id: Optional[str] = None,
+    conversation_id: Optional[str] = None,
+    collection_id: Optional[str] = None,
+    ctx: Optional[Context] = None
+) -> Tuple[List[List[float]], Dict[str, Any]]:
+    """
+    Implementación especializada del patrón Cache-Aside para lotes de embeddings.
+    
+    Esta función centraliza el procesamiento por lotes de embeddings, manteniendo
+    la consistencia con el patrón Cache-Aside y asegurando métricas precisas
+    para toda la operación batch.
+    
+    Args:
+        texts: Lista de textos para generar embeddings
+        tenant_id: ID del tenant
+        model_name: Modelo de embedding a utilizar
+        embedding_provider: Función que genera embeddings para los textos no encontrados en caché
+                          (recibe una lista de textos y devuelve una lista de embeddings)
+        agent_id: ID opcional del agente
+        conversation_id: ID opcional de la conversación
+        collection_id: ID opcional de la colección
+        ctx: Contexto opcional de la operación
+        
+    Returns:
+        Tuple[List[List[float]], Dict[str, Any]]:
+            - Lista de embeddings (en el mismo orden que los textos)
+            - Diccionario de métricas
+    """
+    start_time = time.time()
+    
+    # Métricas para seguimiento
+    metrics = {
+        "source": "mixed",  # Puede ser "cache", "generation" o "mixed"
+        "data_type": "embedding_batch",
+        "texts_count": len(texts),
+        "cache_hits": 0,
+        "cache_misses": 0
+    }
+    
+    # Generar hashes para los textos
+    import hashlib
+    text_hashes = [hashlib.sha256(text.encode('utf-8')).hexdigest() for text in texts]
+    cache_keys = [f"{model_name}:{text_hash}" for text_hash in text_hashes]
+    
+    # Intentar recuperar todos los embeddings de la caché
+    embeddings_from_cache = {}
+    
+    for i, cache_key in enumerate(cache_keys):
+        try:
+            val = await CacheManager.get(
+                data_type="embedding",
+                resource_id=cache_key,
+                tenant_id=tenant_id,
+                agent_id=agent_id,
+                conversation_id=conversation_id,
+                collection_id=collection_id,
+                search_hierarchy=True
+            )
+            
+            if val:
+                embeddings_from_cache[i] = val
+                metrics["cache_hits"] += 1
+                
+                # Registrar métrica de acierto
+                await track_cache_metrics(
+                    data_type="embedding",
+                    tenant_id=tenant_id,
+                    metric_type=METRIC_CACHE_HIT,
+                    value=True,
+                    agent_id=agent_id,
+                    metadata={"model": model_name}
+                )
+        except Exception as e:
+            logger.debug(f"Error al buscar embedding en caché: {str(e)}")
+    
+    # Todos los embeddings están en caché?
+    if len(embeddings_from_cache) == len(texts):
+        logger.info(f"Todos los embeddings ({len(texts)}) recuperados de caché")
+        metrics["source"] = SOURCE_CACHE
+        metrics["total_time_ms"] = (time.time() - start_time) * 1000
+        
+        # Ordenar embeddings según el orden original de textos
+        result = [embeddings_from_cache[i] for i in range(len(texts))]
+        return result, metrics
+    
+    # Identificar textos que necesitan procesamiento
+    texts_to_process = []
+    indices_to_process = []
+    
+    for i, text in enumerate(texts):
+        if i not in embeddings_from_cache:
+            texts_to_process.append(text)
+            indices_to_process.append(i)
+            metrics["cache_misses"] += 1
+            
+            # Registrar métrica de fallo
+            await track_cache_metrics(
+                data_type="embedding",
+                tenant_id=tenant_id,
+                metric_type=METRIC_CACHE_MISS,
+                value=False,
+                agent_id=agent_id,
+                metadata={"model": model_name}
+            )
+    
+    # Generar nuevos embeddings para los textos no encontrados en caché
+    generation_start = time.time()
+    
+    try:
+        # Llamar al proveedor de embeddings con los textos que faltan
+        new_embeddings = await embedding_provider(texts_to_process)
+        
+        if len(new_embeddings) != len(texts_to_process):
+            raise ValueError(f"Discrepancia en embeddings generados: {len(new_embeddings)} vs {len(texts_to_process)} esperados")
+            
+        # Almacenar nuevos embeddings en caché con el TTL adecuado
+        for idx, (i, embedding) in enumerate(zip(indices_to_process, new_embeddings)):
+            # Serializar embedding si es necesario
+            serialized_embedding = serialize_for_cache(embedding, "embedding")
+            
+            # Guardar en caché
+            cache_key = cache_keys[i]
+            await CacheManager.set(
+                data_type="embedding",
+                resource_id=cache_key,
+                value=serialized_embedding,
+                tenant_id=tenant_id,
+                agent_id=agent_id,
+                conversation_id=conversation_id,
+                collection_id=collection_id,
+                ttl=get_default_ttl_for_data_type("embedding")  # Usar TTL estándar para embeddings
+            )
+            
+            # Registrar métricas de tamaño
+            emb_size = estimate_object_size(serialized_embedding)
+            await track_cache_metrics(
+                data_type="embedding",
+                tenant_id=tenant_id,
+                metric_type=METRIC_CACHE_SIZE,
+                value=emb_size,
+                agent_id=agent_id,
+                metadata={"model": model_name}
+            )
+            
+        # Métricas de generación
+        generation_time = time.time() - generation_start
+        metrics["generation_time_ms"] = generation_time * 1000
+        
+    except Exception as e:
+        logger.error(f"Error generando embeddings en lote: {str(e)}")
+        # Si hay error, devolver los embeddings que sí tenemos de caché
+        if not embeddings_from_cache:
+            # Si no hay ninguno en caché, propagar el error
+            raise
+        
+        # Marcar el error en métricas
+        metrics["error"] = str(e)
+        metrics["partial_results"] = True
+        
+        # Para los que no se pudieron generar, usar None
+        new_embeddings = [None] * len(texts_to_process)
+    
+    # Combinar embeddings de caché y nuevos
+    final_embeddings = [None] * len(texts)
+    
+    # Primero colocar los de caché
+    for i, emb in embeddings_from_cache.items():
+        final_embeddings[i] = deserialize_from_cache(emb, "embedding")
+        
+    # Luego colocar los nuevos
+    for idx, i in enumerate(indices_to_process):
+        if new_embeddings[idx] is not None:
+            final_embeddings[i] = new_embeddings[idx]
+    
+    # Métricas finales
+    metrics["total_time_ms"] = (time.time() - start_time) * 1000
+    
+    if metrics["cache_hits"] > 0 and metrics["cache_misses"] > 0:
+        metrics["source"] = "mixed"
+    elif metrics["cache_hits"] > 0:
+        metrics["source"] = SOURCE_CACHE
+    else:
+        metrics["source"] = SOURCE_GENERATION
+    
+    logger.info(
+        f"Batch de embeddings procesado: {len(texts)} textos, "
+        f"{metrics['cache_hits']} de caché, {metrics['cache_misses']} generados, "
+        f"tiempo total: {metrics['total_time_ms']:.2f}ms"
+    )
+    
+    return final_embeddings, metrics
+
 # Funciones auxiliares para métricas
 
 async def track_cache_metrics(

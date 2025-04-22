@@ -10,7 +10,8 @@ from common.db.tables import get_table_name
 from common.errors import ServiceError, DocumentProcessingError, handle_errors
 from common.cache import (
     get_with_cache_aside,
-    generate_resource_id_hash
+    generate_resource_id_hash,
+    invalidate_document_update
 )
 from common.context import with_context, Context
 
@@ -166,7 +167,8 @@ async def invalidate_vector_store_cache(tenant_id: str, collection_id: str, ctx:
     Invalida la caché del vector store para una colección específica.
     
     Utiliza el enfoque centralizado para la invalidación de caché,
-    garantizando consistencia en todos los servicios.
+    garantizando consistencia en todos los servicios según el patrón
+    establecido en las memorias del sistema.
     
     Args:
         tenant_id: ID del tenant
@@ -177,40 +179,28 @@ async def invalidate_vector_store_cache(tenant_id: str, collection_id: str, ctx:
         bool: True si se invalidó correctamente
     """
     try:
-        from common.cache.manager import CacheManager
-        import time
-        
-        # Crear claves estandarizadas
-        resource_id = collection_id
-        
-        # Invalidar caché de resultados de consultas
-        await CacheManager.delete(
-            data_type="query_result", 
-            resource_id=f"{collection_id}*", 
+        # Utilizar la función centralizada para invalidación coordinada
+        # Esta función maneja automáticamente la invalidación de:
+        # 1. Vector stores relacionados con la colección
+        # 2. Consultas previas que usaron esta colección
+        results = await invalidate_document_update(
             tenant_id=tenant_id,
-            use_pattern=True
+            collection_id=collection_id
         )
         
-        # Invalidar caché del vector store
-        await CacheManager.delete(
-            data_type="vectorstore", 
-            resource_id=resource_id, 
-            tenant_id=tenant_id
-        )
-        
-        # Registro de métricas de invalidación si hay contexto
+        # Registrar métricas de invalidación
         if ctx:
             ctx.add_metric("cache_invalidation", {
                 "collection_id": collection_id,
                 "tenant_id": tenant_id,
-                "timestamp": time.time()
+                "results": results
             })
         
-        logger.info(f"Caché invalidada para colección {collection_id} del tenant {tenant_id}")
+        logger.info(f"Invalidación coordinada aplicada para colección {collection_id}: {results}")
         return True
         
     except Exception as e:
-        logger.error(f"Error invalidando caché: {str(e)}")
+        logger.error(f"Error en invalidación coordinada: {str(e)}")
         return False
 
 @with_context(tenant=True)

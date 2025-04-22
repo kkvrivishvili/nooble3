@@ -68,43 +68,56 @@ DEFAULT_TTL_MAPPING = {
 from .manager import CacheManager
 from .helpers import (
     get_with_cache_aside,
-    invalidate_resource_cache,
-    invalidate_coordinated,
-    invalidate_document_update,
-    track_cache_metrics,
     serialize_for_cache,
     deserialize_from_cache,
+    track_cache_metrics,
+    invalidate_coordinated,
+    invalidate_resource_cache,
+    invalidate_document_update,
+    generate_resource_id_hash,
+    get_embeddings_batch_with_cache,
     estimate_object_size,
-    get_default_ttl_for_data_type,
-    generate_resource_id_hash
+    get_default_ttl_for_data_type
 )
 
 __all__ = [
-    'CacheManager',
-    'get_with_cache_aside',
-    'invalidate_resource_cache',
-    'invalidate_coordinated',
-    'invalidate_document_update',
-    'track_cache_metrics',
-    'generate_resource_id_hash',
-    'serialize_for_cache',
-    'deserialize_from_cache',
-    'estimate_object_size',
-    'get_default_ttl_for_data_type',
-    'SOURCE_CACHE',
-    'SOURCE_SUPABASE',
-    'SOURCE_GENERATION',
-    'METRIC_CACHE_HIT',
-    'METRIC_CACHE_MISS',
-    'METRIC_LATENCY',
-    'METRIC_CACHE_SIZE',
-    'METRIC_CACHE_INVALIDATION',
-    'METRIC_CACHE_INVALIDATION_COORDINATED',
-    'METRIC_SERIALIZATION_ERROR',
-    'METRIC_DESERIALIZATION_ERROR',
-    'TTL_SHORT',
-    'TTL_STANDARD',
-    'TTL_EXTENDED',
-    'TTL_PERMANENT',
-    'DEFAULT_TTL_MAPPING'
+    # Clases principales
+    "CacheManager",
+    
+    # Funciones principales del patrón Cache-Aside
+    "get_with_cache_aside",
+    "get_embeddings_batch_with_cache",
+    "serialize_for_cache",
+    "deserialize_from_cache",
+    "invalidate_resource_cache",
+    "invalidate_coordinated",
+    "invalidate_document_update",
+    
+    # Funciones de métricas y utilidades
+    "track_cache_metrics",
+    "generate_resource_id_hash",
+    "estimate_object_size",
+    "get_default_ttl_for_data_type",
+    
+    # Constantes de fuentes
+    "SOURCE_CACHE",
+    "SOURCE_SUPABASE",
+    "SOURCE_GENERATION",
+    
+    # Constantes de métricas
+    "METRIC_CACHE_HIT",
+    "METRIC_CACHE_MISS",
+    "METRIC_LATENCY",
+    "METRIC_CACHE_SIZE",
+    "METRIC_CACHE_INVALIDATION",
+    "METRIC_CACHE_INVALIDATION_COORDINATED",
+    "METRIC_SERIALIZATION_ERROR",
+    "METRIC_DESERIALIZATION_ERROR",
+    
+    # Constantes de TTL
+    "TTL_SHORT",
+    "TTL_STANDARD",
+    "TTL_EXTENDED",
+    "TTL_PERMANENT",
+    "DEFAULT_TTL_MAPPING"
 ]
