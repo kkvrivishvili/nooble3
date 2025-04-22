@@ -10,7 +10,7 @@ from common.errors import handle_service_error_simple, ConversationError
 from common.context import with_context, ContextManager, set_current_conversation_id
 from common.auth import verify_tenant
 from common.db.rpc import create_conversation, add_chat_history
-from common.tracking import track_query
+from common.tracking import track_token_usage
 from common.cache import CacheManager
 
 from services.agent_executor import execute_agent, stream_agent_response
@@ -127,37 +127,29 @@ async def chat_with_agent(
     
     # Verificar si la conversación está terminando
     if request.metadata and request.metadata.get("end_conversation"):
+        # Usar APIs especializadas de CacheManager según la memoria 60e65b86
         background_tasks.add_task(
-            CacheManager.invalidate,
+            CacheManager.invalidate_agent_response,
+            agent_id=agent_id,
             tenant_id=tenant_id,
-            data_type="agent_response",
-            agent_id=agent_id, 
             conversation_id=conversation_id
         )
         background_tasks.add_task(
-            CacheManager.invalidate,
+            CacheManager.invalidate_conversation_messages,
+            conversation_id=conversation_id,
             tenant_id=tenant_id,
-            data_type="conversation_messages",
-            agent_id=agent_id,
-            conversation_id=conversation_id
+            agent_id=agent_id
         )
     
-    # Tracking de uso en segundo plano
+    # Tracking de uso centralizado usando track_token_usage
     background_tasks.add_task(
-        track_query,
+        track_token_usage,
         tenant_id=tenant_id,
-        operation_type="chat",
+        tokens=agent_response.get("tokens", 0),
         model=agent_response.get("model", "gpt-3.5-turbo"),
-        tokens_in=agent_response.get("tokens", 0) // 3,
-        tokens_out=agent_response.get("tokens", 0) * 2 // 3,
+        token_type="llm",
         agent_id=agent_id,
-        conversation_id=conversation_id,
-        service="agent-service",
-        metadata={
-            "streaming": request.stream,
-            "client_reference_id": request.client_reference_id,
-            "user_id": tenant_info.user_id
-        }
+        conversation_id=conversation_id
     )
     
     # Construir respuesta

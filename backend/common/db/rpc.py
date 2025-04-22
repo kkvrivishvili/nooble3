@@ -210,6 +210,75 @@ async def add_chat_history(
         raise
 
 
+async def check_conversation_exists(conversation_id: str) -> bool:
+    """
+    Verifica si una conversación existe en la base de datos.
+    
+    Args:
+        conversation_id: ID de la conversación a verificar
+        
+    Returns:
+        bool: True si la conversación existe, False en caso contrario
+    """
+    from common.db.tables import get_table_name
+    
+    supabase = get_supabase_client()
+    
+    result = await supabase.table(get_table_name("conversations")) \
+        .select("id") \
+        .eq("id", conversation_id) \
+        .execute()
+    
+    return bool(result.data)
+
+
+from ..errors import handle_errors, ErrorCode
+
+@handle_errors(error_type="service", log_traceback=True)
+async def ensure_conversation_exists(
+    tenant_id: str,
+    agent_id: str,
+    conversation_id: str,
+    title: Optional[str] = None,
+    context: Optional[Dict[str, Any]] = None,
+    client_reference_id: Optional[str] = None
+) -> str:
+    """
+    Asegura que una conversación exista o la crea.
+    
+    Esta función verifica si existe una conversación con el ID proporcionado.
+    Si no existe, la crea utilizando los parámetros proporcionados.
+    
+    Args:
+        tenant_id: ID del tenant
+        agent_id: ID del agente
+        conversation_id: ID de la conversación
+        title: Título de la conversación (opcional)
+        context: Contexto adicional (opcional)
+        client_reference_id: ID de referencia del cliente (opcional)
+        
+    Returns:
+        str: ID de la conversación (la existente o la recién creada)
+        
+    Raises:
+        ServiceError: Si hay un error al verificar o crear la conversación
+    """
+    # Verificar si existe
+    if await check_conversation_exists(conversation_id):
+        return conversation_id
+    
+    # Crear si no existe
+    result = await create_conversation(
+        tenant_id=tenant_id,
+        agent_id=agent_id,
+        title=title or f"Conversación {conversation_id[:8]}",
+        context=context or {},
+        client_reference_id=client_reference_id
+    )
+    
+    return result.get("conversation_id", conversation_id)
+
+
 async def increment_token_usage(
     tenant_id: str, 
     tokens: int,

@@ -1,16 +1,17 @@
 import logging
 import time
+import uuid
 from typing import Dict, List, Any, Optional, AsyncGenerator
 
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.tools import Tool
-from langchain_core.callbacks import CallbackManager
+from langchain_core.callbacks import CallbackManager, BaseCallbackHandler
 from langchain_core.runnables import RunnableConfig
 from langchain_core.agents import AgentExecutor, create_tool_calling_agent
 from langchain_openai import ChatOpenAI
-from common.config import get_settings
-from common.context import ContextManager, with_context
+from common.config import get_service_settings
+from common.context import ContextManager, with_context, validate_tenant_context
 from common.errors import (
     ServiceError, handle_service_error_simple, ErrorCode,
     AgentNotFoundError, AgentInactiveError, AgentExecutionError, 
@@ -18,16 +19,17 @@ from common.errors import (
 )
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
+from common.db.rpc import add_chat_history
 from common.llm.token_counters import count_tokens
 from common.tracking import track_token_usage, track_usage
 from common.cache import CacheManager, TTL_MEDIUM
 from common.utils.stream import stream_llm_response
 
-from services.callbacks import AgentCallbackHandler, StreamingCallbackHandler
+from services.callbacks import AgentCallbackHandler
 from services.tools import create_agent_tools
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
+settings = get_service_settings()
 
 @with_context(tenant=True, agent=True)
 async def get_agent_config(agent_id: str, tenant_id: str) -> Dict[str, Any]:
@@ -61,23 +63,30 @@ async def get_agent_config(agent_id: str, tenant_id: str) -> Dict[str, Any]:
             details={"agent_id": agent_id, "tenant_id": tenant_id}
         )
     
-    # Verificar propiedad del agente explícitamente 
-    # CORREGIDO: Convertir ambos ids a string para evitar problemas con tipos diferentes
+    # Verificar propiedad del agente usando validate_tenant_context
+    # en lugar de validación manual, siguiendo memoria 34a8d04b
     if str(result.data["tenant_id"]) != str(tenant_id):
         logger.warning(f"Intento de acceso a agente de otro tenant: {agent_id}")
+        # Usar función centralizada para validación consistente
+        await validate_tenant_context(tenant_id, extra_context={
+            "agent_id": agent_id,
+            "operation": "get_agent_config"
+        })
+        # Esta línea no se alcanzará si validate_tenant_context falla
+        # pero la mantenemos por seguridad
         raise ServiceError(
             message="Access denied: agent belongs to another tenant",
             status_code=403,
             error_code=ErrorCode.PERMISSION_DENIED
         )
     
-    # Guardar en caché para futuros usos (TTL de 5 minutos)
+    # Guardar en caché para futuros usos usando TTL estandarizado
     try:
         await CacheManager.set_agent_config(
             agent_id=agent_id,
             config=result.data,
             tenant_id=tenant_id,
-            ttl=300
+            ttl=TTL_MEDIUM
         )
     except Exception as cache_set_err:
         logger.debug(f"Error guardando configuración en caché: {str(cache_set_err)}")
@@ -151,7 +160,7 @@ async def execute_agent(
     
     # Seleccionar callback handler según modo
     if streaming:
-        callback_handler = StreamingCallbackHandler()
+        callback_handler = AgentCallbackHandler()
     else:
         callback_handler = AgentCallbackHandler()
     
@@ -357,14 +366,18 @@ async def stream_agent_response(
         # Obtener configuración del agente
         agent_config = await get_agent_config(agent_id, tenant_id)
         
-        # Crear un StreamingCallbackHandler
-        streaming_handler = StreamingCallbackHandler()
+        # Crear un TokenCountingHandler para conteo preciso
+        token_handler = TokenCountingHandler()
+        # Inicializar conteo de tokens de entrada
+        if hasattr(token_handler, 'on_llm_start'):
+            token_handler.on_llm_start(None, [query, agent_config.get("system_prompt", "")])
         # Modelo para conteo de tokens
         model_name = agent_config.get("llm_model", settings.default_llm_model)
         
         # Variables para acumular la respuesta completa
         full_response = ""
         message_id = str(uuid.uuid4())
+        start_time = time.time()
         
         # Streaming de la respuesta
         async for token in stream_llm_response(
@@ -374,12 +387,14 @@ async def stream_agent_response(
             conversation_id=conversation_id,
             model_name=model_name,
             system_prompt=agent_config.get("system_prompt"),
-            use_cache=True,
-            stream_handler=streaming_handler
+            use_cache=True
         ):
             try:
                 # Acumular respuesta completa
                 full_response += token
+                # Contar token en el contador personalizado
+                if hasattr(token_handler, 'on_llm_new_token'):
+                    token_handler.on_llm_new_token(token)
                 # Devolver el token
                 yield token
             except Exception as stream_error:
@@ -392,26 +407,36 @@ async def stream_agent_response(
             metadata={"streaming": True, "message_id": message_id}
         )
         
-        # Contabilizar tokens correctamente (en background)
+        # Persistir en Supabase
+        processing_time = time.time() - start_time
+        await add_chat_history(
+            conversation_id=conversation_id,
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            user_message=query,
+            assistant_message=full_response,
+            thinking="",  # No hay thinking en streaming
+            tools_used=[],
+            processing_time=processing_time
+        )
+        
+        # Contabilizar tokens usando el sistema centralizado de tracking
         input_tokens = count_tokens(query, model_name=model_name)
         output_tokens = count_tokens(full_response, model_name=model_name)
         total_tokens = input_tokens + output_tokens
         
-        await track_usage(
+        # Usar contador de tokens preciso si está disponible
+        if token_handler and hasattr(token_handler, 'get_total_tokens'):
+            total_tokens = token_handler.get_total_tokens()
+        
+        # Usar track_token_usage en lugar de track_usage para seguir estándares
+        await track_token_usage(
             tenant_id=tenant_id,
-            operation="tokens",
-            metadata={
-                "tokens": total_tokens,
-                "model": model_name,
-                "agent_id": agent_id,
-                "conversation_id": conversation_id,
-                "token_type": "llm",
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "service": "agent-service",
-                "operation_type": "chat",
-                "streaming": True
-            }
+            tokens=total_tokens,
+            model=model_name,
+            token_type="llm",
+            agent_id=agent_id,
+            conversation_id=conversation_id
         )
     except ServiceError as service_error:
         # Errores de servicio estandarizados

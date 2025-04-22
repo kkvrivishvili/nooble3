@@ -8,9 +8,9 @@ from fastapi.responses import StreamingResponse
 from common.models import PublicChatRequest, ChatResponse, ChatMessage
 from common.errors import ServiceError, handle_service_error_simple
 from common.context import with_context, Context, ContextManager
-from common.db.rpc import create_conversation, add_chat_history
-from common.tracking import track_query
-from common.config import get_settings
+from common.db.rpc import create_conversation, add_chat_history, ensure_conversation_exists
+from common.tracking import track_query, track_token_usage
+from common.config import get_service_settings
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
 
@@ -19,7 +19,7 @@ from services.public import verify_public_tenant, register_public_session
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-settings = get_settings()
+settings = get_service_settings()
 
 @router.post("/public/{tenant_slug}/chat/{agent_id}", response_model=ChatResponse, tags=["Chat"])
 @handle_service_error_simple
@@ -86,6 +86,16 @@ async def public_chat_with_agent(
             agent_id=agent_id
         )
         
+        # Asegurar que la conversación exista en Supabase
+        await ensure_conversation_exists(
+            tenant_id=tenant_info.tenant_id,
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+            title=f"Conversación pública - {tenant_info.name}",
+            context=request.context,
+            client_reference_id=session_id
+        )
+        
         # Crear un ContextManager para esta sesión
         context_manager = ContextManager.get_or_create(
             tenant_id=tenant_info.tenant_id,
@@ -125,23 +135,15 @@ async def public_chat_with_agent(
         # Calcular tiempo de procesamiento
         processing_time = time.time() - start_time
         
-        # Tracking de uso en segundo plano
+        # Tracking de uso usando track_token_usage centralizado
         background_tasks.add_task(
-            track_query,
+            track_token_usage,
             tenant_id=tenant_info.tenant_id,
-            operation_type="public_chat",
+            tokens=agent_response.get("tokens", 0),
             model=agent_response.get("model", "gpt-3.5-turbo"),
-            tokens_in=agent_response.get("tokens", 0) // 3,
-            tokens_out=agent_response.get("tokens", 0) * 2 // 3,
+            token_type="llm",
             agent_id=agent_id,
-            conversation_id=conversation_id,
-            service="agent-service",
-            metadata={
-                "streaming": request.stream,
-                "session_id": session_id,
-                "public_access": True,
-                "tenant_slug": tenant_slug
-            }
+            conversation_id=conversation_id
         )
         
         # Construir respuesta

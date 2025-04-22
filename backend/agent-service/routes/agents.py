@@ -43,7 +43,7 @@ async def create_agent(
             request.metadata = request.metadata or {}
             request.metadata["model_downgraded"] = True
     
-    # Generar ID para el nuevo agente
+    # Generar ID para el nuevo agente con formato correcto
     agent_id = f"agent_{uuid.uuid4().hex[:8]}"
     
     # Validar formato de ID
@@ -312,6 +312,14 @@ async def update_agent(
         await CacheManager.delete(data_type="agent_config", resource_id=agent_id, tenant_id=tenant_id)
         await CacheManager.delete(data_type="agent_list", resource_id=tenant_id, tenant_id=tenant_id)
         await CacheManager.invalidate(data_type="agent_response", resource_id=agent_id, tenant_id=tenant_id)
+        
+        # Volver a establecer la caché con los datos actualizados usando la API especializada
+        await CacheManager.set_agent_config(
+            agent_id=agent_id,
+            config=updated_agent,
+            tenant_id=tenant_id,
+            ttl=TTL_MEDIUM
+        )
         
         # Invalidar caché de configuraciones para este tenant
         invalidate_settings_cache(tenant_id)

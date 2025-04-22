@@ -3,6 +3,7 @@ import logging
 from typing import List, Dict, Any, Optional
 
 from langchain_core.callbacks import BaseCallbackHandler
+from common.llm.token_counters import count_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,38 @@ class AgentCallbackHandler(BaseCallbackHandler):
         """Retorna las fuentes extraídas."""
         return self.sources
 
+
+class TokenCountingHandler(BaseCallbackHandler):
+    """Callback handler para contar tokens de entrada y salida con precisión."""
+    
+    def __init__(self):
+        super().__init__()
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self._prompts = []
+    
+    def on_llm_start(self, serialized, prompts, **kwargs):
+        """Cuenta tokens de entrada al iniciar el LLM."""
+        self._prompts = prompts
+        # Contar tokens de entrada usando la función centralizada
+        self.input_tokens = sum(count_tokens(p) for p in prompts)
+    
+    def on_llm_new_token(self, token: str, **kwargs):
+        """Cuenta cada token de salida."""
+        # Incrementa contador por cada token generado
+        self.output_tokens += 1
+    
+    def get_total_tokens(self):
+        """Retorna el total de tokens utilizados."""
+        return self.input_tokens + self.output_tokens
+    
+    def get_counts(self):
+        """Retorna un diccionario con el conteo de tokens."""
+        return {
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "total_tokens": self.input_tokens + self.output_tokens
+        }
 
 class StreamingCallbackHandler(BaseCallbackHandler):
     """Manejador de callback para streaming de respuestas."""
