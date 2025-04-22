@@ -34,7 +34,33 @@ settings = get_service_settings()
 @with_context(tenant=True, agent=True)
 @handle_errors(error_type="service", log_traceback=True)
 async def get_agent_config(agent_id: str, tenant_id: str) -> Dict[str, Any]:
-    """Obtiene la configuración de un agente desde Supabase."""
+    """
+    Obtiene la configuración de un agente siguiendo el patrón Cache-Aside optimizado.
+    
+    1. Verificar caché primero
+    2. Si no está en caché, obtener de Supabase
+    3. Almacenar en caché para futuras consultas
+    
+    Args:
+        agent_id: ID del agente
+        tenant_id: ID del tenant
+        
+    Returns:
+        Dict[str, Any]: Configuración del agente
+        
+    Raises:
+        AgentNotFoundError: Si no se encuentra el agente
+        ServiceError: Si hay un error de permisos o servicio
+    """
+    # Métricas para seguimiento de rendimiento
+    start_time = time.time()
+    metrics = {
+        "source": None,
+        "agent_id": agent_id
+    }
+    
+    # 1. VERIFICAR CACHÉ - Paso 1 del patrón Cache-Aside
+    cache_check_start = time.time()
     
     # Verificar caché primero con manejo de errores
     try:
@@ -42,57 +68,123 @@ async def get_agent_config(agent_id: str, tenant_id: str) -> Dict[str, Any]:
             agent_id=agent_id,
             tenant_id=tenant_id
         )
+        
+        cache_check_time = time.time() - cache_check_start
+        
         if cached_config:
             logger.debug(f"Configuración de agente {agent_id} obtenida de caché")
+            
+            # Registrar acierto y latencia de caché
+            await track_cache_hit("agent_config", tenant_id, True)
+            await track_cache_metric(
+                data_type="agent_config",
+                tenant_id=tenant_id,
+                source="cache",
+                latency_ms=cache_check_time * 1000
+            )
+            
+            metrics["source"] = "cache"
+            metrics["latency_ms"] = cache_check_time * 1000
             return cached_config
     except Exception as cache_err:
         logger.debug(f"Error accediendo a caché de agente: {str(cache_err)}")
     
+    # Registrar fallo de caché
+    await track_cache_hit("agent_config", tenant_id, False)
+    
+    # 2. OBTENER DE SUPABASE - Paso 2 del patrón Cache-Aside
+    db_start_time = time.time()
+    
     # Si no está en caché, obtener de Supabase
     supabase = get_supabase_client()
-    result = await supabase.table(get_table_name("agent_configs")) \
-        .select("*") \
-        .eq("tenant_id", tenant_id) \
-        .eq("agent_id", agent_id) \
-        .single() \
-        .execute()
+    table_name = get_table_name("agent_configs")
     
-    if not result.data:
-        logger.warning(f"Agente {agent_id} no encontrado para tenant {tenant_id}")
-        raise AgentNotFoundError(
-            message=f"Agent with ID {agent_id} not found",
+    try:
+        result = await supabase.table(table_name) \
+            .select("*") \
+            .eq("tenant_id", tenant_id) \
+            .eq("agent_id", agent_id) \
+            .single() \
+            .execute()
+        
+        db_time = time.time() - db_start_time
+        
+        # Registrar latencia de Supabase
+        await track_cache_metric(
+            data_type="agent_config",
+            tenant_id=tenant_id,
+            source="supabase",
+            latency_ms=db_time * 1000
+        )
+        
+        if not result.data:
+            logger.warning(f"Agente {agent_id} no encontrado para tenant {tenant_id}")
+            metrics["source"] = "not_found"
+            raise AgentNotFoundError(
+                message=f"Agent with ID {agent_id} not found",
+                details={"agent_id": agent_id, "tenant_id": tenant_id}
+            )
+        
+        # Verificar propiedad del agente usando validate_tenant_context
+        if str(result.data["tenant_id"]) != str(tenant_id):
+            logger.warning(f"Intento de acceso a agente de otro tenant: {agent_id}")
+            # Usar función centralizada para validación consistente
+            await Context(tenant_id).validate_tenant_context(extra_context={
+                "agent_id": agent_id,
+                "operation": "get_agent_config"
+            })
+            # Esta línea no se alcanzará si validate_tenant_context falla
+            # pero la mantenemos por seguridad
+            metrics["source"] = "permission_denied"
+            raise ServiceError(
+                message="Access denied: agent belongs to another tenant",
+                status_code=403,
+                error_code=ErrorCode.PERMISSION_DENIED
+            )
+        
+        # 3. ALMACENAR EN CACHÉ - Paso 3 del patrón Cache-Aside
+        try:
+            # Estimar tamaño para métricas (aproximado)
+            try:
+                size_estimate = sys.getsizeof(json.dumps(result.data))
+            except:
+                size_estimate = 2000  # Valor estimado por defecto
+            
+            # Guardar en caché para futuros usos usando TTL estandarizado
+            await CacheManager.set_agent_config(
+                agent_id=agent_id,
+                config=result.data,
+                tenant_id=tenant_id,
+                ttl=CacheManager.ttl_standard  # 1 hora
+            )
+            
+            # Registrar tamaño en caché
+            await track_cache_size("agent_config", tenant_id, size_estimate)
+            logger.debug(f"Configuración de agente {agent_id} almacenada en caché")
+        except Exception as cache_set_err:
+            logger.debug(f"Error guardando configuración en caché: {str(cache_set_err)}")
+        
+        metrics["source"] = "supabase"
+        metrics["latency_ms"] = db_time * 1000
+        return result.data
+        
+    except Exception as e:
+        # Si es un error ya tipado (AgentNotFoundError), propagarlo
+        if isinstance(e, AgentNotFoundError):
+            raise
+        
+        logger.error(f"Error obteniendo configuración de agente: {str(e)}")
+        metrics["source"] = "error"
+        metrics["error"] = str(e)
+        raise ServiceError(
+            message=f"Error retrieving agent configuration: {str(e)}",
+            error_code=ErrorCode.DATABASE_ERROR,
             details={"agent_id": agent_id, "tenant_id": tenant_id}
         )
-    
-    # Verificar propiedad del agente usando validate_tenant_context
-    # en lugar de validación manual, siguiendo memoria 34a8d04b
-    if str(result.data["tenant_id"]) != str(tenant_id):
-        logger.warning(f"Intento de acceso a agente de otro tenant: {agent_id}")
-        # Usar función centralizada para validación consistente
-        await Context(tenant_id).validate_tenant_context(extra_context={
-            "agent_id": agent_id,
-            "operation": "get_agent_config"
-        })
-        # Esta línea no se alcanzará si validate_tenant_context falla
-        # pero la mantenemos por seguridad
-        raise ServiceError(
-            message="Access denied: agent belongs to another tenant",
-            status_code=403,
-            error_code=ErrorCode.PERMISSION_DENIED
-        )
-    
-    # Guardar en caché para futuros usos usando TTL estandarizado
-    try:
-        await CacheManager.set_agent_config(
-            agent_id=agent_id,
-            config=result.data,
-            tenant_id=tenant_id,
-            ttl=CacheManager.ttl_standard
-        )
-    except Exception as cache_set_err:
-        logger.debug(f"Error guardando configuración en caché: {str(cache_set_err)}")
-    
-    return result.data
+    finally:
+        # Registrar tiempo total
+        metrics["total_time_ms"] = (time.time() - start_time) * 1000
+        logger.debug(f"Métricas de agent_config: {json.dumps(metrics)}")
 
 @with_context(tenant=True, agent=True, conversation=True)
 @handle_errors(error_type="service", log_traceback=True)
@@ -474,3 +566,41 @@ async def stream_agent_response(
             pass
         
         yield error_message
+
+async def track_cache_hit(data_type: str, tenant_id: str, hit: bool):
+    """Registra un acierto o fallo de caché."""
+    metric_type = "cache_hit" if hit else "cache_miss"
+    try:
+        await CacheManager.increment_counter(
+            counter_type=metric_type,
+            amount=1,
+            resource_id=data_type,
+            tenant_id=tenant_id
+        )
+    except Exception as e:
+        logger.debug(f"Error al registrar métrica de caché: {str(e)}")
+
+async def track_cache_metric(data_type: str, tenant_id: str, source: str, latency_ms: float):
+    """Registra la latencia de recuperación de datos."""
+    try:
+        await CacheManager.increment_counter(
+            counter_type="latency",
+            amount=int(latency_ms),  # Convertir a entero para contador
+            resource_id=f"{data_type}_{source}",  # cache, supabase, generation
+            tenant_id=tenant_id,
+            metadata={"latency_ms": latency_ms}
+        )
+    except Exception as e:
+        logger.debug(f"Error al registrar métrica de latencia: {str(e)}")
+
+async def track_cache_size(data_type: str, tenant_id: str, size_bytes: int):
+    """Registra el tamaño de los datos almacenados en caché."""
+    try:
+        await CacheManager.increment_counter(
+            counter_type="cache_size",
+            amount=size_bytes,
+            resource_id=data_type,
+            tenant_id=tenant_id
+        )
+    except Exception as e:
+        logger.debug(f"Error al registrar métrica de tamaño: {str(e)}")
