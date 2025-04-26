@@ -11,6 +11,7 @@ import time
 from typing import Optional, Dict, Any, List, Callable
 
 from common.context import Context, with_context
+from tenacity import retry, stop_after_attempt, wait_exponential
 from common.errors import handle_errors, ServiceError, ErrorCode
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
@@ -26,6 +27,7 @@ from llama_index.vector_stores.supabase import SupabaseVectorStore
 logger = logging.getLogger(__name__)
 
 @handle_errors(error_type="service", log_traceback=True)
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 @with_context(tenant=True, validate_tenant=True)
 @track_operation(operation_name="get_vector_store", operation_type="query")
 async def get_vector_store_for_collection(

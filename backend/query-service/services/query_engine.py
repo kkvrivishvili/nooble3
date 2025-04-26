@@ -7,7 +7,7 @@ from langchain_core.callbacks import CallbackManager
 from langchain_core.output_parsers import StrOutputParser
 from langchain.chains.query_constructor.base import QueryConstructorChain
 from langchain.schema import Document
-from langchain.retrievers import RetrieverQueryEngine
+from llama_index.core.query_engine import RetrieverQueryEngine
 from llama_index.callbacks import LlamaDebugHandler
 
 from common.config import get_settings
@@ -257,9 +257,13 @@ async def create_query_engine(
     
     try:
         # Crear handler para debugging y tracking
+        from common.llm.callbacks import TokenCountingHandler, LatencyTrackingHandler
+        from llama_index.core.callbacks import CallbackManager
         debug_handler = LlamaDebugHandler()
-        callback_manager = CallbackManager([debug_handler])
-        
+        callback_manager = CallbackManager([
+            debug_handler, TokenCountingHandler(), LatencyTrackingHandler()
+        ])
+         
         # Obtener vector store para la colección
         vector_store = await get_vector_store_for_collection(
             tenant_id=tenant_id,

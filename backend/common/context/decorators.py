@@ -69,7 +69,8 @@ class Context:
         self.collection_id = collection_id
         self.validate_tenant = validate_tenant
         self.tokens = ContextTokens()
-        self.tokens_with_names: List[Tuple[contextvars.Token, str]] = []
+        self.tokens_with_names: List[Tuple[contextvars.Token, str]] = {}
+        self._metrics = {}
     
     def __enter__(self):
         # Si se solicita validación de tenant pero no se proporciona uno específico,
@@ -151,6 +152,10 @@ class Context:
     def get_collection_id(self) -> Optional[str]:
         """Obtiene el collection_id del contexto actual"""
         return current_collection_id.get()
+
+    def add_metric(self, name: str, value: Any):
+        """Registra métricas en el contexto"""
+        self._metrics[name] = value
 
 # === DECORADORES PARA FUNCIONES ASÍNCRONAS ===
 
