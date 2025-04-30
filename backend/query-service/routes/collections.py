@@ -30,9 +30,7 @@ logger = logging.getLogger(__name__)
 @with_context(tenant=True)
 @router.get(
     "/collections",
-    response_model=CollectionsListResponse,
-    response_model_exclude_none=True,
-    response_model_exclude={"ctx"},
+    response_model=None,
     summary="Listar colecciones",
     description="Obtiene la lista de colecciones disponibles para el tenant"
 )
@@ -84,9 +82,7 @@ async def list_collections(
 @with_context(tenant=True)
 @router.post(
     "/collections",
-    response_model=CollectionCreationResponse,
-    response_model_exclude_none=True,
-    response_model_exclude={"ctx"},
+    response_model=None,
     summary="Crear colección",
     description="Crea una nueva colección para organizar documentos"
 )
@@ -154,9 +150,7 @@ async def create_collection(
 @with_context(tenant=True, collection=True)
 @router.put(
     "/collections/{collection_id}",
-    response_model=CollectionUpdateResponse,
-    response_model_exclude_none=True,
-    response_model_exclude={"ctx"},
+    response_model=None,
     summary="Actualizar colección",
     description="Modifica una colección existente"
 )
@@ -247,11 +241,9 @@ async def update_collection(
 @with_context(tenant=True, collection=True)
 @router.delete(
     "/collections/{collection_id}",
-    response_model=DeleteCollectionResponse,
-    response_model_exclude_none=True,
-    response_model_exclude={"ctx"},
+    response_model=None,
     summary="Eliminar colección",
-    description="Elimina una colección y todos sus documentos"
+    description="Elimina una colección existente y todos sus documentos"
 )
 @handle_errors(error_type="simple", log_traceback=False)
 async def delete_collection(
@@ -329,9 +321,7 @@ async def delete_collection(
 @with_context(tenant=True, collection=True)
 @router.get(
     "/collections/{collection_id}/stats",
-    response_model=CollectionStatsResponse,
-    response_model_exclude_none=True,
-    response_model_exclude={"ctx"},
+    response_model=None,
     summary="Estadísticas de colección",
     description="Obtiene estadísticas detalladas de una colección"
 )

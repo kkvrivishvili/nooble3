@@ -27,13 +27,13 @@ service_start_time = time.time()
 
 @router.get(
     "/health",
-    response_model=HealthResponse,
+    response_model=None,
     summary="Estado del servicio",
     description="Verifica el estado operativo del servicio"
 )
 @router.get(
     "/status",
-    response_model=HealthResponse,
+    response_model=None,
     summary="Estado del servicio (alias)",
     description="Alias para /health para mantener compatibilidad entre servicios"
 )
@@ -73,8 +73,14 @@ async def health_check(ctx: Context = None) -> HealthResponse:
     )
 
 @router.get(
+    "/ready",
+    response_model=None,
+    summary="Estado de disponibilidad",
+    description="Verifica si el servicio está listo para recibir solicitudes"
+)
+@router.get(
     "/status",
-    response_model=ServiceStatusResponse,
+    response_model=None,
     summary="Estado detallado",
     description="Proporciona información detallada sobre el estado del servicio"
 )

@@ -51,6 +51,7 @@ class InternalSearchRequest(BaseModel):
 
 @router.post(
     "/internal/query",
+    response_model=None,
     summary="Consulta RAG interna",
     description="Endpoint para uso exclusivo del Agent Service"
 )
@@ -85,10 +86,10 @@ async def internal_query(
         }
     """
     # Obtener tenant_id del contexto propagado (con fallback a la solicitud)
-    tenant_id = ctx.get_tenant_id() or request.tenant_id
-    agent_id = ctx.get_agent_id() or request.agent_id
-    conversation_id = ctx.get_conversation_id() or request.conversation_id
-    collection_id = ctx.get_collection_id() or request.collection_id
+    tenant_id = ctx.get_tenant_id() if ctx else request.tenant_id
+    agent_id = ctx.get_agent_id() if ctx else request.agent_id
+    conversation_id = ctx.get_conversation_id() if ctx else request.conversation_id
+    collection_id = ctx.get_collection_id() if ctx else request.collection_id
     
     # Obtener tiempo de inicio para medición
     start_time = time.time()
@@ -145,8 +146,9 @@ async def internal_query(
             }
         )
         
-        # Construir respuesta en formato estandarizado
+        # Construir estructura de datos para la respuesta
         response_data = {
+            "query": request.query,
             "response": result["response"]
         }
         
@@ -154,6 +156,8 @@ async def internal_query(
         if request.include_sources:
             response_data["sources"] = sources
         
+        # Devolver respuesta en formato estandarizado, siguiendo el mismo patrón
+        # que InternalEmbeddingResponse para mantener consistencia entre servicios
         return {
             "success": True,
             "message": "Consulta RAG procesada correctamente",
@@ -234,6 +238,7 @@ async def internal_query(
 
 @router.post(
     "/internal/search",
+    response_model=None,
     summary="Búsqueda interna para otros servicios",
     description="Endpoint para búsqueda rápida entre documentos, para uso exclusivo de otros servicios"
 )
@@ -290,13 +295,12 @@ async def internal_search(
         # Calcular tiempo de procesamiento
         processing_time = time.time() - start_time
         
-        # Devolver respuesta en formato estandarizado
+        # Devolver respuesta en formato estandarizado siguiendo el mismo patrón
+        # que InternalEmbeddingResponse para consistencia entre servicios
         return {
             "success": True,
             "message": "Búsqueda procesada correctamente",
-            "data": {
-                "results": formatted_results
-            },
+            "data": formatted_results,  # Devolver directamente los resultados como data
             "metadata": {
                 "processing_time": processing_time,
                 "count": len(formatted_results),
