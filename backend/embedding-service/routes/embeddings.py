@@ -7,7 +7,11 @@ import time
 from typing import List, Dict, Any, Optional, Tuple
 from fastapi import APIRouter, Depends, Body, HTTPException
 
-from common.models.base import TenantInfo
+from common.models import (
+    TenantInfo, EmbeddingRequest, EmbeddingResponse, 
+    BatchEmbeddingRequest, BatchEmbeddingResponse, TextItem,
+    FailedEmbeddingItem, InternalEmbeddingResponse
+)
 from common.auth import verify_tenant, validate_model_access
 from common.context import with_context, Context
 from common.errors import (
@@ -17,13 +21,8 @@ from common.errors import (
 from common.config import get_settings
 from common.config.tiers import get_available_embedding_models, get_available_llm_models
 from common.tracking import track_token_usage, estimate_prompt_tokens
-from common.cache import generate_resource_id_hash  # Importación actualizada
+from common.cache import generate_resource_id_hash
 
-from models.embeddings import (
-    EmbeddingRequest, EmbeddingResponse, 
-    BatchEmbeddingRequest, BatchEmbeddingResponse,
-    InternalEmbeddingResponse, BatchEmbeddingItem, BatchEmbeddingResult
-)
 from services.embedding_provider import CachedEmbeddingProvider
 
 router = APIRouter()
@@ -70,7 +69,7 @@ async def _validate_and_get_model(tenant_info: TenantInfo, requested_model: str,
         return validated_model, {"model_downgraded": True, "requested_model": requested_model}
 
 @with_context(tenant=True, agent=True, conversation=True, collection=True)
-@router.post("/embeddings", response_model=EmbeddingResponse, response_model_exclude_none=True, response_model_exclude={"ctx"})
+@router.post("/embeddings", response_model=None, response_model_exclude_none=True)
 @handle_errors(error_type="simple", log_traceback=False)
 async def generate_embeddings(
     request: EmbeddingRequest,
@@ -141,10 +140,13 @@ async def generate_embeddings(
         logger.info(f"Generados {len(embeddings)} embeddings en {processing_time:.2f}s con modelo {model_name}")
         
         return EmbeddingResponse(
-            data=embeddings,
+            embeddings=embeddings,
             model=model_name,
+            dimensions=len(embeddings[0]) if embeddings else 0,
             collection_id=collection_id,
-            metadata=metadata
+            processing_time=processing_time,
+            cached_count=embedding_provider.cached_count,
+            total_tokens=total_tokens
         )
         
     except Exception as e:
@@ -162,7 +164,7 @@ async def generate_embeddings(
         )
 
 @with_context(tenant=True, agent=True, conversation=True, collection=True)
-@router.post("/embeddings/batch", response_model=BatchEmbeddingResponse, response_model_exclude_none=True, response_model_exclude={"ctx"})
+@router.post("/embeddings/batch", response_model=None, response_model_exclude_none=True)
 @handle_errors(error_type="simple", log_traceback=False)
 async def batch_generate_embeddings(
     request: BatchEmbeddingRequest,
@@ -210,7 +212,7 @@ async def batch_generate_embeddings(
     for i, item in enumerate(request.items):
         if not item.text or not item.text.strip():
             # Registrar item fallido debido a texto vacío
-            failed_items.append(BatchEmbeddingResult(
+            failed_items.append(FailedEmbeddingItem(
                 index=i,
                 text=item.text,
                 metadata=item.metadata or {},
@@ -263,10 +265,15 @@ async def batch_generate_embeddings(
         
         # Construir respuesta asociando embeddings con sus metadatos originales
         result_embeddings = []
+        all_embeddings = []
+        items_with_metadata = []
+        
         for orig_idx, embedding in zip(original_indices, embeddings):
             item = request.items[orig_idx]
-            result_embeddings.append(BatchEmbeddingItem(
-                embedding=embedding,
+            # Añadir el embedding a la lista principal de embeddings
+            all_embeddings.append(embedding)
+            # Añadir el item con su metadata a la lista de items
+            items_with_metadata.append(TextItem(
                 text=item.text,
                 metadata=item.metadata or {}
             ))
@@ -275,9 +282,13 @@ async def batch_generate_embeddings(
         logger.info(f"Generados {len(embeddings)} embeddings en {processing_time:.2f}s con modelo {model_name}")
         
         return BatchEmbeddingResponse(
-            data=result_embeddings,
-            failed_items=failed_items,
+            embeddings=all_embeddings,
+            items=items_with_metadata,
             model=model_name,
+            dimensions=len(embeddings[0]) if embeddings else 0,
+            processing_time=processing_time,
+            cached_count=embedding_provider.cached_count,
+            total_tokens=total_tokens,
             collection_id=collection_id
         )
         

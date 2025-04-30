@@ -4,30 +4,18 @@ Modelos específicos para el servicio de embeddings.
 
 from typing import Dict, Any, List, Optional
 from uuid import UUID
-from pydantic import Field, BaseModel
+from pydantic import Field
 
-# Importamos EmbeddingRequest y EmbeddingResponse desde common.models para mantener consistencia
-from common.models.responses import EmbeddingRequest, EmbeddingResponse, BatchEmbeddingRequest, BatchEmbeddingResponse, TextItem
+from .base import BaseModel as CommonBaseModel, BaseResponse
 
-class BatchEmbeddingItem(BaseModel):
-    """Item individual en un lote de procesamiento de embeddings."""
+class FailedEmbeddingItem(CommonBaseModel):
+    """Item que falló durante el procesamiento de embeddings."""
+    index: int
     text: str
     metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
-    embedding: Optional[List[float]] = None
-    error: Optional[str] = None
+    error: str
 
-
-class BatchEmbeddingResult(BaseModel):
-    """Resultado del procesamiento de un lote de embeddings."""
-    items: List[BatchEmbeddingItem]
-    model: str
-    dimensions: int
-    processing_time: float
-    cached_count: int = 0
-    total_tokens: Optional[int] = None
-
-
-class InternalEmbeddingResponse(BaseModel):
+class InternalEmbeddingResponse(CommonBaseModel):
     """Formato de respuesta para el endpoint interno de embedding."""
     success: bool
     message: str

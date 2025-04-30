@@ -11,7 +11,10 @@ from typing import List, Optional
 from fastapi import APIRouter, UploadFile, File, Form, Depends, Query, Body
 from pydantic import BaseModel, Field
 
-from common.models import TenantInfo, FileUploadResponse, BatchJobResponse
+from common.models import (
+    TenantInfo, FileUploadResponse, BatchJobResponse, DocumentUploadMetadata,
+    UrlIngestionRequest, TextIngestionRequest, BatchUrlsRequest
+)
 from common.errors import (
     handle_errors, DocumentProcessingError, ValidationError, ServiceError, ErrorCode
 )
@@ -23,7 +26,6 @@ from common.config import get_settings
 from common.config.tiers import get_tier_limits
 from common.db.storage import upload_to_storage
 
-# Importar los módulos actualizados con LlamaIndex
 from services.llama_extractors import process_upload_with_llama_index
 from services.queue import queue_document_processing_job
 from services.storage import upload_to_storage
@@ -34,19 +36,10 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-class DocumentUploadMetadata(BaseModel):
-    """Metadatos para carga de documentos."""
-    title: Optional[str] = None
-    description: Optional[str] = None
-    collection_id: str
-    tags: Optional[List[str]] = None
-    source: Optional[str] = None
-    custom_metadata: Optional[dict] = None
-
 @with_context(tenant=True, collection=True)
 @router.post(
     "/upload",
-    response_model=FileUploadResponse,
+    response_model=None,
     response_model_exclude_none=True,
     response_model_exclude={"ctx"},
     summary="Cargar documento",
@@ -195,17 +188,10 @@ async def upload_document(
             details=error_context
         )
 
-class UrlIngestionRequest(BaseModel):
-    url: str
-    collection_id: str
-    title: Optional[str] = None
-    description: Optional[str] = None
-    tags: Optional[List[str]] = None
-
 @with_context(tenant=True, collection=True)
 @router.post(
     "/ingest-url",
-    response_model=FileUploadResponse,
+    response_model=None,
     response_model_exclude_none=True,
     response_model_exclude={"ctx"},
     summary="Ingerir contenido de URL",
@@ -302,11 +288,11 @@ class TextIngestionRequest(BaseModel):
 @with_context(tenant=True, collection=True)
 @router.post(
     "/ingest-text",
-    response_model=FileUploadResponse,
+    response_model=None,
     response_model_exclude_none=True,
     response_model_exclude={"ctx"},
-    summary="Ingerir texto plano",
-    description="Procesa y genera embeddings para texto plano"
+    summary="Ingerir texto",
+    description="Ingiere un texto plano proporcionado directamente"
 )
 @handle_errors(error_type="simple", log_traceback=False)
 async def ingest_text(
@@ -398,11 +384,11 @@ class BatchUrlsRequest(BaseModel):
 @with_context(tenant=True, collection=True)
 @router.post(
     "/batch-urls",
-    response_model=BatchJobResponse,
+    response_model=None,
     response_model_exclude_none=True,
     response_model_exclude={"ctx"},
     summary="Procesar lote de URLs",
-    description="Procesa un lote de URLs en segundo plano"
+    description="Ingiere contenido de múltiples URLs en una colección"
 )
 @handle_errors(error_type="simple", log_traceback=False)
 async def batch_process_urls(

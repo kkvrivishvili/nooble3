@@ -2,13 +2,16 @@
 Modelos de datos específicos para el servicio de embeddings.
 """
 
-from .embeddings import (
-    EmbeddingRequest, BatchEmbeddingItem, BatchEmbeddingResult,
-    InternalEmbeddingResponse, BatchEmbeddingResult
+# Importar desde common.models para mantener compatibilidad
+from common.models import (
+    EmbeddingRequest, EmbeddingResponse,
+    BatchEmbeddingRequest, BatchEmbeddingResponse, 
+    FailedEmbeddingItem, InternalEmbeddingResponse, TextItem
 )
 
 # Re-exportar clases importantes
 __all__ = [
-    'EmbeddingRequest', 'BatchEmbeddingItem', 'BatchEmbeddingResult',
-    'InternalEmbeddingResponse', 'BatchEmbeddingResult'
+    'EmbeddingRequest', 'EmbeddingResponse',
+    'BatchEmbeddingRequest', 'BatchEmbeddingResponse',
+    'FailedEmbeddingItem', 'InternalEmbeddingResponse', 'TextItem'
 ]

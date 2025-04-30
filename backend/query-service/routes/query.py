@@ -28,7 +28,7 @@ settings = get_settings()
 @with_context(tenant=True, collection=True)
 @router.post(
     "/collections/{collection_id}/query",
-    response_model=QueryResponse,
+    response_model=None,
     response_model_exclude_none=True,
     response_model_exclude={"ctx"},
     summary="Consultar colección",
@@ -117,7 +117,6 @@ async def query_collection(
         
         # Construir respuesta
         return QueryResponse(
-            success=True,
             query=request.query,
             response=result["response"],
             sources=result["sources"],
@@ -147,7 +146,7 @@ async def query_collection(
 @with_context(tenant=True, collection=True)
 @router.post(
     "/query",
-    response_model=QueryResponse,
+    response_model=None,
     response_model_exclude_none=True,
     response_model_exclude={"ctx"},
     summary="Consulta general",
