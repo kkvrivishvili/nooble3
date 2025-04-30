@@ -64,7 +64,7 @@ class InternalSearchRequest(BaseModel):
 async def internal_query(
     request: InternalQueryRequest = Body(...),
     ctx: Context = None
-):
+) -> Dict[str, Any]:
     """
     Procesa una consulta RAG para uso interno del Agent Service.
     
@@ -250,7 +250,7 @@ async def internal_query(
 async def internal_search(
     request: InternalSearchRequest = Body(...),
     ctx: Context = None
-):
+) -> Dict[str, Any]:
     """
     Procesa una búsqueda rápida para uso interno de otros servicios.
     Devuelve documentos relevantes sin generar una respuesta.

@@ -8,10 +8,11 @@ from fastapi import APIRouter
 
 from common.models import HealthResponse
 from common.errors import handle_errors
-from common.context import with_context, Context
+from common.context import fastapi_context, Context
 from common.config import get_settings
 from common.cache.manager import CacheManager
-from common.db.supabase import get_supabase_client, get_table_name
+from common.db.supabase import get_supabase_client
+from common.db.tables import get_table_name
 from common.utils.http import check_service_health
 
 router = APIRouter()
@@ -19,8 +20,8 @@ logger = logging.getLogger(__name__)
 
 @router.get("/health", response_model=HealthResponse)
 @router.get("/status", response_model=HealthResponse)  # Alias para compatibilidad con agent-service
-@with_context(tenant=False)
 @handle_errors(error_type="simple", log_traceback=False)
+@fastapi_context(tenant=False)
 async def get_service_status(ctx: Context = None) -> HealthResponse:
     """
     Verifica el estado del servicio y sus dependencias críticas.

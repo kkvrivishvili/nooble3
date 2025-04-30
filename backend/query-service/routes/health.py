@@ -79,7 +79,7 @@ async def health_check(ctx: Context = None) -> HealthResponse:
     description="Verifica si el servicio está listo para recibir solicitudes"
 )
 @router.get(
-    "/status",
+    "/status/detailed",
     response_model=None,
     summary="Estado detallado",
     description="Proporciona información detallada sobre el estado del servicio"

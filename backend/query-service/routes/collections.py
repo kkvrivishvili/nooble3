@@ -22,18 +22,19 @@ from common.context import with_context, Context
 from common.auth.tenant import TenantInfo, verify_tenant
 from common.config import get_settings
 from common.cache import CacheManager, invalidate_document_update
-from common.db.supabase import get_supabase_client, get_tenant_collections, get_table_name
+from common.db.supabase import get_supabase_client, get_table_name
+from common.db.tables import get_tenant_collections
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-@with_context(tenant=True)
 @router.get(
     "/collections",
     response_model=None,
     summary="Listar colecciones",
     description="Obtiene la lista de colecciones disponibles para el tenant"
 )
+@with_context(tenant=True)
 @handle_errors(error_type="simple", log_traceback=False)
 async def list_collections(
     tenant_info: TenantInfo = Depends(verify_tenant),
@@ -79,13 +80,13 @@ async def list_collections(
             details={"tenant_id": tenant_info.tenant_id}
         )
 
-@with_context(tenant=True)
 @router.post(
     "/collections",
     response_model=None,
     summary="Crear colección",
     description="Crea una nueva colección para organizar documentos"
 )
+@with_context(tenant=True)
 @handle_errors(error_type="simple", log_traceback=False)
 async def create_collection(
     name: str,
@@ -147,13 +148,13 @@ async def create_collection(
             error_code="COLLECTION_CREATION_ERROR"
         )
 
-@with_context(tenant=True, collection=True)
 @router.put(
     "/collections/{collection_id}",
     response_model=None,
     summary="Actualizar colección",
     description="Modifica una colección existente"
 )
+@with_context(tenant=True, collection=True)
 @handle_errors(error_type="simple", log_traceback=False)
 async def update_collection(
     collection_id: str,
@@ -238,13 +239,13 @@ async def update_collection(
             error_code="COLLECTION_UPDATE_ERROR"
         )
 
-@with_context(tenant=True, collection=True)
 @router.delete(
     "/collections/{collection_id}",
     response_model=None,
     summary="Eliminar colección",
     description="Elimina una colección existente y todos sus documentos"
 )
+@with_context(tenant=True, collection=True)
 @handle_errors(error_type="simple", log_traceback=False)
 async def delete_collection(
     collection_id: str,
@@ -318,13 +319,13 @@ async def delete_collection(
             error_code="COLLECTION_DELETE_ERROR"
         )
 
-@with_context(tenant=True, collection=True)
 @router.get(
     "/collections/{collection_id}/stats",
     response_model=None,
     summary="Estadísticas de colección",
     description="Obtiene estadísticas detalladas de una colección"
 )
+@with_context(tenant=True, collection=True)
 @handle_errors(error_type="simple", log_traceback=False)
 async def get_collection_stats(
     collection_id: str,

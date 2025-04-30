@@ -44,9 +44,9 @@ __all__ = [
     'extract_context_from_headers', 'add_context_to_headers', 'setup_context_from_headers',
     'run_public_context',
     
-    # Validaciones explícitas
+    # Validación
     'validate_current_tenant',
     
-    # Para compatibilidad
+    # Helpers
     'asynccontextmanager'
 ]

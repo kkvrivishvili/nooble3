@@ -17,13 +17,13 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+@router.get("/models", response_model=None, response_model_exclude_none=True, response_model_exclude={"ctx"})
 @with_context(tenant=True)
-@router.get("/models", response_model=ModelListResponse, response_model_exclude_none=True, response_model_exclude={"ctx"})
 @handle_errors(error_type="simple", log_traceback=False)
 async def list_available_models(
     tenant_info: TenantInfo = Depends(verify_tenant),
     ctx: Context = None
-):
+) -> ModelListResponse:
     """
     Lista los modelos de embedding disponibles para el tenant según su nivel de suscripción.
     

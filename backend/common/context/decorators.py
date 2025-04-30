@@ -8,6 +8,7 @@ para bloques de código que necesitan mantener información de contexto.
 import logging
 import contextvars
 import functools
+import inspect
 from typing import TypeVar, Callable, Awaitable, Optional, List, Tuple, Any
 from .vars import (
     current_tenant_id, current_agent_id, current_conversation_id, current_collection_id,
@@ -173,25 +174,24 @@ def with_context(
     Propaga valores del contexto actual, permite validación de tenant, y provee
     una estructura consistente para todos los endpoints y servicios.
     
-    IMPORTANTE: Para endpoints FastAPI, use este decorador ANTES de los decoradores de FastAPI:
+    Para endpoints FastAPI, se recomienda usar este decorador DESPUÉS de los decoradores de FastAPI
+    y asegurarse de que el decorador de enrutamiento tenga response_model=None para evitar
+    que FastAPI intente parsear el objeto Context como parte del modelo de respuesta:
     
     ```python
-    # CORRECTO:
+    # CORRECTO para FastAPI:
+    @router.post("/endpoint", response_model=None)
     @with_context(tenant=True)
-    @router.post("/endpoint", response_model=MyResponse)
-    async def my_endpoint(request: MyRequest, tenant_info: TenantInfo = Depends(verify_tenant)):
-        # Usar ctx aquí
+    async def my_endpoint(request: MyRequest, tenant_info: TenantInfo = Depends(verify_tenant)) -> MyResponse:
+        # Use ctx parameter here
         ...
         
-    # INCORRECTO (causará error en FastAPI):
-    @router.post("/endpoint", response_model=MyResponse)
+    # También correcto para servicios internos:
     @with_context(tenant=True)
-    async def my_endpoint(request: MyRequest, tenant_info: TenantInfo = Depends(verify_tenant)):
-        # Esto fallará
+    async def internal_service_function(param1: str, ctx: Context = None):
+        # Use ctx parameter here
         ...
     ```
-    
-    En caso de conflictos con FastAPI, use get_context() con Depends() en su lugar.
     
     Args:
         tenant: Si debe propagar tenant_id
@@ -204,16 +204,16 @@ def with_context(
         Decorador configurado
     """
     def decorator(func: AsyncFunc) -> AsyncFunc:
-        # Guarda la información original de la función para que FastAPI pueda inspeccionarla
-        if not hasattr(func, "__fastapi_compatible__"):
-            setattr(func, "__fastapi_compatible__", True)
-            
+        # Modificamos el decorator para ser compatible con FastAPI
+        # Extraemos el tipo de retorno de la función para preservarlo
+        return_annotation = inspect.signature(func).return_annotation
+
         @functools.wraps(func)
         async def wrapper(*args, **kwargs) -> Any:
             # Extrae parámetros de contexto a propagar
             context_params = {
                 # Standardizar validación de tenant: siempre validar cuando tenant=True
-                "validate_tenant": tenant
+                "validate_tenant": validate_tenant and tenant
             }
             
             if tenant:
@@ -242,6 +242,11 @@ def with_context(
                 
                 # Ejecuta la función original con el contexto
                 return await func(*args, **kwargs)
+        
+        # Preservamos el tipo de retorno para que FastAPI no lo considere como Context
+        if return_annotation is not inspect.Signature.empty:
+            wrapper.__annotations__['return'] = return_annotation
+        
         return wrapper
     return decorator
 
@@ -255,19 +260,18 @@ def get_context(
     validate_tenant: bool = True
 ) -> Callable[..., Context]:
     """
-    Proveedor de dependencias para FastAPI que crea un objeto Context.
-    
-    Esta función está diseñada para ser usada con Depends() de FastAPI,
-    proporcionando una integración nativa con el sistema de inyección
-    de dependencias de FastAPI.
+    Provee una instancia de Context para uso con el sistema de dependencias de FastAPI.
     
     Ejemplo:
-        ```python
-        @app.get("/endpoint")
-        async def my_endpoint(ctx: Context = Depends(get_context(tenant=True))):
-            # Usar ctx aquí
-            ...
-        ```
+    ```python
+    @router.post("/endpoint", response_model=None)
+    async def my_endpoint(
+        request: MyRequest,
+        ctx: Context = Depends(get_context(tenant=True))
+    ):
+        # Usar ctx aquí
+        ...
+    ```
     
     Args:
         tenant: Si debe propagar tenant_id
@@ -277,12 +281,12 @@ def get_context(
         validate_tenant: Si debe validar que el tenant sea válido
         
     Returns:
-        Callable que produce un objeto Context
+        Context: Una instancia del contexto configurada según los parámetros
     """
-    def dependency() -> Context:
-        # Extrae parámetros de contexto a propagar
+    # Crear una función de clausura para FastAPI Depends()
+    def get_context_dependency() -> Context:
         context_params = {
-            "validate_tenant": validate_tenant
+            "validate_tenant": validate_tenant and tenant
         }
         
         if tenant:
@@ -294,7 +298,6 @@ def get_context(
         if collection:
             context_params["collection_id"] = current_collection_id.get()
         
-        # Crea y devuelve el contexto
         return Context(**context_params)
     
-    return dependency
+    return get_context_dependency

@@ -25,13 +25,13 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-@with_context(tenant=True, collection=True)
 @router.post(
     "/collections/{collection_id}/query",
     response_model=None,
     summary="Consultar colección",
     description="Realiza una consulta RAG sobre una colección específica"
 )
+@with_context(tenant=True, collection=True)
 @handle_errors(error_type="simple", log_traceback=False, error_map={
     QueryProcessingError: ("QUERY_PROCESSING_ERROR", 500)
 })
@@ -40,7 +40,7 @@ async def query_collection(
     request: QueryRequest,
     tenant_info: TenantInfo = Depends(verify_tenant),
     ctx: Context = None
-):
+) -> QueryResponse:
     """
     Procesa una consulta RAG (Retrieval Augmented Generation) sobre una colección específica.
     
@@ -142,13 +142,13 @@ async def query_collection(
             }
         )
 
-@with_context(tenant=True, collection=True)
 @router.post(
     "/search",
     response_model=None,
     summary="Búsqueda semántica",
     description="Realiza una búsqueda semántica sin generación de respuesta"
 )
+@with_context(tenant=True, collection=True)
 @handle_errors(error_type="simple", log_traceback=False, error_map={
     QueryProcessingError: ("QUERY_PROCESSING_ERROR", 500)
 })
@@ -156,7 +156,7 @@ async def query_search(
     request: QueryRequest,
     tenant_info: TenantInfo = Depends(verify_tenant),
     ctx: Context = None
-):
+) -> QueryResponse:
     """
     Procesa una búsqueda semántica sobre una colección específica.
     
@@ -257,7 +257,6 @@ async def query_search(
             }
         )
 
-@with_context(tenant=True, collection=True)
 @router.post(
     "/query",
     response_model=None,
@@ -265,6 +264,7 @@ async def query_search(
     description="Realiza una consulta RAG (para compatibilidad con versiones anteriores)",
     deprecated=True
 )
+@with_context(tenant=True, collection=True)
 @handle_errors(error_type="simple", log_traceback=False, error_map={
     QueryProcessingError: ("QUERY_PROCESSING_ERROR", 500)
 })
@@ -272,7 +272,7 @@ async def legacy_query_endpoint(
     request: QueryRequest,
     tenant_info: TenantInfo = Depends(verify_tenant),
     ctx: Context = None
-):
+) -> QueryResponse:
     """
     Endpoint de compatibilidad para consultas RAG.
     Redirige a /collections/{collection_id}/query.
