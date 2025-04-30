@@ -25,7 +25,6 @@ from models.embeddings import (
     InternalEmbeddingResponse, BatchEmbeddingItem, BatchEmbeddingResult
 )
 from services.embedding_provider import CachedEmbeddingProvider
-from services.exceptions import TextLengthExceeded, ModelError
 
 router = APIRouter()
 settings = get_settings()
@@ -70,14 +69,14 @@ async def _validate_and_get_model(tenant_info: TenantInfo, requested_model: str,
         # Información sobre el downgrade para la respuesta
         return validated_model, {"model_downgraded": True, "requested_model": requested_model}
 
-@router.post("/embeddings", response_model=EmbeddingResponse)
 @with_context(tenant=True, agent=True, conversation=True, collection=True)
+@router.post("/embeddings", response_model=EmbeddingResponse, response_model_exclude_none=True, response_model_exclude={"ctx"})
 @handle_errors(error_type="simple", log_traceback=False)
 async def generate_embeddings(
     request: EmbeddingRequest,
     tenant_info: TenantInfo = Depends(verify_tenant),
     ctx: Context = None
-) -> EmbeddingResponse:
+):
     """
     Genera embeddings vectoriales para una lista de textos.
     
@@ -162,14 +161,14 @@ async def generate_embeddings(
             details=error_details
         )
 
-@router.post("/embeddings/batch", response_model=BatchEmbeddingResponse)
 @with_context(tenant=True, agent=True, conversation=True, collection=True)
+@router.post("/embeddings/batch", response_model=BatchEmbeddingResponse, response_model_exclude_none=True, response_model_exclude={"ctx"})
 @handle_errors(error_type="simple", log_traceback=False)
 async def batch_generate_embeddings(
     request: BatchEmbeddingRequest,
     tenant_info: TenantInfo = Depends(verify_tenant),
     ctx: Context = None
-) -> BatchEmbeddingResponse:
+):
     """
     Procesa embeddings para lotes de elementos con texto y metadatos asociados.
     
@@ -296,14 +295,14 @@ async def batch_generate_embeddings(
             details=error_details
         )
 
-@router.post("/internal/embed", tags=["Internal"])
+@router.post("/internal/embed", tags=["Internal"], response_model_exclude_none=True, response_model_exclude={"ctx"})
 @handle_errors(error_type="simple", log_traceback=False)
 async def internal_embed(
     texts: List[str] = Body(..., description="Textos para generar embeddings"),
     model: Optional[str] = Body(None, description="Modelo de embedding"),
     tenant_id: str = Body(..., description="ID del tenant"),
     subscription_tier: Optional[str] = Body(None, description="Nivel de suscripción del tenant")
-) -> Dict[str, Any]:
+):
     """
     Endpoint interno para uso exclusivo de los servicios de query y agent.
     

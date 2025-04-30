@@ -19,24 +19,28 @@ from common.errors import (
     QueryProcessingError, RetrievalError
 )
 from common.context import with_context, Context
-from common.auth import verify_tenant
+from common.auth.tenant import TenantInfo, verify_tenant
+from common.config import get_settings
+from common.cache import CacheManager, invalidate_document_update
 from common.db.supabase import get_supabase_client, get_tenant_collections, get_table_name
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+@with_context(tenant=True)
 @router.get(
-    "",
+    "/collections",
     response_model=CollectionsListResponse,
+    response_model_exclude_none=True,
+    response_model_exclude={"ctx"},
     summary="Listar colecciones",
     description="Obtiene la lista de colecciones disponibles para el tenant"
 )
-@with_context(tenant=True)
 @handle_errors(error_type="simple", log_traceback=False)
 async def list_collections(
     tenant_info: TenantInfo = Depends(verify_tenant),
     ctx: Context = None
-) -> CollectionsListResponse:
+):
     """
     Lista todas las colecciones para el tenant actual.
     
@@ -77,21 +81,22 @@ async def list_collections(
             details={"tenant_id": tenant_info.tenant_id}
         )
 
+@with_context(tenant=True)
 @router.post(
-    "",
+    "/collections",
     response_model=CollectionCreationResponse,
-    status_code=201,
+    response_model_exclude_none=True,
+    response_model_exclude={"ctx"},
     summary="Crear colección",
     description="Crea una nueva colección para organizar documentos"
 )
-@with_context(tenant=True)
 @handle_errors(error_type="simple", log_traceback=False)
 async def create_collection(
     name: str,
     description: Optional[str] = None,
     tenant_info: TenantInfo = Depends(verify_tenant),
     ctx: Context = None
-) -> CollectionCreationResponse:
+):
     """
     Crea una nueva colección para el tenant actual.
     
@@ -146,13 +151,15 @@ async def create_collection(
             error_code="COLLECTION_CREATION_ERROR"
         )
 
+@with_context(tenant=True, collection=True)
 @router.put(
-    "/{collection_id}",
+    "/collections/{collection_id}",
     response_model=CollectionUpdateResponse,
+    response_model_exclude_none=True,
+    response_model_exclude={"ctx"},
     summary="Actualizar colección",
     description="Modifica una colección existente"
 )
-@with_context(tenant=True, collection=True)
 @handle_errors(error_type="simple", log_traceback=False)
 async def update_collection(
     collection_id: str,
@@ -161,7 +168,7 @@ async def update_collection(
     is_active: bool = True,
     tenant_info: TenantInfo = Depends(verify_tenant),
     ctx: Context = None
-) -> CollectionUpdateResponse:
+):
     """
     Actualiza una colección existente.
     
@@ -237,19 +244,21 @@ async def update_collection(
             error_code="COLLECTION_UPDATE_ERROR"
         )
 
+@with_context(tenant=True, collection=True)
 @router.delete(
-    "/{collection_id}",
+    "/collections/{collection_id}",
     response_model=DeleteCollectionResponse,
+    response_model_exclude_none=True,
+    response_model_exclude={"ctx"},
     summary="Eliminar colección",
     description="Elimina una colección y todos sus documentos"
 )
-@with_context(tenant=True, collection=True)
 @handle_errors(error_type="simple", log_traceback=False)
 async def delete_collection(
     collection_id: str,
     tenant_info: TenantInfo = Depends(verify_tenant),
     ctx: Context = None
-) -> DeleteCollectionResponse:
+):
     """
     Elimina una colección completa y todos sus documentos asociados.
     
@@ -317,19 +326,21 @@ async def delete_collection(
             error_code="COLLECTION_DELETE_ERROR"
         )
 
+@with_context(tenant=True, collection=True)
 @router.get(
-    "/{collection_id}/stats",
+    "/collections/{collection_id}/stats",
     response_model=CollectionStatsResponse,
+    response_model_exclude_none=True,
+    response_model_exclude={"ctx"},
     summary="Estadísticas de colección",
     description="Obtiene estadísticas detalladas de una colección"
 )
-@with_context(tenant=True, collection=True)
 @handle_errors(error_type="simple", log_traceback=False)
 async def get_collection_stats(
     collection_id: str,
     tenant_info: TenantInfo = Depends(verify_tenant),
     ctx: Context = None
-) -> CollectionStatsResponse:
+):
     """
     Obtiene estadísticas detalladas de una colección.
     

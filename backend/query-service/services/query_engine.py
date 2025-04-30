@@ -2,13 +2,10 @@ import logging
 import time
 from typing import Dict, List, Any, Optional, Union, Tuple
 
-from langchain_core.retrievers import BaseRetriever
-from langchain_core.callbacks import CallbackManager
-from langchain_core.output_parsers import StrOutputParser
-from langchain.chains.query_constructor.base import QueryConstructorChain
-from langchain.schema import Document
+from llama_index.core.retrievers import BaseRetriever
+from llama_index.core.callbacks import CallbackManager, LlamaDebugHandler
+from llama_index.core.schema import Document, NodeWithScore
 from llama_index.core.query_engine import RetrieverQueryEngine
-from llama_index.callbacks import LlamaDebugHandler
 
 from common.config import get_settings
 from common.context import with_context, Context
@@ -258,11 +255,10 @@ async def create_query_engine(
     try:
         # Crear handler para debugging y tracking
         from common.llm.callbacks import TokenCountingHandler, LatencyTrackingHandler
-        from llama_index.core.callbacks import CallbackManager
         debug_handler = LlamaDebugHandler()
-        callback_manager = CallbackManager([
-            debug_handler, TokenCountingHandler(), LatencyTrackingHandler()
-        ])
+        callback_manager = CallbackManager(
+            handlers=[debug_handler, TokenCountingHandler(), LatencyTrackingHandler()]
+        )
          
         # Obtener vector store para la colección
         vector_store = await get_vector_store_for_collection(

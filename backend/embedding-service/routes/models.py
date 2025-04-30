@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends
 from common.models import TenantInfo, ModelListResponse
 from common.errors import handle_errors
 from common.context import with_context, Context
-from common.auth import verify_tenant
+from common.auth.tenant import TenantInfo, verify_tenant
 from common.config import get_settings
 from common.config.tiers import get_available_embedding_models, get_embedding_model_details
 
@@ -17,13 +17,13 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-@router.get("/models", response_model=ModelListResponse)
 @with_context(tenant=True)
+@router.get("/models", response_model=ModelListResponse, response_model_exclude_none=True, response_model_exclude={"ctx"})
 @handle_errors(error_type="simple", log_traceback=False)
 async def list_available_models(
     tenant_info: TenantInfo = Depends(verify_tenant),
     ctx: Context = None
-) -> ModelListResponse:
+):
     """
     Lista los modelos de embedding disponibles para el tenant según su nivel de suscripción.
     

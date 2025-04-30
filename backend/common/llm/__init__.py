@@ -7,6 +7,7 @@ from .openai import get_openai_client, get_openai_embedding_model
 from .ollama import OllamaEmbeddings, OllamaLLM, get_embedding_model, get_llm_model, is_using_ollama
 from .token_counters import count_tokens, count_message_tokens, estimate_max_tokens_for_model, estimate_remaining_tokens
 from .streaming import stream_openai_response, stream_ollama_response
+from .llamaindex import create_response_synthesizer
 
 __all__ = [
     # Interfaces base
@@ -22,5 +23,8 @@ __all__ = [
     'count_tokens', 'count_message_tokens', 'estimate_max_tokens_for_model', 'estimate_remaining_tokens',
     
     # Streaming
-    'stream_openai_response', 'stream_ollama_response'
+    'stream_openai_response', 'stream_ollama_response',
+    
+    # LlamaIndex utilities
+    'create_response_synthesizer'
 ]

@@ -16,13 +16,15 @@ from common.db.tables import get_table_name
 router = APIRouter(tags=["collections"])
 logger = logging.getLogger(__name__)
 
+@with_context(tenant=True)
 @router.get(
     "",
     response_model=CollectionsListResponse,
+    response_model_exclude_none=True,
+    response_model_exclude={"ctx"},
     summary="Listar colecciones",
     description="Obtiene la lista de colecciones disponibles para el tenant con estadísticas"
 )
-@with_context(tenant=True)
 @handle_errors(error_type="simple", log_traceback=False)
 async def list_collections(
     tenant_info: TenantInfo = Depends(verify_tenant),

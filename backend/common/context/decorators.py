@@ -173,6 +173,26 @@ def with_context(
     Propaga valores del contexto actual, permite validación de tenant, y provee
     una estructura consistente para todos los endpoints y servicios.
     
+    IMPORTANTE: Para endpoints FastAPI, use este decorador ANTES de los decoradores de FastAPI:
+    
+    ```python
+    # CORRECTO:
+    @with_context(tenant=True)
+    @router.post("/endpoint", response_model=MyResponse)
+    async def my_endpoint(request: MyRequest, tenant_info: TenantInfo = Depends(verify_tenant)):
+        # Usar ctx aquí
+        ...
+        
+    # INCORRECTO (causará error en FastAPI):
+    @router.post("/endpoint", response_model=MyResponse)
+    @with_context(tenant=True)
+    async def my_endpoint(request: MyRequest, tenant_info: TenantInfo = Depends(verify_tenant)):
+        # Esto fallará
+        ...
+    ```
+    
+    En caso de conflictos con FastAPI, use get_context() con Depends() en su lugar.
+    
     Args:
         tenant: Si debe propagar tenant_id
         agent: Si debe propagar agent_id
@@ -182,23 +202,12 @@ def with_context(
         
     Returns:
         Decorador configurado
-    
-    Ejemplo:
-        ```python
-        # Endpoint con validación de tenant (comportamiento por defecto)
-        @with_context(tenant=True)
-        async def my_endpoint(request):
-            tenant_id = ctx.get_tenant_id()  # Obtiene tenant validado
-            ...
-            
-        # Sin validación (solo para endpoints públicos)
-        @with_context(tenant=True, validate_tenant=False)
-        async def public_endpoint(request):
-            tenant_id = current_tenant_id.get()  # Puede ser None o "default"
-            ...
-        ```
     """
     def decorator(func: AsyncFunc) -> AsyncFunc:
+        # Guarda la información original de la función para que FastAPI pueda inspeccionarla
+        if not hasattr(func, "__fastapi_compatible__"):
+            setattr(func, "__fastapi_compatible__", True)
+            
         @functools.wraps(func)
         async def wrapper(*args, **kwargs) -> Any:
             # Extrae parámetros de contexto a propagar
@@ -222,9 +231,70 @@ def with_context(
             # Ejecuta la función con el contexto
             ctx = Context(**context_params)
             async with ctx:
-                # Pasa ctx como keyword argument para acceso dentro de la función
-                if 'ctx' not in kwargs:
+                # Verifica si 'ctx' ya está presente en los argumentos de la función
+                # o si está definido como None (situación común en FastAPI)
+                if 'ctx' in kwargs and kwargs['ctx'] is None:
+                    # Reemplaza el valor None con la instancia de Context
                     kwargs['ctx'] = ctx
+                elif 'ctx' not in kwargs:
+                    # Solo agrega ctx si no existe en kwargs
+                    kwargs['ctx'] = ctx
+                
+                # Ejecuta la función original con el contexto
                 return await func(*args, **kwargs)
         return wrapper
     return decorator
+
+# === INTEGRACIÓN CON FASTAPI ===
+
+def get_context(
+    tenant: bool = True,
+    agent: bool = False,
+    conversation: bool = False,
+    collection: bool = False,
+    validate_tenant: bool = True
+) -> Callable[..., Context]:
+    """
+    Proveedor de dependencias para FastAPI que crea un objeto Context.
+    
+    Esta función está diseñada para ser usada con Depends() de FastAPI,
+    proporcionando una integración nativa con el sistema de inyección
+    de dependencias de FastAPI.
+    
+    Ejemplo:
+        ```python
+        @app.get("/endpoint")
+        async def my_endpoint(ctx: Context = Depends(get_context(tenant=True))):
+            # Usar ctx aquí
+            ...
+        ```
+    
+    Args:
+        tenant: Si debe propagar tenant_id
+        agent: Si debe propagar agent_id
+        conversation: Si debe propagar conversation_id
+        collection: Si debe propagar collection_id
+        validate_tenant: Si debe validar que el tenant sea válido
+        
+    Returns:
+        Callable que produce un objeto Context
+    """
+    def dependency() -> Context:
+        # Extrae parámetros de contexto a propagar
+        context_params = {
+            "validate_tenant": validate_tenant
+        }
+        
+        if tenant:
+            context_params["tenant_id"] = current_tenant_id.get()
+        if agent:
+            context_params["agent_id"] = current_agent_id.get()
+        if conversation:
+            context_params["conversation_id"] = current_conversation_id.get()
+        if collection:
+            context_params["collection_id"] = current_collection_id.get()
+        
+        # Crea y devuelve el contexto
+        return Context(**context_params)
+    
+    return dependency

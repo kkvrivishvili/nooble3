@@ -35,8 +35,8 @@ class InternalEmbeddingResponse(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
     error: Optional[Dict[str, Any]] = None
 
-    class Config:
-        schema_extra = {
+    model_config = {
+        "json_schema_extra": {
             "example": {
                 "success": True,
                 "message": "Embeddings generados correctamente",
@@ -48,3 +48,4 @@ class InternalEmbeddingResponse(BaseModel):
                 }
             }
         }
+    }

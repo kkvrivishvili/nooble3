@@ -43,13 +43,15 @@ class DocumentUploadMetadata(BaseModel):
     source: Optional[str] = None
     custom_metadata: Optional[dict] = None
 
+@with_context(tenant=True, collection=True)
 @router.post(
     "/upload",
     response_model=FileUploadResponse,
+    response_model_exclude_none=True,
+    response_model_exclude={"ctx"},
     summary="Cargar documento",
     description="Carga un documento para procesamiento y generación de embeddings"
 )
-@with_context(tenant=True, collection=True)
 @handle_errors(error_type="simple", log_traceback=False)
 async def upload_document(
     file: UploadFile = File(...),
@@ -200,13 +202,15 @@ class UrlIngestionRequest(BaseModel):
     description: Optional[str] = None
     tags: Optional[List[str]] = None
 
+@with_context(tenant=True, collection=True)
 @router.post(
     "/ingest-url",
     response_model=FileUploadResponse,
+    response_model_exclude_none=True,
+    response_model_exclude={"ctx"},
     summary="Ingerir contenido de URL",
     description="Procesa y genera embeddings para el contenido de una URL"
 )
-@with_context(tenant=True, collection=True)
 @handle_errors(error_type="simple", log_traceback=False)
 async def ingest_url(
     request: UrlIngestionRequest,
@@ -295,13 +299,15 @@ class TextIngestionRequest(BaseModel):
     description: Optional[str] = None
     tags: Optional[List[str]] = None
 
+@with_context(tenant=True, collection=True)
 @router.post(
     "/ingest-text",
     response_model=FileUploadResponse,
+    response_model_exclude_none=True,
+    response_model_exclude={"ctx"},
     summary="Ingerir texto plano",
     description="Procesa y genera embeddings para texto plano"
 )
-@with_context(tenant=True, collection=True)
 @handle_errors(error_type="simple", log_traceback=False)
 async def ingest_text(
     request: TextIngestionRequest,
@@ -389,14 +395,16 @@ class BatchUrlsRequest(BaseModel):
     title_prefix: Optional[str] = None
     tags: Optional[List[str]] = None
 
+@with_context(tenant=True, collection=True)
 @router.post(
     "/batch-urls",
     response_model=BatchJobResponse,
+    response_model_exclude_none=True,
+    response_model_exclude={"ctx"},
     summary="Procesar lote de URLs",
     description="Procesa un lote de URLs en segundo plano"
 )
 @handle_errors(error_type="simple", log_traceback=False)
-@with_context(tenant=True, collection=True)
 async def batch_process_urls(
     request: BatchUrlsRequest,
     tenant_info: TenantInfo = Depends(verify_tenant),

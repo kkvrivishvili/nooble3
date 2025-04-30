@@ -6,7 +6,7 @@ import time
 import logging
 from typing import Optional, List, Dict, Any, Union
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from pydantic import UUID4, BaseModel, Field
 
 from common.models import TenantInfo, QueryRequest, QueryResponse
@@ -14,7 +14,8 @@ from common.errors import (
     handle_errors, QueryProcessingError, ErrorCode
 )
 from common.context import with_context, Context
-from common.auth import verify_tenant, validate_model_access, RoleType
+from common.auth.tenant import TenantInfo, verify_tenant
+from common.auth import validate_model_access
 from common.config import get_settings
 from common.config.tiers import get_available_llm_models
 from common.tracking import track_token_usage
@@ -24,13 +25,15 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+@with_context(tenant=True, collection=True)
 @router.post(
     "/collections/{collection_id}/query",
     response_model=QueryResponse,
+    response_model_exclude_none=True,
+    response_model_exclude={"ctx"},
     summary="Consultar colección",
     description="Realiza una consulta RAG sobre una colección específica"
 )
-@with_context(tenant=True, collection=True)
 @handle_errors(error_type="simple", log_traceback=False, error_map={
     QueryProcessingError: ("QUERY_PROCESSING_ERROR", 500)
 })
@@ -39,7 +42,7 @@ async def query_collection(
     request: QueryRequest,
     tenant_info: TenantInfo = Depends(verify_tenant),
     ctx: Context = None
-) -> QueryResponse:
+):
     """
     Procesa una consulta RAG (Retrieval Augmented Generation) sobre una colección específica.
     
@@ -72,7 +75,7 @@ async def query_collection(
             allowed_models = get_available_llm_models(tenant_info.subscription_tier, tenant_id=tenant_info.tenant_id)
             request.llm_model = allowed_models[0] if allowed_models else settings.default_llm_model
             # Informar al usuario sobre el cambio de modelo en los metadatos de respuesta
-            ctx.set_current_context_value("model_downgraded", True)
+            ctx.add_metric("model_downgraded", True)
     
     # Obtener tiempo de inicio para medición de rendimiento
     start_time = time.time()
@@ -141,14 +144,16 @@ async def query_collection(
             }
         )
 
+@with_context(tenant=True, collection=True)
 @router.post(
     "/query",
     response_model=QueryResponse,
+    response_model_exclude_none=True,
+    response_model_exclude={"ctx"},
     summary="Consulta general",
     description="Realiza una consulta RAG (para compatibilidad con versiones anteriores)",
     deprecated=True
 )
-@with_context(tenant=True, collection=True)
 @handle_errors(error_type="simple", log_traceback=False, error_map={
     QueryProcessingError: ("QUERY_PROCESSING_ERROR", 500)
 })
@@ -156,7 +161,7 @@ async def legacy_query_endpoint(
     request: QueryRequest,
     tenant_info: TenantInfo = Depends(verify_tenant),
     ctx: Context = None
-) -> QueryResponse:
+):
     """
     Endpoint de compatibilidad para consultas RAG.
     Redirige a /collections/{collection_id}/query.

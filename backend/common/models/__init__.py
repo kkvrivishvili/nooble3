@@ -10,7 +10,8 @@ from .agents import (
 )
 from .collections import (
     CollectionInfo, CollectionsListResponse, CollectionToolResponse,
-    CollectionCreationResponse, CollectionUpdateResponse, CollectionStatsResponse
+    CollectionCreationResponse, CollectionUpdateResponse, CollectionStatsResponse,
+    DeleteCollectionResponse
 )
 from .responses import (
     ServiceStatusResponse, CacheStatsResponse, CacheClearResponse,
@@ -32,6 +33,7 @@ __all__ = [
     # Collections
     'CollectionInfo', 'CollectionsListResponse', 'CollectionToolResponse',
     'CollectionCreationResponse', 'CollectionUpdateResponse', 'CollectionStatsResponse',
+    'DeleteCollectionResponse',
     
     # Responses
     'HealthResponse', 'ServiceStatusResponse', 'CacheStatsResponse', 'CacheClearResponse',

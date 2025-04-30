@@ -22,13 +22,15 @@ from services.queue import get_job_status, retry_failed_job, cancel_job
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+@with_context(tenant=True)
 @router.get(
     "/jobs",
     response_model=JobListResponse,
+    response_model_exclude_none=True,
+    response_model_exclude={"ctx"},
     summary="Listar trabajos",
     description="Obtiene la lista de trabajos de procesamiento"
 )
-@with_context(tenant=True)
 @handle_errors(error_type="simple", log_traceback=False)
 async def list_jobs(
     status: Optional[str] = Query(None, description="Filtrar por estado (pending, processing, completed, failed)"),
@@ -124,13 +126,15 @@ async def list_jobs(
             error_code="JOB_LIST_ERROR"
         )
 
+@with_context(tenant=True)
 @router.get(
     "/jobs/{job_id}",
     response_model=JobDetailResponse,
+    response_model_exclude_none=True,
+    response_model_exclude={"ctx"},
     summary="Obtener trabajo",
     description="Obtiene detalles de un trabajo específico"
 )
-@with_context(tenant=True)
 @handle_errors(error_type="simple", log_traceback=False)
 async def get_job(
     job_id: str = Path(..., description="ID del trabajo"),
@@ -203,13 +207,15 @@ async def get_job(
             details=error_details
         )
 
+@with_context(tenant=True)
 @router.post(
     "/jobs/{job_id}/retry",
     response_model=JobUpdateResponse,
+    response_model_exclude_none=True,
+    response_model_exclude={"ctx"},
     summary="Reintentar trabajo",
     description="Reintenta un trabajo fallido"
 )
-@with_context(tenant=True)
 @handle_errors(error_type="simple", log_traceback=False)
 async def retry_job(
     job_id: str = Path(..., description="ID del trabajo a reintentar"),
@@ -255,13 +261,15 @@ async def retry_job(
             error_code="JOB_RETRY_ERROR"
         )
 
+@with_context(tenant=True)
 @router.post(
     "/jobs/{job_id}/cancel",
     response_model=JobUpdateResponse,
+    response_model_exclude_none=True,
+    response_model_exclude={"ctx"},
     summary="Cancelar trabajo",
     description="Cancela un trabajo pendiente o en ejecución"
 )
-@with_context(tenant=True)
 @handle_errors(error_type="simple", log_traceback=False)
 async def cancel_job_endpoint(
     job_id: str = Path(..., description="ID del trabajo a cancelar"),
@@ -330,6 +338,8 @@ logger = logging.getLogger(__name__)
 @stats_router.get(
     "/stats",
     response_model=JobsStatsResponse,
+    response_model_exclude_none=True,
+    response_model_exclude={"ctx"},
     summary="Estadísticas de procesamiento",
     description="Obtiene estadísticas de procesamiento de documentos"
 )
