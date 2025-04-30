@@ -45,7 +45,6 @@ async def list_available_models(
             model_details[model_id] = details
     
     return ModelListResponse(
-        success=True,
         message="Modelos de embedding disponibles obtenidos correctamente",
         models=model_details,
         default_model=settings.default_embedding_model,

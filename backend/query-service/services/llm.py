@@ -139,23 +139,23 @@ async def generate_embedding_via_service(text: str, ctx: Context = None) -> Dict
                     message=f"Error generando embedding: {error_msg}",
                     details=error_details
                 )
-            else:
-                # Si es un error no específico, usar el genérico
-                raise ServiceError(
-                    message=f"Error en servicio de embeddings: {error_msg}",
-                    error_code=error_code,
-                    details=error_details
-                )
         
-        # Extraer datos de la respuesta estandarizada
-        response_data = response.get("data", {})
-        embeddings = response_data.get("embeddings", [])
+        # Extraer embeddings de la respuesta y verificar formato
+        embedding_data = response.get("data", None)
+        if not embedding_data:
+            raise EmbeddingGenerationError(
+                message="No se recibieron embeddings del servicio",
+                details={"tenant_id": tenant_id, "response": response}
+            )
+        
+        # Los embeddings ahora vienen directamente en data y no en data.embeddings
+        embeddings = embedding_data
         
         # Retornar el primer embedding (si existe)
         if embeddings and len(embeddings) > 0:
             return {
                 "embedding": embeddings[0],
-                "model": response_data.get("model", settings.default_embedding_model)
+                "model": response.get("metadata", {}).get("model_used", settings.default_embedding_model)
             }
         else:
             # Si no hay embeddings, lanzar un error específico

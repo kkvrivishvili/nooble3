@@ -306,7 +306,7 @@ async def batch_generate_embeddings(
             details=error_details
         )
 
-@router.post("/internal/embed", tags=["Internal"], response_model_exclude_none=True, response_model_exclude={"ctx"})
+@router.post("/internal/embed", tags=["Internal"], response_model=InternalEmbeddingResponse, response_model_exclude_none=True, response_model_exclude={"ctx"})
 @handle_errors(error_type="simple", log_traceback=False)
 async def internal_embed(
     texts: List[str] = Body(..., description="Textos para generar embeddings"),
@@ -327,28 +327,20 @@ async def internal_embed(
         subscription_tier: Nivel de suscripción del tenant (opcional)
     
     Returns:
-        Dict con formato estandarizado:
-        {
-            "success": bool,           # Éxito/fallo de la operación
-            "message": str,            # Mensaje descriptivo
-            "data": Any,               # Datos principales (embeddings)
-            "metadata": Dict[str, Any] # Metadatos adicionales
-            "error": Dict[str, Any]    # Presente solo en caso de error
-        }
+        InternalEmbeddingResponse: Respuesta estandarizada con embeddings generados
     """
     start_time = time.time()
     
     # Verificar entrada
     if not texts:
-        return {
-            "success": False,
-            "message": "No se proporcionaron textos para generar embeddings",
-            "data": None,
-            "error": {
+        return InternalEmbeddingResponse(
+            success=False,
+            message="No se proporcionaron textos para generar embeddings",
+            error={
                 "message": "No se proporcionaron textos para generar embeddings",
                 "code": "VALIDATION_ERROR"
             }
-        }
+        )
     
     # Asignar modelo predeterminado si no se proporciona
     model_name = model or settings.default_embedding_model
@@ -392,19 +384,16 @@ async def internal_embed(
             logger.warning(f"Error al registrar uso de tokens interno: {str(track_err)}", 
                          extra={"tenant_id": tenant_id, "error": str(track_err)})
         
-        return {
-            "success": True,
-            "message": "Embeddings generados correctamente",
-            "data": {
-                "embeddings": embeddings,
-                "model": model_name
-            },
-            "metadata": {
+        return InternalEmbeddingResponse(
+            success=True,
+            message="Embeddings generados correctamente",
+            data=embeddings,
+            metadata={
                 "count": len(texts),
                 "model_used": model_name,
                 "timestamp": time.time()
             }
-        }
+        )
     except Exception as e:
         logger.exception(f"Error generando embeddings internos: {str(e)}")
         
@@ -434,24 +423,21 @@ async def internal_embed(
         else:
             specific_error = e
         
-        # Construir respuesta de error estandarizada según el patrón de comunicación
-        error_response = {
-            "success": False,
-            "message": specific_error.message,
-            "data": None,
-            "metadata": {
-                "texts_count": len(texts) if texts else 0,
-                "model_requested": model,
-                "timestamp": time.time()
-            },
-            "error": {
+        # Usar el modelo estandarizado para el error
+        return InternalEmbeddingResponse(
+            success=False,
+            message=specific_error.message,
+            error={
                 "message": specific_error.message,
                 "details": {
                     "error_type": specific_error.__class__.__name__,
                     "error_code": specific_error.error_code
                 },
                 "timestamp": time.time()
+            },
+            metadata={
+                "texts_count": len(texts) if texts else 0,
+                "model_requested": model,
+                "timestamp": time.time()
             }
-        }
-        
-        return error_response
+        )
