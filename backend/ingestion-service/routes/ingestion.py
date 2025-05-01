@@ -26,8 +26,7 @@ from common.config.tiers import get_tier_limits
 from common.db.storage import upload_to_storage
 
 from services.queue import queue_document_processing_job
-from services.extraction import validate_file
-from services.llama_core import validate_file_with_llama_index
+from services.chunking import validate_file
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -114,7 +113,7 @@ async def upload_document(
             )
         
         # 1. Validar archivo
-        file_info = await validate_file_with_llama_index(file, ctx=ctx)
+        file_info = await validate_file(file, ctx=ctx)
         
         # Procesar tags si están presentes
         tag_list = tags.split(",") if tags else []

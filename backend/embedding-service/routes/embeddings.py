@@ -313,6 +313,8 @@ async def internal_embed(
     texts: List[str] = Body(..., description="Textos para generar embeddings"),
     model: Optional[str] = Body(None, description="Modelo de embedding"),
     tenant_id: str = Body(..., description="ID del tenant"),
+    collection_id: Optional[str] = Body(None, description="ID de la colección para especificidad en caché"),
+    chunk_id: Optional[List[str]] = Body(None, description="Lista de IDs de chunks correspondientes a cada texto"),
     subscription_tier: Optional[str] = Body(None, description="Nivel de suscripción del tenant")
 ) -> InternalEmbeddingResponse:
     """
@@ -360,11 +362,19 @@ async def internal_embed(
             metadata = {"model_downgraded": True, "validation_error": str(validation_err)}
     
     # Crear proveedor de embeddings
-    embedding_provider = CachedEmbeddingProvider(model_name=model_name, tenant_id=tenant_id)
+    embedding_provider = CachedEmbeddingProvider(
+        model_name=model_name, 
+        tenant_id=tenant_id,
+        collection_id=collection_id  # Pasar collection_id para especificidad en caché
+    )
     
     try:
         # Generar embeddings
-        embeddings = await embedding_provider.get_batch_embeddings(texts)
+        embeddings = await embedding_provider.get_batch_embeddings(
+            texts, 
+            collection_id=collection_id,
+            chunk_id=chunk_id  # Pasar los IDs de chunks para mejor seguimiento y caché
+        )
         
         # Calcular total de tokens usando la función centralizada
         total_tokens = 0

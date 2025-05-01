@@ -30,6 +30,12 @@ METRIC_CACHE_INVALIDATION_COORDINATED = "cache_invalidation_coordinated"
 METRIC_SERIALIZATION_ERROR = "serialization_error"
 METRIC_DESERIALIZATION_ERROR = "deserialization_error"
 
+# =========== Constantes de métricas para chunks ===========
+METRIC_CHUNK_CACHE_HIT = "chunk_cache_hit"
+METRIC_CHUNK_CACHE_MISS = "chunk_cache_miss"
+METRIC_CHUNK_CACHE_INVALIDATION = "chunk_cache_invalidation"
+METRIC_CHUNK_EMBEDDING_GENERATION = "chunk_embedding_generation"
+
 # =========== Códigos de error básicos ===========
 ERROR_GENERAL = "GENERAL_ERROR"
 ERROR_NOT_FOUND = "NOT_FOUND"

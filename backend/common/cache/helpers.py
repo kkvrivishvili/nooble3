@@ -541,6 +541,90 @@ async def invalidate_document_update(
         collection_id=collection_id
     )
 
+async def invalidate_chunk_cache(
+    tenant_id: str,
+    chunk_id: str,
+    collection_id: Optional[str] = None,
+    document_id: Optional[str] = None,
+    model_name: Optional[str] = None,
+    ctx: Optional[Context] = None
+) -> Dict[str, int]:
+    """
+    Invalida selectivamente la caché relacionada con un chunk específico.
+    
+    Esta función permite invalidar la caché de embeddings y resultados de consultas 
+    relacionados con un chunk específico, sin afectar al resto de chunks del mismo documento.
+    
+    Args:
+        tenant_id: ID del tenant
+        chunk_id: ID del chunk específico a invalidar
+        collection_id: ID de la colección (opcional)
+        document_id: ID del documento al que pertenece el chunk (opcional)
+        model_name: Nombre del modelo de embedding (opcional, se usará para invalidación más precisa)
+        ctx: Contexto de la solicitud
+        
+    Returns:
+        Dict con contador de claves invalidadas por tipo
+    """
+    logger = logging.getLogger("common.cache")
+    
+    # Usar contenido de context si está disponible
+    if ctx:
+        if not tenant_id and hasattr(ctx, 'tenant_id'):
+            tenant_id = ctx.tenant_id
+        if not collection_id and hasattr(ctx, 'collection_id'):
+            collection_id = ctx.collection_id
+    
+    # Generar patrones de claves para invalidación precisa
+    # Si se proporciona el modelo, invalidar solo ese modelo específico para el chunk
+    if model_name:
+        embedding_pattern = f"{model_name}:{chunk_id}:*"
+    else:
+        embedding_pattern = f"*:{chunk_id}:*"  # Todos los modelos para ese chunk
+    
+    # Configurar tipos de datos a invalidar
+    invalidations = [
+        {
+            "data_type": "embeddings",
+            "resource_id": embedding_pattern,
+            "collection_id": collection_id
+        }
+    ]
+    
+    # Si conocemos el document_id, invalidar también los resultados de consulta que podrían contener este chunk
+    if document_id:
+        invalidations.append({
+            "data_type": "query_result",
+            "resource_id": f"*{document_id}*{chunk_id}*",  # Invalidar consultas que podrían haber recuperado este chunk
+            "collection_id": collection_id
+        })
+    
+    # Registrar métricas de invalidación específicas por chunk
+    try:
+        from common.tracking import track_operation
+        await track_operation(
+            tenant_id=tenant_id,
+            operation="chunk_cache_invalidation",
+            metadata={
+                "chunk_id": chunk_id,
+                "document_id": document_id,
+                "collection_id": collection_id,
+                "model_name": model_name
+            }
+        )
+    except Exception as e:
+        logger.warning(f"Error al registrar métricas de invalidación de chunk: {str(e)}")
+    
+    # Ejecutar invalidación coordinada
+    return await invalidate_coordinated(
+        tenant_id=tenant_id,
+        primary_data_type="chunk",
+        primary_resource_id=chunk_id,
+        collection_id=collection_id,
+        related_invalidations=invalidations,
+        ctx=ctx
+    )
+
 async def get_embeddings_batch_with_cache(
     texts: List[str],
     tenant_id: str,
@@ -742,6 +826,57 @@ async def get_embeddings_batch_with_cache(
 
 # Funciones auxiliares para métricas
 
+async def track_chunk_cache_metrics(
+    tenant_id: str,
+    chunk_id: str,
+    metric_type: str,
+    collection_id: Optional[str] = None,
+    document_id: Optional[str] = None,
+    model_name: Optional[str] = None,
+    value: Union[bool, float, int] = True,
+    extra_metadata: Optional[Dict[str, Any]] = None
+):
+    """
+    Función especializada para registrar métricas relacionadas con caché de chunks.
+    
+    Permite un seguimiento detallado del uso de caché a nivel de chunk individual,
+    facilitando análisis de rendimiento y optimización de estrategias de caché.
+    
+    Args:
+        tenant_id: ID del tenant
+        chunk_id: ID del chunk específico
+        metric_type: Tipo de métrica (METRIC_CHUNK_CACHE_HIT, METRIC_CHUNK_CACHE_MISS, etc.)
+        collection_id: ID de la colección (opcional)
+        document_id: ID del documento al que pertenece el chunk (opcional)
+        model_name: Nombre del modelo de embedding utilizado (opcional)
+        value: Valor de la métrica (booleano para hit/miss, número para latencia/tamaño)
+        extra_metadata: Metadatos adicionales específicos de la operación
+    """
+    try:
+        # Preparar metadatos básicos del chunk
+        metadata = {
+            "chunk_id": chunk_id,
+            "collection_id": collection_id,
+            "document_id": document_id,
+            "model_name": model_name
+        }
+        
+        # Añadir metadatos adicionales si se proporcionan
+        if extra_metadata:
+            metadata.update(extra_metadata)
+        
+        # Usar la función centralizada para registrar la métrica
+        await track_cache_metrics(
+            data_type="chunk",
+            tenant_id=tenant_id,
+            metric_type=metric_type,
+            value=value,
+            metadata=metadata
+        )
+    except Exception as e:
+        logger = logging.getLogger("common.cache")
+        logger.warning(f"Error al registrar métrica de caché de chunk: {str(e)}")
+
 async def track_cache_metrics(
     data_type: str,
     tenant_id: str,
@@ -833,6 +968,86 @@ async def track_cache_size(data_type: str, tenant_id: str, size_bytes: int):
 
 # Funciones de serialización/deserialización
 
+def serialize_chunk_data(chunk_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Serializa los metadatos de un chunk para uso en API y caché.
+    
+    Esta función especializada garantiza que los atributos críticos de un chunk
+    (como chunk_id, collection_id, document_id y modelo de embedding) sean
+    serializados de manera consistente para todas las API y almacenamiento en caché.
+    
+    Args:
+        chunk_data: Diccionario con datos del chunk
+        
+    Returns:
+        Diccionario serializado con metadatos normalizados
+    """
+    # Crear copia para no modificar el original
+    serialized = {}
+    
+    # Lista de campos críticos que siempre deben estar presentes
+    critical_fields = ["chunk_id", "tenant_id", "collection_id", "document_id", "embedding_model"]
+    
+    # Procesar primero los campos críticos
+    for field in critical_fields:
+        if field in chunk_data:
+            serialized[field] = chunk_data[field]
+        elif field == "embedding_model" and "model" in chunk_data:
+            # Compatibilidad con diferentes nombres de campo para modelo
+            serialized[field] = chunk_data["model"]
+        elif field == "chunk_id" and "id" in chunk_data:
+            # Compatibilidad con diferentes nombres de campo para chunk_id
+            serialized[field] = chunk_data["id"]
+        else:
+            # Campos críticos ausentes se establecen como None
+            serialized[field] = None
+    
+    # Añadir timestamp si no existe
+    if "embedding_timestamp" not in chunk_data:
+        serialized["embedding_timestamp"] = int(time.time())
+    else:
+        serialized["embedding_timestamp"] = chunk_data["embedding_timestamp"]
+    
+    # Procesar el resto de campos
+    for key, value in chunk_data.items():
+        if key not in serialized:
+            serialized[key] = serialize_for_cache(value, "chunk")
+    
+    return serialized
+
+def deserialize_chunk_data(serialized_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Deserializa los metadatos de un chunk desde API o caché.
+    
+    Función complementaria a serialize_chunk_data que garantiza que los
+    datos de un chunk se deserialicen de manera consistente, manejando
+    posibles cambios en la estructura o nombres de campos.
+    
+    Args:
+        serialized_data: Diccionario serializado con datos del chunk
+        
+    Returns:
+        Diccionario deserializado con metadatos normalizados
+    """
+    # Crear copia para no modificar el original
+    deserialized = serialized_data.copy()
+    
+    # Asegurar consistencia en nombres de campos críticos
+    if "id" not in deserialized and "chunk_id" in deserialized:
+        deserialized["id"] = deserialized["chunk_id"]
+    
+    if "model" not in deserialized and "embedding_model" in deserialized:
+        deserialized["model"] = deserialized["embedding_model"]
+    
+    # Deserializar campos complejos si es necesario
+    if "embedding" in deserialized and isinstance(deserialized["embedding"], str):
+        try:
+            deserialized["embedding"] = json.loads(deserialized["embedding"])
+        except:
+            pass  # Mantener como está si no se puede deserializar
+    
+    return deserialized
+
 def serialize_for_cache(value: Any, data_type: str) -> Any:
     """
     Serializa un valor para almacenar en caché según el tipo de datos.
@@ -845,16 +1060,21 @@ def serialize_for_cache(value: Any, data_type: str) -> Any:
     - Embeddings: Convierte cualquier formato (numpy, tensor) a listas Python
     - Vector stores: Maneja objetos complejos específicos del servicio
     - Resultados de consulta: Asegura serialización compatible con JSON
+    - Chunks: Utiliza serialize_chunk_data para consistencia en metadatos
     
     Args:
         value: Valor a serializar
-        data_type: Tipo de datos ("embedding", "vector_store", etc.)
+        data_type: Tipo de datos ("embedding", "vector_store", "chunk", etc.)
         
     Returns:
         Any: Valor serializado listo para almacenar en caché
     """
     if value is None:
         return None
+        
+    # Para chunks, usar la función especializada
+    if data_type == "chunk" and isinstance(value, dict):
+        return serialize_chunk_data(value)
     
     # Detectar arrays numpy o tensores y convertirlos a listas planas
     if data_type == "embedding":
@@ -866,8 +1086,13 @@ def serialize_for_cache(value: Any, data_type: str) -> Any:
         if 'torch' in str(type(value)) and hasattr(value, 'detach') and hasattr(value, 'cpu') and hasattr(value, 'numpy'):
             return value.detach().cpu().numpy().tolist()
         
+        # Para tensores TensorFlow
         if 'tensorflow' in str(type(value)) and hasattr(value, 'numpy'):
             return value.numpy().tolist()
+            
+        # Para cualquier otro tipo array-like con método tolist
+        if hasattr(value, 'tolist'):
+            return value.tolist()
         
         # Si ya es una lista, asegurarse de que los valores son nativos de Python
         if isinstance(value, list):
@@ -914,23 +1139,26 @@ def serialize_for_cache(value: Any, data_type: str) -> Any:
 
 def deserialize_from_cache(value: Any, data_type: str) -> Any:
     """
-    Deserializa un valor recuperado de caché según su tipo.
+    Deserializa un valor recuperado de caché según el tipo de datos.
     
-    La mayoría de los valores se pueden usar directamente
-    Pero algunos tipos pueden requerir conversiones especiales
+    Implementa reglas específicas de deserialización para cada tipo de dato,
+    complementando serialize_for_cache y garantizando compatibilidad entre servicios.
+    
     Args:
-        value: Valor a deserializar
-        data_type: Tipo de dato ("embedding", "vector_store", etc.)
+        value: Valor serializado a deserializar
+        data_type: Tipo de datos ("embedding", "vector_store", "chunk", etc.)
         
     Returns:
-        Any: Valor deserializado
+        Any: Valor deserializado listo para usar
     """
     if value is None:
         return None
     
     # La mayoría de los valores se pueden usar directamente
-    # Pero algunos tipos pueden requerir conversiones especiales
-    if data_type == "embedding":
+    if data_type == "chunk":
+        return deserialize_chunk_data(value)
+    
+    elif data_type == "embedding":
         # Los embeddings siempre se almacenan como listas planas
         # Aquí dejamos que el servicio decida si necesita convertirlos a otro formato
         return value

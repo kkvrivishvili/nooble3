@@ -67,10 +67,14 @@ from .helpers import (
     invalidate_coordinated,
     invalidate_resource_cache,
     invalidate_document_update,
+    invalidate_chunk_cache,
     generate_resource_id_hash,
     get_embeddings_batch_with_cache,
     estimate_object_size,
-    get_default_ttl_for_data_type
+    get_default_ttl_for_data_type,
+    serialize_chunk_data,
+    deserialize_chunk_data,
+    track_chunk_cache_metrics
 )
 
 __all__ = [
@@ -85,23 +89,28 @@ __all__ = [
     "invalidate_resource_cache",
     "invalidate_coordinated",
     "invalidate_document_update",
+    "invalidate_chunk_cache",
+    
+    # Funciones especializadas para chunks
+    "serialize_chunk_data",
+    "deserialize_chunk_data",
+    "track_chunk_cache_metrics",
     
     # Funciones de métricas y utilidades
     "track_cache_metrics",
     "generate_resource_id_hash",
+    "get_redis_client",
     "estimate_object_size",
     "get_default_ttl_for_data_type",
     
-    # Constantes de TTL y métricas
+    # Constantes de TTL
     "TTL_SHORT",
-    "TTL_STANDARD", 
+    "TTL_STANDARD",
     "TTL_EXTENDED",
     "TTL_PERMANENT",
+    "DEFAULT_TTL_MAPPING",
     
-    # Función para obtener cliente Redis
-    "get_redis_client",
-    
-    # Constantes de fuentes
+    # Constantes de fuentes de datos
     "SOURCE_CACHE",
     "SOURCE_SUPABASE",
     "SOURCE_GENERATION",

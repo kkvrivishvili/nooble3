@@ -17,18 +17,18 @@ from common.db.tables import get_table_name
 # Importar CacheManager y get_with_cache_aside separadamente para evitar ciclos de importación
 from common.cache.manager import CacheManager
 from common.cache.helpers import get_with_cache_aside
-from services.storage import update_document_status, update_processing_job
-from services.extraction import extract_text_from_file, validate_file, get_extractor_for_mimetype
-
-# Importar servicios de LlamaIndex
-from services.llama_core import (
-    split_text_with_llama_index, 
+from services.chunking import (
+    split_text_with_llama_index,
+    extract_text_from_file,
+    validate_file,
+    process_file_from_storage
+)
+from services.embedding import (
     generate_embeddings_with_llama_index,
     store_chunks_in_vector_store,
-    load_and_process_file_with_llama_index,
-    validate_file_with_llama_index
+    generate_embeddings_for_chunks
 )
-from services.llama_extractors import process_upload_with_llama_index, process_text_with_llama_index
+from services.storage import update_document_status, update_processing_job
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -477,16 +477,17 @@ async def process_next_job(ctx: Context = None) -> bool:
                 tenant_id=tenant_id,
                 status="processing"
             )
-
+            
             # Procesar según el tipo de fuente
             processed_text = None
             
             if source_type == "file":
-                # Procesamiento de archivo almacenado
-                processed_text = await process_upload_with_llama_index(
+                # Procesamiento de archivo almacenado con la función centralizada
+                processed_text = await process_file_from_storage(
                     tenant_id=tenant_id,
                     collection_id=collection_id,
-                    file_key=file_key
+                    file_key=file_key,
+                    ctx=ctx
                 )
             elif source_type == "url":
                 # Aquí iría el procesamiento para URL (pendiente de implementar)
@@ -497,13 +498,9 @@ async def process_next_job(ctx: Context = None) -> bool:
                     context=context
                 )
             elif source_type == "text":
-                # El texto ya está disponible
-                processed_text = await process_text_with_llama_index(
-                    text=text_content,
-                    tenant_id=tenant_id,
-                    collection_id=collection_id
-                )
-            
+                # El texto ya está disponible - usar directamente split_text_with_llama_index en lugar de legacy
+                processed_text = text_content
+                
             # Verificar que tenemos texto procesado
             if not processed_text:
                 logger.error(f"No se pudo procesar el documento {document_id}")

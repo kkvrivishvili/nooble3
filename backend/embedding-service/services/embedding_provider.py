@@ -42,7 +42,8 @@ class CachedEmbeddingProvider:
     def __init__(
         self,
         model_name: str = settings.default_embedding_model,
-        tenant_id: Optional[str] = None, 
+        tenant_id: Optional[str] = None,
+        collection_id: Optional[str] = None,
         embed_batch_size: int = settings.embedding_batch_size,
         api_key: Optional[str] = None
     ):
@@ -50,6 +51,7 @@ class CachedEmbeddingProvider:
         self.api_key = api_key or settings.openai_api_key
         self.embed_batch_size = embed_batch_size
         self.tenant_id = tenant_id
+        self.collection_id = collection_id  # Añadir collection_id para especificidad en caché
         self.dimensions = settings.default_embedding_dimension
         
         # Límites de procesamiento para controlar uso de memoria y tokens
@@ -132,12 +134,14 @@ class CachedEmbeddingProvider:
         BatchTooLargeError: ("BATCH_TOO_LARGE", 413)
     })
     @with_context(tenant=True, validate_tenant=True)
-    async def get_batch_embeddings(self, texts: List[str], ctx: Context = None) -> List[List[float]]:
+    async def get_batch_embeddings(self, texts: List[str], collection_id: Optional[str] = None, chunk_id: Optional[List[str]] = None, ctx: Context = None) -> List[List[float]]:
         """
         Obtiene embeddings para un lote de textos con soporte de caché.
         
         Args:
             texts: Lista de textos para generar embeddings
+            collection_id: ID de la colección a la que pertenecen los textos (para caché)
+            chunk_id: Lista de IDs únicos para cada chunk/texto (para caché y seguimiento)
             ctx: Contexto proporcionado por el decorador with_context
             
         Returns:
@@ -149,10 +153,15 @@ class CachedEmbeddingProvider:
             TextTooLargeError: Si algún texto individual excede el límite de tokens
             ServiceError: Si no hay tenant válido disponible en el contexto y no se proporcionó uno
         """
-        # Validar tenant_id (usar el proporcionado o el del contexto)
+        # Validar tenant_id y collection_id (usar el proporcionado o el del contexto)
         tenant_id = self.tenant_id
         if tenant_id is None:
             tenant_id = ctx.get_tenant_id()
+            
+        # Usar collection_id del parámetro, de la instancia, o del contexto si existe
+        coll_id = collection_id or self.collection_id
+        if coll_id is None and ctx and hasattr(ctx, 'collection_id'):
+            coll_id = ctx.collection_id
         
         if not texts:
             return []
@@ -229,11 +238,13 @@ class CachedEmbeddingProvider:
         indices_no_vacios = [i for i, text in enumerate(processed_texts) if text.strip()]
         
         if textos_no_vacios:
-            # Utilizar la implementación centralizada compatible con ingestion-service
+            # Usar la función centralizada de LlamaIndex
             embeddings, metadata = await generate_embeddings_with_llama_index(
                 texts=textos_no_vacios, 
                 tenant_id=tenant_id,
                 model_name=self.model_name,
+                collection_id=coll_id,
+                chunk_id=chunk_id,  # Pasar los IDs de chunks para mejor caché y seguimiento
                 ctx=ctx
             )
             
@@ -251,7 +262,7 @@ class CachedEmbeddingProvider:
             
         return result
     
-    async def _process_large_batch(self, texts: List[str], tenant_id: str, ctx: Context, estimated_tokens: Optional[int] = None) -> List[List[float]]:
+    async def _process_large_batch(self, texts: List[str], tenant_id: str, ctx: Context, estimated_tokens: Optional[int] = None, collection_id: Optional[str] = None, chunk_id: Optional[List[str]] = None) -> List[List[float]]:
         """
         Procesa un lote grande dividiéndolo en sublotes manejables.
         
@@ -260,30 +271,43 @@ class CachedEmbeddingProvider:
             tenant_id: ID del tenant
             ctx: Contexto proporcionado por el decorador with_context
             estimated_tokens: Tokens estimados para el lote completo (opcional)
+            collection_id: ID de la colección a la que pertenecen los textos (para caché)
+            chunk_id: Lista de IDs únicos para cada chunk/texto (para caché y seguimiento)
             
         Returns:
             List[List[float]]: Lista de vectores de embedding
         """
         logger.info(f"Procesando lote grande de {len(texts)} textos en sublotes")
+        max_textos_por_solicitud = self.max_batch_size
         
         # Si tenemos tokens estimados y son demasiados, dividir por tokens
         if estimated_tokens and estimated_tokens > self.max_tokens_per_batch:
             # Calcular número aproximado de sublotes
             num_batches = (estimated_tokens // self.max_tokens_per_batch) + 1
-            batch_size = max(1, len(texts) // num_batches)
-        else:
-            # Dividir por tamaño de lote
-            batch_size = self.max_batch_size
-        
-        # Procesar sublotes
+            max_textos_por_solicitud = max(1, len(texts) // num_batches)
+            
+        # Procesar el lote en sublotes
+        batch_size = max(1, max_textos_por_solicitud)
         results = []
         
         for i in range(0, len(texts), batch_size):
+            # Obtener sublote de textos
             sublote = texts[i:i+batch_size]
             logger.debug(f"Procesando sublote {i//batch_size + 1} con {len(sublote)} textos")
             
-            # Procesar sublote usando el método principal
-            batch_result = await self.get_batch_embeddings(sublote, ctx)
-            results.extend(batch_result)
+            # Preparar los chunk_ids correspondientes si existen
+            sublote_chunk_ids = None
+            if chunk_id:
+                sublote_chunk_ids = chunk_id[i:i+batch_size]
+                logger.debug(f"Usando {len(sublote_chunk_ids)} chunk_ids para este sublote")
+            
+            # Procesar sublote con los parámetros correspondientes
+            batch_results = await self.get_batch_embeddings(
+                texts=sublote, 
+                collection_id=collection_id or self.collection_id,
+                chunk_id=sublote_chunk_ids,
+                ctx=ctx
+            )
+            results.extend(batch_results)
         
         return results
