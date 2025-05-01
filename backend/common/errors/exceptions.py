@@ -364,11 +364,12 @@ class TimeoutError(ServiceError):
 
 class DatabaseError(ServiceError):
     """Error de base de datos."""
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None, context: Optional[Dict[str, Any]] = None):
         super().__init__(
             message=message,
             error_code=ErrorCode.DATABASE_ERROR,
-            details=details
+            details=details,
+            context=context
         )
 
 class CacheError(ServiceError):

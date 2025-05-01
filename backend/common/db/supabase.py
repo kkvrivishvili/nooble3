@@ -113,19 +113,28 @@ async def get_supabase_client_with_token(token: Optional[str] = None, use_servic
 
 async def init_supabase() -> None:
     """
-    Inicializa el cliente Supabase de forma async.
-    Verifica conectividad y permisos.
-    
-    Raises:
-        DatabaseError: Si hay un error al inicializar Supabase
+    Inicializa la conexión a Supabase y verifica que funcione correctamente.
     """
     error_context = {"function": "init_supabase"}
     
     try:
+        # Primero verificamos si debemos usar Supabase o no
+        use_supabase = os.getenv("LOAD_CONFIG_FROM_SUPABASE", "false").lower() == "true"
+        
+        if not use_supabase:
+            logger.info("Supabase está deshabilitado por configuración (LOAD_CONFIG_FROM_SUPABASE=false). Operando en modo offline.")
+            return
+            
         client = get_supabase_client()
         # Test connection async
         from ..utils.async_utils import run_sync_as_async
-        await run_sync_as_async(client.table('tenants').select('*').limit(1).execute)
+        
+        # Obtenemos la URL para loggear y diagnosticar problemas
+        url = os.getenv("SUPABASE_URL", "https://example.supabase.co")
+        logger.info(f"Intentando conectar a Supabase en: {url}")
+        
+        # Uso de timeout para evitar bloqueos prolongados
+        await run_sync_as_async(lambda: client.table('tenants').select('*').limit(1).execute())
         logger.info("Supabase initialized successfully")
     except Exception as e:
         # Si ya es un error tipado, propagarlo
@@ -134,12 +143,23 @@ async def init_supabase() -> None:
             
         error_context["error_type"] = type(e).__name__
         error_context["traceback"] = traceback.format_exc()
-        error_message = f"Error initializing Supabase: {str(e)}"
+        
+        # Mejorar el mensaje con detalles específicos para ayudar al diagnóstico
+        base_error = f"Error initializing Supabase: {str(e)}"
+        supabase_url = os.getenv("SUPABASE_URL", "no URL configured")
+        error_message = f"{base_error}. URL: {supabase_url}"
+        
+        # Si está deshabilitado, solo loggear advertencia
+        if os.getenv("LOAD_CONFIG_FROM_SUPABASE", "false").lower() != "true":
+            logger.warning(f"{error_message} - Operando en modo sin Supabase.")
+            return
+            
         logger.error(error_message, extra=error_context, exc_info=True)
         raise DatabaseError(
             message=error_message,
+            details={"original_error": str(e), "error_type": type(e).__name__},
             context=error_context
-        )
+        ) from e
 
 
 async def get_tenant_configurations(

@@ -27,7 +27,7 @@ from .embeddings import (
 from .responses import (
     ServiceStatusResponse, CacheStatsResponse, CacheClearResponse,
     ModelListResponse, EmbeddingRequest, EmbeddingResponse, QueryRequest, QueryResponse,
-    BatchEmbeddingRequest, BatchEmbeddingResponse, TextItem
+    BatchEmbeddingRequest, BatchEmbeddingResponse, TextItem, QueryContextItem
 )
 
 # Re-exportar todos los modelos importantes
@@ -59,7 +59,7 @@ __all__ = [
     'FailedEmbeddingItem', 'InternalEmbeddingResponse',
     
     # Responses
-    'HealthResponse', 'ServiceStatusResponse', 'CacheStatsResponse', 'CacheClearResponse',
+    'ServiceStatusResponse', 'CacheStatsResponse', 'CacheClearResponse',
     'ModelListResponse', 'EmbeddingRequest', 'EmbeddingResponse', 'QueryRequest', 'QueryResponse',
-    'BatchEmbeddingRequest', 'BatchEmbeddingResponse', 'TextItem'
+    'BatchEmbeddingRequest', 'BatchEmbeddingResponse', 'TextItem', 'QueryContextItem'
 ]

@@ -206,7 +206,25 @@ def with_context(
     def decorator(func: AsyncFunc) -> AsyncFunc:
         # Modificamos el decorator para ser compatible con FastAPI
         # Extraemos el tipo de retorno de la función para preservarlo
-        return_annotation = inspect.signature(func).return_annotation
+        sig = inspect.signature(func)
+        return_annotation = sig.return_annotation
+        
+        # Crear una nueva firma sin el parámetro Context para FastAPI
+        # Esto es clave para evitar que FastAPI incluya Context en su modelo
+        params = list(sig.parameters.values())
+        # Encontrar y eliminar el parámetro ctx de la firma si existe
+        filtered_params = []
+        ctx_param = None
+        for param in params:
+            if param.name == 'ctx' and isinstance(param.annotation, type) and issubclass(param.annotation, Context):
+                ctx_param = param
+            else:
+                filtered_params.append(param)
+                
+        # Crear la nueva firma sin el parámetro ctx
+        if ctx_param:
+            new_sig = sig.replace(parameters=filtered_params)
+            func.__signature__ = new_sig
 
         @functools.wraps(func)
         async def wrapper(*args, **kwargs) -> Any:
@@ -246,6 +264,10 @@ def with_context(
         # Preservamos el tipo de retorno para que FastAPI no lo considere como Context
         if return_annotation is not inspect.Signature.empty:
             wrapper.__annotations__['return'] = return_annotation
+            
+        # Establecer explícitamente la propiedad fastapi_skip_validation
+        # Esta es una propiedad que FastAPI usa para decidir si valida la respuesta
+        setattr(wrapper, "__fastapi_skip_validation__", True)
         
         return wrapper
     return decorator

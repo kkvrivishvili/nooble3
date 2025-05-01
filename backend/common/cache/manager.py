@@ -152,52 +152,41 @@ class CacheManager:
         collection_id: Optional[str] = None
     ) -> List[str]:
         """
-        Genera claves de búsqueda en orden jerárquico (más específica a más general).
+        Genera una lista de claves de caché en orden de especificidad.
         
-        Esta función sigue un patrón explícito y predecible para generar claves:
-        1. Clave completa con todos los parámetros disponibles (más específica)
-        2. Claves con combinaciones relevantes de contexto
-        3. Clave base solo con tenant_id (más general)
-        
-        Cada clave tiene un formato consistente y documentado:
-        tenant_id:data_type:agent:agent_id:conv:conversation_id:coll:collection_id:resource_id
-        
-        Args:
-            data_type: Tipo de datos (embedding, query, etc.)
-            resource_id: ID del recurso
-            tenant_id: ID del tenant (obligatorio)
-            agent_id, conversation_id, collection_id: Contexto opcional
-            
-        Returns:
-            Lista de claves en orden de más específica a más general
+        Se utiliza para buscar en la jerarquía de claves, desde la más específica
+        a la más general.
         """
         keys = []
         
-        # 1. Clave más específica (todos los niveles disponibles)
-        if agent_id and conversation_id and collection_id:
+        # 1. Nivel completo (tenant + agent + conversation + collection)
+        if tenant_id and agent_id and conversation_id and collection_id:
             keys.append(CacheManager._build_key(
-                data_type, resource_id, tenant_id, agent_id, conversation_id, collection_id))
-        
-        # 2. Nivel agente + conversación
-        if agent_id and conversation_id:
+                data_type, resource_id, tenant_id, agent_id, 
+                conversation_id, collection_id))
+                
+        # 2. Nivel tenant + agent + conversation
+        if tenant_id and agent_id and conversation_id:
             keys.append(CacheManager._build_key(
                 data_type, resource_id, tenant_id, agent_id, conversation_id))
-        
-        # 3. Nivel agente + colección
-        if agent_id and collection_id:
+                
+        # 3. Nivel tenant + agent + collection 
+        if tenant_id and agent_id and collection_id:
             keys.append(CacheManager._build_key(
-                data_type, resource_id, tenant_id, agent_id, None, collection_id))
-            
-        # 4. Nivel colección (importante para RAG)
-        if collection_id:
-            keys.append(CacheManager._build_key(
-                data_type, resource_id, tenant_id, None, None, collection_id))
-        
-        # 5. Nivel agente
-        if agent_id:
+                data_type, resource_id, tenant_id, agent_id, 
+                None, collection_id))
+                
+        # 4. Nivel tenant + agent
+        if tenant_id and agent_id:
             keys.append(CacheManager._build_key(
                 data_type, resource_id, tenant_id, agent_id))
-            
+                
+        # 5. Nivel tenant + collection
+        if tenant_id and collection_id:
+            keys.append(CacheManager._build_key(
+                data_type, resource_id, tenant_id, None, 
+                None, collection_id))
+                
         # 6. Nivel tenant
         keys.append(CacheManager._build_key(
             data_type, resource_id, tenant_id))
@@ -228,79 +217,100 @@ class CacheManager:
         Returns:
             Any: Valor cacheado o None si no se encuentra
         """
-        # Validar parámetros obligatorios
-        tenant_id = tenant_id or get_current_tenant_id()
-        if not tenant_id:
-            logger.warning(f"Tenant ID es obligatorio para obtener {data_type} de caché")
-            return None
-            
-        if not resource_id:
-            logger.warning(f"Resource ID es obligatorio para obtener {data_type} de caché")
-            return None
-        
-        # Usar contexto actual si necesario
-        agent_id = agent_id or get_current_agent_id()
-        conversation_id = conversation_id or get_current_conversation_id()
-        collection_id = collection_id or get_current_collection_id()
-        
-        # Verificar caché en memoria primero
-        if use_memory:
-            # Clave para memoria (siempre usamos la clave más específica)
-            memory_key = CacheManager._build_key(
-                data_type, resource_id, tenant_id, agent_id, 
-                conversation_id, collection_id
-            )
-            
-            if memory_key in _memory_cache:
-                if time.time() < _memory_expiry.get(memory_key, 0):
-                    return _memory_cache[memory_key]
-                # Limpiar si expiró
-                if memory_key in _memory_cache:
-                    del _memory_cache[memory_key]
-                if memory_key in _memory_expiry:
-                    del _memory_expiry[memory_key]
-                
-        # Generar claves de búsqueda
-        if search_hierarchy:
-            search_keys = CacheManager._generate_search_keys(
-                data_type, resource_id, tenant_id, agent_id, 
-                conversation_id, collection_id
-            )
+        # Control de recursión usando contexto de task
+        task = asyncio.current_task()
+        if not hasattr(task, "_cache_recursion_depth"):
+            setattr(task, "_cache_recursion_depth", 0)
         else:
-            # Usar solo la clave exacta
-            search_keys = [CacheManager._build_key(
-                data_type, resource_id, tenant_id, agent_id, 
-                conversation_id, collection_id
-            )]
+            current_depth = getattr(task, "_cache_recursion_depth")
+            if current_depth > 2:  # Limitar a 3 niveles máximo
+                logger.warning(f"Alcanzada profundidad máxima de recursión en caché para {data_type}:{resource_id}")
+                return None
+            setattr(task, "_cache_recursion_depth", current_depth + 1)
             
-        # Buscar en Redis
-        redis_client = await get_redis_client()
-        if not redis_client:
-            return None
-            
-        for key in search_keys:
-            try:
-                value = await redis_client.get(key)
-                if value:
-                    # Usar la función de deserialización centralizada en lugar de importarla en cada llamada
-                    try:
-                        decoded = json.loads(value)
-                    except json.JSONDecodeError:
-                        # Si no es JSON válido, usar el valor tal cual
-                        decoded = value
-                        
-                    result = self._deserialize_from_cache(decoded, data_type)
-                    
-                    # Guardar en memoria para futuras consultas
-                    if use_memory:
-                        memory_key = search_keys[0]  # La clave más específica
-                        self._add_to_memory_cache(memory_key, result)
-                        
-                    return result
-            except Exception as e:
-                logger.warning(f"Error al leer de Redis con clave {key}: {e}")
-                continue
+        try:
+            # Validar parámetros obligatorios
+            tenant_id = tenant_id or get_current_tenant_id()
+            if not tenant_id:
+                logger.warning(f"Tenant ID es obligatorio para obtener {data_type} de caché")
+                return None
                 
+            if not resource_id:
+                logger.warning(f"Resource ID es obligatorio para obtener {data_type} de caché")
+                return None
+            
+            # Usar contexto actual si necesario
+            agent_id = agent_id or get_current_agent_id()
+            conversation_id = conversation_id or get_current_conversation_id()
+            collection_id = collection_id or get_current_collection_id()
+            
+            # Verificar caché en memoria primero
+            if use_memory:
+                # Clave para memoria (siempre usamos la clave más específica)
+                memory_key = CacheManager._build_key(
+                    data_type, resource_id, tenant_id, agent_id, 
+                    conversation_id, collection_id
+                )
+                
+                if memory_key in _memory_cache:
+                    if time.time() < _memory_expiry.get(memory_key, 0):
+                        return _memory_cache[memory_key]
+                    # Limpiar si expiró
+                    if memory_key in _memory_cache:
+                        del _memory_cache[memory_key]
+                    if memory_key in _memory_expiry:
+                        del _memory_expiry[memory_key]
+                    
+            # Generar claves de búsqueda
+            if search_hierarchy:
+                search_keys = CacheManager._generate_search_keys(
+                    data_type, resource_id, tenant_id, agent_id, 
+                    conversation_id, collection_id
+                )
+            else:
+                # Usar solo la clave exacta
+                search_keys = [CacheManager._build_key(
+                    data_type, resource_id, tenant_id, agent_id, 
+                    conversation_id, collection_id
+                )]
+                
+            # Buscar en Redis
+            redis_client = await get_redis_client()
+            if not redis_client:
+                return None
+                
+            for key in search_keys:
+                try:
+                    value = await redis_client.get(key)
+                    if value:
+                        # Usar la función de deserialización centralizada en lugar de importarla en cada llamada
+                        try:
+                            decoded = json.loads(value)
+                        except json.JSONDecodeError:
+                            # Si no es JSON válido, usar el valor tal cual
+                            decoded = value
+                            
+                        result = self._deserialize_from_cache(decoded, data_type)
+                        
+                        # Guardar en memoria para futuras consultas
+                        if use_memory:
+                            memory_key = search_keys[0]  # La clave más específica
+                            self._add_to_memory_cache(memory_key, result)
+                            
+                        return result
+                except Exception as e:
+                    logger.warning(f"Error al leer de Redis con clave {key}: {e}")
+                    continue
+                    
+        finally:
+            # Restaurar el contador de recursión
+            if hasattr(task, "_cache_recursion_depth"):
+                current_depth = getattr(task, "_cache_recursion_depth")
+                if current_depth > 0:
+                    setattr(task, "_cache_recursion_depth", current_depth - 1)
+                else:
+                    delattr(task, "_cache_recursion_depth")
+                    
         return None
     
     @staticmethod
@@ -1096,7 +1106,7 @@ class CacheManager:
         if agent_id: pattern_parts.append(f"agent:{agent_id}")
         if conversation_id: pattern_parts.append(f"conv:{conversation_id}")
         if collection_id: pattern_parts.append(f"coll:{collection_id}")
-        pattern = ":".join(pattern_parts)
+        pattern = ":".join(filter(None, pattern_parts))
         redis_client = await get_redis_client()
         keys = await redis_client.keys(f"{pattern}*")
         deleted = 0

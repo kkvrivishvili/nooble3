@@ -254,7 +254,19 @@ def handle_errors(
                     pass
                 
                 # Para logging
-                log_extras = {"extra": context} if context else {}
+                log_extras = {}
+                if context:
+                    # Copia el contexto pero excluye claves reservadas por LogRecord
+                    reserved_keys = {'args', 'asctime', 'created', 'exc_info', 'exc_text', 'filename', 
+                                    'funcName', 'levelname', 'levelno', 'lineno', 'module', 'msecs', 
+                                    'message', 'msg', 'name', 'pathname', 'process', 'processName', 
+                                    'relativeCreated', 'stack_info', 'thread', 'threadName'}
+                    
+                    # Usar un prefijo para claves que podrían entrar en conflicto
+                    log_extras = {
+                        f"ctx_{k}" if k in reserved_keys else k: v
+                        for k, v in context.items()
+                    }
                 
                 # Manejamos los diferentes tipos de errores según el parámetro error_type
                 if error_type == "config":
@@ -262,27 +274,26 @@ def handle_errors(
                     if isinstance(e, KeyError):
                         # Error típico al intentar acceder a una configuración inexistente
                         context.update({"missing_key": str(e)})
-                        logger.error(f"Configuración faltante: {str(e)}", **log_extras)
+                        logger.error(f"Configuración faltante: {str(e)}", extra=log_extras)
                         raise ConfigurationError(
                             message=f"Configuración faltante: {str(e)}",
                             error_code=ErrorCode.MISSING_CONFIGURATION.value,
                             context=context
                         )
                     elif isinstance(e, (ValueError, TypeError)):
-                        # Error típico de configuración inválida
-                        logger.error(f"Configuración inválida: {str(e)}", **log_extras)
+                        # Errores de tipo o formato
+                        logger.error(f"Error de formato en configuración: {str(e)}", extra=log_extras)
                         raise ConfigurationError(
-                            message=f"Configuración inválida: {str(e)}",
+                            message=f"Error de formato en configuración: {str(e)}",
                             error_code=ErrorCode.INVALID_CONFIGURATION.value,
-                            status_code=400,
                             context=context
                         )
                     else:
                         # Otras excepciones se convierten en error genérico de configuración
                         if log_traceback:
-                            logger.error(f"Error de configuración: {str(e)}", exc_info=True, **log_extras)
+                            logger.error(f"Error de configuración: {str(e)}", exc_info=True, extra=log_extras)
                         else:
-                            logger.error(f"Error de configuración: {str(e)}", **log_extras)
+                            logger.error(f"Error de configuración: {str(e)}", extra=log_extras)
                         
                         raise ConfigurationError(
                             message=f"Error de configuración: {str(e)}",
@@ -292,7 +303,7 @@ def handle_errors(
                     # Manejo estándar para errores de servicio
                     # Verificar si el tipo de excepción está en el mapa de errores
                     exception_type = type(e)
-                    error_code = ErrorCode.INTERNAL_ERROR
+                    error_code = ErrorCode.GENERAL_ERROR
                     status_code = 500
                     
                     if error_map and exception_type in error_map:
@@ -302,9 +313,9 @@ def handle_errors(
                     # Log del error
                     error_message = f"Error en {function_name}: {str(e)}"
                     if log_traceback:
-                        logger.error(error_message, exc_info=True, **log_extras)
+                        logger.error(error_message, exc_info=True, extra=log_extras)
                     else:
-                        logger.error(error_message, **log_extras)
+                        logger.error(error_message, extra=log_extras)
                     
                     if convert_exceptions:
                         # Convertir a ServiceError con contexto

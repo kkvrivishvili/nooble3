@@ -18,6 +18,7 @@ from common.utils.http import check_service_health
 # Importación para verificación de salud
 from common.cache.manager import CacheManager
 from common.db.supabase import get_supabase_client
+from common.db.tables import get_table_name
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -145,8 +146,15 @@ async def check_cache_connection() -> bool:
         bool: True si caché disponible, False en caso contrario
     """
     try:
-        await CacheManager.get(data_type="system", resource_id="health_check")
-        return True
+        # En lugar de usar CacheManager.get que puede causar recursión,
+        # verificamos directamente el cliente Redis usando el método de common.cache.manager
+        from common.cache.manager import get_redis_client
+        redis_client = await get_redis_client()
+        if redis_client:
+            # Realizar una operación simple con Redis
+            await redis_client.ping()
+            return True
+        return False
     except Exception as e:
         logger.error(f"Error al verificar caché: {e}")
         return False
@@ -159,6 +167,14 @@ async def check_supabase_connection() -> bool:
         bool: True si la conexión está disponible, False en caso contrario
     """
     try:
+        # Verificar si Supabase está habilitado
+        import os
+        if os.getenv("LOAD_CONFIG_FROM_SUPABASE", "false").lower() != "true":
+            # Si está deshabilitado por configuración, considerarlo "successful"
+            # pero reportarlo como un estado especial
+            logger.info("Supabase está deshabilitado, reportando como deshabilitado pero 'saludable'")
+            return True
+            
         supabase = get_supabase_client()
         # Intentar una operación sencilla
         result = await supabase.table(get_table_name("tenants")).select("count", count="exact").limit(1).execute()

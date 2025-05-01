@@ -36,7 +36,7 @@ async def lifespan(app: FastAPI):
         logger.info(f"Inicializando servicio de {settings.service_name}")
         
         # Inicializar Supabase
-        init_supabase()
+        await init_supabase()
         
         # Verificar conexión al sistema de caché unificado
         try:

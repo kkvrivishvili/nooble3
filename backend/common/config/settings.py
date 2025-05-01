@@ -61,11 +61,18 @@ class Settings(BaseSettings):
     redis_password: Optional[str] = Field(None, env="REDIS_PASSWORD", description="Contraseña de Redis")
     
     # =========== Modelado de lenguaje ===========
-    openai_api_key: str = Field("", env="OPENAI_API_KEY", description="Clave de API de OpenAI")
+    openai_api_key: str = Field("", env="OPENAI_API_KEY", description="Clave API de OpenAI")
     openai_org_id: Optional[str] = Field(None, env="OPENAI_ORG_ID", description="ID de organización de OpenAI")
     anthropic_api_key: Optional[str] = Field(None, env="ANTHROPIC_API_KEY", description="Clave de API de Anthropic")
-    default_llm_model: str = Field("gpt-3.5-turbo", description="Modelo LLM por defecto")
-    default_embedding_model: str = Field("text-embedding-3-small", description="Modelo embedding por defecto")
+    default_llm_model: str = Field("gpt-3.5-turbo", env="DEFAULT_OPENAI_LLM_MODEL", description="Modelo predeterminado para LLM")
+    default_embedding_model: str = Field("text-embedding-3-small", env="DEFAULT_OPENAI_EMBEDDING_MODEL", description="Modelo predeterminado para embeddings")
+    
+    # =========== Configuración de Ollama ===========
+    use_ollama: bool = Field(False, env="USE_OLLAMA", description="Usar Ollama en lugar de OpenAI")
+    ollama_api_url: str = Field("http://ollama:11434", env="OLLAMA_API_URL", description="URL de la API de Ollama")
+    default_ollama_model: str = Field("llama3:1b", env="DEFAULT_OLLAMA_MODEL", description="Modelo predeterminado para Ollama")
+    default_ollama_llm_model: str = Field("llama3:1b", env="DEFAULT_OLLAMA_LLM_MODEL", description="Modelo LLM predeterminado para Ollama")
+    default_ollama_embedding_model: str = Field("nomic-embed-text", env="DEFAULT_OLLAMA_EMBEDDING_MODEL", description="Modelo de embedding para Ollama")
     
     # =========== API AI =========== 
     api_key_hash_salt: str = Field("default-salt", env="API_KEY_HASH_SALT", description="Salt para hash de claves de API")
@@ -282,47 +289,24 @@ def get_settings(tenant_id: Optional[str] = None) -> Settings:
 @lru_cache(maxsize=100)
 def _get_settings_lru(tenant_id: Optional[str]) -> Settings:
     """Caché LRU para objetos Settings."""
-    # Esta función solo existe para usar @lru_cache
-    # No implementamos la lógica aquí, solo es un placeholder
-    # que será llamado desde get_settings
-    raise ValueError("Esta función no debe ser llamada directamente")
+    # Función auxiliar para el sistema de caché LRU
+    # Cuando se llama por primera vez con un tenant_id, retornará una instancia de Settings
+    # Las llamadas posteriores con el mismo tenant_id retornarán la instancia cacheada
+    return Settings()
 
 def _add_settings_to_lru(tenant_id: Optional[str], settings: Settings) -> None:
     """Agrega un objeto Settings a la caché LRU."""
     try:
-        # Limpiar caché existente para ese tenant
+        # En Python 3.10, los objetos decorados con lru_cache
+        # tienen una estructura interna diferente.
+        # La forma más segura de gestionar la caché es simplemente
+        # limpiarla y permitir que se regenere en la siguiente llamada
         _get_settings_lru.cache_clear()
-        # La próxima vez que se llame con el mismo tenant_id,
-        # devolverá el objeto que haya sido cacheado por get_settings
+        
+        # La próxima vez que get_settings llame a _get_settings_lru
+        # con el mismo tenant_id, se almacenará el resultado en caché
     except Exception as e:
         logger.warning(f"Error manipulando caché LRU: {e}")
-
-def invalidate_settings_cache(tenant_id: Optional[str] = None) -> None:
-    """
-    Fuerza la recarga de configuraciones en la próxima llamada a get_settings().
-    
-    Esta función puede ser llamada cuando se sabe que las configuraciones
-    han cambiado en Supabase o cuando se desea forzar una recarga.
-    
-    Args:
-        tenant_id: ID del tenant específico o None para todos
-    """
-    global _force_settings_reload, _settings_last_refresh
-    
-    if tenant_id is None:
-        # Invalidar todas las configuraciones
-        _force_settings_reload = True
-        _settings_last_refresh = {}
-        # Limpiar toda la caché LRU
-        _get_settings_lru.cache_clear()
-        logger.info("Cache de configuraciones global invalidada")
-    else:
-        # Invalidar solo el tenant específico
-        if tenant_id in _settings_last_refresh:
-            del _settings_last_refresh[tenant_id]
-            # Forzamos recarga para el próximo acceso
-            _force_settings_reload = True
-            logger.info(f"Cache de configuraciones para tenant {tenant_id} invalidada")
 
 def get_service_settings(service_name: str, service_version: Optional[str] = None, tenant_id: Optional[str] = None) -> Settings:
     """
@@ -437,3 +421,30 @@ def get_service_settings(service_name: str, service_version: Optional[str] = Non
     
     logger.debug(f"Configuración específica para {service_name} cargada correctamente")
     return settings
+
+def invalidate_settings_cache(tenant_id: Optional[str] = None) -> None:
+    """
+    Fuerza la recarga de configuraciones en la próxima llamada a get_settings().
+    
+    Esta función puede ser llamada cuando se sabe que las configuraciones
+    han cambiado en Supabase o cuando se desea forzar una recarga.
+    
+    Args:
+        tenant_id: ID del tenant específico o None para todos
+    """
+    global _force_settings_reload, _settings_last_refresh
+    
+    if tenant_id is None:
+        # Invalidar todas las configuraciones
+        _force_settings_reload = True
+        _settings_last_refresh = {}
+        # Limpiar toda la caché LRU
+        _get_settings_lru.cache_clear()
+        logger.info("Cache de configuraciones global invalidada")
+    else:
+        # Invalidar solo el tenant específico
+        if tenant_id in _settings_last_refresh:
+            del _settings_last_refresh[tenant_id]
+            # Forzamos recarga para el próximo acceso
+            _force_settings_reload = True
+            logger.info(f"Cache de configuraciones para tenant {tenant_id} invalidada")

@@ -22,8 +22,8 @@ from common.context import with_context, Context
 from common.auth.tenant import TenantInfo, verify_tenant
 from common.config import get_settings
 from common.cache import CacheManager, invalidate_document_update
-from common.db.supabase import get_supabase_client, get_table_name
-from common.db.tables import get_tenant_collections
+from common.db.supabase import get_supabase_client
+from common.db.tables import get_table_name, get_tenant_collections
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

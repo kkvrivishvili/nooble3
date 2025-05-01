@@ -16,6 +16,7 @@ openpyxl==3.1.2
 beautifulsoup4>=4.12.3,<5.0.0
 markdown==3.5
 pandas==2.1.0
+pymupdf==1.23.21  # Añadido para importar 'fitz' (PyMuPDF)
 
 # LlamaIndex - Núcleo y extensiones
 llama-index==0.12.26
