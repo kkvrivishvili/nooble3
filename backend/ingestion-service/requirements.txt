@@ -11,10 +11,12 @@ supabase==2.15.0
 # Procesamiento de documentos
 pypdf2==3.0.1
 docx2txt==0.8
+python-docx==1.1.0  # Añadido para importar 'docx' (procesar archivos .docx)
 python-pptx==0.6.22
 openpyxl==3.1.2
 beautifulsoup4>=4.12.3,<5.0.0
 markdown==3.5
+numpy==1.24.4  # Versión específica compatible con pandas 2.1.0
 pandas==2.1.0
 pymupdf==1.23.21  # Añadido para importar 'fitz' (PyMuPDF)
 

@@ -10,6 +10,8 @@ from datetime import datetime
 from typing import Dict, Any, Optional, List, Callable, Protocol, Type
 import asyncio
 
+from fastapi import UploadFile
+
 from common.config import get_settings
 from common.db.storage import get_file_from_storage
 from common.errors import DocumentProcessingError, ValidationError, ServiceError, ErrorCode, handle_errors

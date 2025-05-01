@@ -13,9 +13,11 @@ from typing import Dict, Any, Optional, List, BinaryIO, Union
 from fastapi import UploadFile
 from llama_index.readers.file import (
     PDFReader, DocxReader, CSVReader, 
-    PandasExcelReader, HTMLReader, 
+    PandasExcelReader, 
     MarkdownReader, ImageReader
 )
+# Implementaremos nuestro propio HTMLReader usando BeautifulSoup
+from bs4 import BeautifulSoup
 from llama_index.core import Document
 
 from common.errors import DocumentProcessingError, ValidationError, ServiceError, handle_errors
@@ -26,6 +28,45 @@ from common.config import get_settings
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+# Implementación personalizada de HTMLReader ya que la versión de LlamaIndex no la tiene disponible
+class CustomHTMLReader:
+    """Lector personalizado para contenido HTML usando BeautifulSoup."""
+    
+    def load_data(self, file_path=None, html_str=None):
+        """
+        Carga y procesa contenido HTML ya sea desde un archivo o desde una cadena.
+        
+        Args:
+            file_path: Ruta al archivo HTML (opcional)
+            html_str: Cadena de texto HTML (opcional)
+            
+        Returns:
+            Una lista de documentos de LlamaIndex
+        """
+        if file_path is None and html_str is None:
+            raise ValueError("Debe proporcionar file_path o html_str")
+            
+        if file_path is not None:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                html_content = f.read()
+        else:
+            html_content = html_str
+            
+        soup = BeautifulSoup(html_content, 'html.parser')
+        
+        # Extraer texto del body, eliminando scripts y estilos
+        for script in soup(["script", "style"]):
+            script.extract()
+            
+        text = soup.get_text(separator='\n', strip=True)
+        
+        # Obtener metadatos básicos (título si existe)
+        metadata = {}
+        if soup.title and soup.title.string:
+            metadata["title"] = soup.title.string
+            
+        return [Document(text=text, metadata=metadata)]
+
 # Mapa de tipos MIME a lectores de LlamaIndex
 LLAMA_READERS = {
     'application/pdf': PDFReader(),
@@ -35,8 +76,8 @@ LLAMA_READERS = {
     'application/csv': CSVReader(),
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': PandasExcelReader(),
     'application/vnd.ms-excel': PandasExcelReader(),
-    'text/html': HTMLReader(),
-    'application/xhtml+xml': HTMLReader(),
+    'text/html': CustomHTMLReader(),
+    'application/xhtml+xml': CustomHTMLReader(),
     'text/markdown': MarkdownReader(),
     'text/plain': None,  # Manejado directamente como texto
     'image/jpeg': ImageReader(),

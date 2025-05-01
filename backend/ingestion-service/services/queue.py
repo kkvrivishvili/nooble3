@@ -12,10 +12,10 @@ from typing import Dict, Any, Optional, List
 from common.config import get_settings, get_tier_limits
 from common.errors import ServiceError, handle_errors, ErrorCode
 from common.context import Context, with_context, get_full_context
-from common.database import get_supabase_client, get_table_name
+from common.db import get_supabase_client
+from common.db.tables import get_table_name
 from common.cache.manager import CacheManager
-from services.document import update_document_status
-from services.storage import update_processing_job
+from services.storage import update_document_status, update_processing_job
 from services.extraction import extract_text_from_file, validate_file, get_extractor_for_mimetype
 
 # Importar servicios de LlamaIndex
@@ -633,6 +633,192 @@ async def process_next_job(ctx: Context = None) -> bool:
                 logger.debug(f"Lock liberado para job_id={job_id}", extra={"job_id": job_id})
             except Exception as unlock_error:
                 logger.error(f"Error liberando lock para job_id={job_id}: {str(unlock_error)}")
+
+@with_context(tenant=True, validate_tenant=True)
+@handle_errors(error_type="service", log_traceback=True)
+async def get_job_status(job_id: str, tenant_id: str, ctx: Context = None) -> Dict[str, Any]:
+    """
+    Obtiene el estado de un trabajo de procesamiento.
+    
+    Args:
+        job_id: ID del trabajo
+        tenant_id: ID del tenant
+        ctx: Contexto proporcionado por el decorador with_context
+        
+    Returns:
+        Dict[str, Any]: Información del estado del trabajo
+        
+    Raises:
+        ServiceError: Si hay un error al obtener el estado del trabajo
+    """
+    # Validar el formato del ID del trabajo
+    if not job_id or not tenant_id:
+        raise ServiceError(
+            code=ErrorCode.INVALID_PARAMETER,
+            message="ID de trabajo o tenant no válido"
+        )
+    
+    # Obtener el estado del trabajo de Redis
+    try:
+        # La clave del estado del trabajo incluye el prefijo, tenant y el ID
+        status_key = f"{JOB_STATUS_PREFIX}{tenant_id}:{job_id}"
+        
+        # Intentar obtener el estado
+        status_data = await CacheManager.get(
+            data_type="system",
+            resource_id=status_key
+        )
+        
+        if not status_data:
+            logger.warning(f"No se encontró información de estado para el trabajo {job_id}")
+            return {
+                "job_id": job_id,
+                "status": "not_found",
+                "message": "No se encontró información para este trabajo"
+            }
+            
+        return status_data
+        
+    except Exception as e:
+        logger.error(f"Error al obtener estado del trabajo {job_id}: {str(e)}")
+        raise ServiceError(
+            code=ErrorCode.DATABASE_ERROR,
+            message=f"Error al obtener estado del trabajo: {str(e)}"
+        )
+
+@with_context(tenant=True, validate_tenant=True)
+@handle_errors(error_type="service", log_traceback=True)
+async def retry_failed_job(job_id: str, tenant_id: str, ctx: Context = None) -> bool:
+    """
+    Reintenta un trabajo fallido.
+    
+    Args:
+        job_id: ID del trabajo
+        tenant_id: ID del tenant
+        ctx: Contexto proporcionado por el decorador with_context
+        
+    Returns:
+        bool: True si se reintentó correctamente
+        
+    Raises:
+        ServiceError: Si hay un error al reintentar el trabajo
+    """
+    # Obtener información actual del trabajo
+    job_status = await get_job_status(job_id, tenant_id, ctx)
+    
+    if not job_status or job_status.get("status") == "not_found":
+        raise ServiceError(
+            code=ErrorCode.NOT_FOUND,
+            message="Trabajo no encontrado"
+        )
+        
+    if job_status.get("status") != "failed":
+        raise ServiceError(
+            code=ErrorCode.INVALID_STATE,
+            message=f"No se puede reintentar un trabajo con estado '{job_status.get('status')}'"
+        )
+    
+    # Restaurar el trabajo a la cola
+    try:
+        # Actualizar estado a 'pending'
+        status_key = f"{JOB_STATUS_PREFIX}{tenant_id}:{job_id}"
+        job_status["status"] = "pending"
+        job_status["updated_at"] = time.time()
+        job_status["retries"] = job_status.get("retries", 0) + 1
+        
+        # Guardar estado actualizado
+        await CacheManager.set(
+            data_type="system",
+            resource_id=status_key,
+            data=job_status
+        )
+        
+        # Añadir trabajo nuevamente a la cola
+        await CacheManager.push_to_list(
+            data_type="system",
+            resource_id=INGESTION_QUEUE,
+            value=job_id
+        )
+        
+        logger.info(f"Trabajo {job_id} reintentado correctamente")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error al reintentar trabajo {job_id}: {str(e)}")
+        raise ServiceError(
+            code=ErrorCode.DATABASE_ERROR,
+            message=f"Error al reintentar trabajo: {str(e)}"
+        )
+
+@with_context(tenant=True, validate_tenant=True)
+@handle_errors(error_type="service", log_traceback=True)
+async def cancel_job(job_id: str, tenant_id: str, ctx: Context = None) -> bool:
+    """
+    Cancela un trabajo pendiente o en proceso.
+    
+    Args:
+        job_id: ID del trabajo
+        tenant_id: ID del tenant
+        ctx: Contexto proporcionado por el decorador with_context
+        
+    Returns:
+        bool: True si se canceló correctamente
+        
+    Raises:
+        ServiceError: Si hay un error al cancelar el trabajo
+    """
+    # Obtener información actual del trabajo
+    job_status = await get_job_status(job_id, tenant_id, ctx)
+    
+    if not job_status or job_status.get("status") == "not_found":
+        raise ServiceError(
+            code=ErrorCode.NOT_FOUND,
+            message="Trabajo no encontrado"
+        )
+        
+    if job_status.get("status") in ["completed", "failed", "cancelled"]:
+        raise ServiceError(
+            code=ErrorCode.INVALID_STATE,
+            message=f"No se puede cancelar un trabajo con estado '{job_status.get('status')}'"
+        )
+    
+    # Marcar el trabajo como cancelado
+    try:
+        # Actualizar estado a 'cancelled'
+        status_key = f"{JOB_STATUS_PREFIX}{tenant_id}:{job_id}"
+        job_status["status"] = "cancelled"
+        job_status["updated_at"] = time.time()
+        job_status["message"] = "Trabajo cancelado por el usuario"
+        
+        # Guardar estado actualizado
+        await CacheManager.set(
+            data_type="system",
+            resource_id=status_key,
+            data=job_status
+        )
+        
+        # Actualizar el documento asociado para reflejar la cancelación
+        document_id = job_status.get("document_id")
+        if document_id:
+            await update_document_status(
+                document_id=document_id,
+                tenant_id=tenant_id,
+                status="cancelled",
+                metadata={"message": "Procesamiento cancelado por el usuario"}
+            )
+        
+        # Limpiar recursos del trabajo
+        await _cleanup_job_resources(job_id, tenant_id, ctx)
+        
+        logger.info(f"Trabajo {job_id} cancelado correctamente")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error al cancelar trabajo {job_id}: {str(e)}")
+        raise ServiceError(
+            code=ErrorCode.DATABASE_ERROR,
+            message=f"Error al cancelar trabajo: {str(e)}"
+        )
 
 @with_context(tenant=True)
 @handle_errors(error_type="service", log_traceback=True, convert_exceptions=False)

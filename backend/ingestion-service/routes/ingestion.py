@@ -28,7 +28,6 @@ from common.db.storage import upload_to_storage
 
 from services.llama_extractors import process_upload_with_llama_index
 from services.queue import queue_document_processing_job
-from services.storage import upload_to_storage
 from services.extraction import validate_file
 from services.llama_core import validate_file_with_llama_index
 
@@ -40,8 +39,6 @@ settings = get_settings()
 @router.post(
     "/upload",
     response_model=None,
-    response_model_exclude_none=True,
-    response_model_exclude={"ctx"},
     summary="Cargar documento",
     description="Carga un documento para procesamiento y generación de embeddings"
 )
