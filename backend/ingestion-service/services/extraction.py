@@ -17,7 +17,7 @@ from common.db.storage import get_file_from_storage
 from common.errors import DocumentProcessingError, ValidationError, ServiceError, ErrorCode, handle_errors
 from common.context.vars import get_full_context
 from common.context import with_context, Context
-from common.cache.manager import CacheManager
+from common.cache import CacheManager, get_with_cache_aside, serialize_for_cache
 
 import fitz  # PyMuPDF
 from bs4 import BeautifulSoup
@@ -719,33 +719,53 @@ async def process_file_from_storage(
     
     logger.info(f"Obteniendo archivo {file_key} del almacenamiento", extra=error_context)
     
-    # Intentar obtener el archivo del cache primero
-    cache_key = f"file:{file_key}"
-    cached_data = await CacheManager.get(
-        data_type="storage", 
-        resource_id=cache_key,
-        tenant_id=tenant_id,
-        use_memory=False  # Archivos potencialmente grandes, solo usar Redis
-    )
+    # Definir función para obtener de la base de datos
+    async def fetch_from_storage(resource_id, tenant_id):
+        logger.info(f"Obteniendo archivo {file_key} del almacenamiento", extra=error_context)
+        try:
+            with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+                local_path = temp_file.name
+                
+            # Obtener archivo del storage
+            file_data = await get_file_from_storage(file_key, local_path)
+            if not file_data:
+                return None
+                
+            file_data["local_path"] = local_path
+            return file_data
+        except Exception as e:
+            logger.error(f"Error obteniendo archivo del almacenamiento: {str(e)}", 
+                        extra=error_context, exc_info=True)
+            return None
     
-    if cached_data:
-        logger.info(f"Archivo {file_key} recuperado de caché", extra=error_context)
-        local_path = cached_data.get("local_path")
-        mimetype = cached_data.get("mimetype")
-        
-        if local_path:
-            # Verificar que el archivo aún existe
-            import os
-            if os.path.exists(local_path):
-                return await extract_text_from_file(local_path, mimetype)
-    
-    # Si no está en caché, obtenerlo del almacenamiento
-    try:
-        with tempfile.NamedTemporaryFile(delete=False) as temp_file:
-            local_path = temp_file.name
+    # Definir función para verificar validez del archivo en caché
+    async def validate_cached_data(cached_data):
+        if not cached_data:
+            return False
             
-        # Obtener archivo del storage
-        file_data = await get_file_from_storage(file_key, local_path)
+        local_path = cached_data.get("local_path")
+        if not local_path:
+            return False
+            
+        # Verificar que el archivo aún existe
+        import os
+        return os.path.exists(local_path)
+    
+    # Utilizar patrón de cache estandarizado
+    try:
+        resource_id = f"file:{file_key}"
+        
+        # Usar get_with_cache_aside siguiendo el patrón recomendado
+        file_data, _ = await get_with_cache_aside(
+            data_type="storage",
+            resource_id=resource_id,
+            tenant_id=tenant_id,
+            collection_id=collection_id,
+            fetch_from_db_func=fetch_from_storage,
+            validate_cache_func=validate_cached_data,
+            serialize_data=False  # Los datos ya están en formato serializable
+        )
+        
         if not file_data:
             raise ServiceError(
                 message=f"Failed to retrieve file {file_key} from storage",
@@ -753,19 +773,9 @@ async def process_file_from_storage(
                 context=error_context
             )
             
-        mimetype = file_data.get("mimetype")
-        
-        # Guardar en caché para futuras operaciones
-        await CacheManager.set(
-            data_type="storage", 
-            resource_id=cache_key,
-            value={"local_path": local_path, "mimetype": mimetype},
-            tenant_id=tenant_id,
-            ttl=3600,  # 1 hora de caché
-            use_memory=False  # Archivos potencialmente grandes, solo usar Redis
-        )
-        
         # Extraer texto
+        local_path = file_data.get("local_path")
+        mimetype = file_data.get("mimetype")
         logger.info(f"Procesando archivo {file_key} de tipo {mimetype}", extra=error_context)
         return await extract_text_from_file(local_path, mimetype)
     except Exception as e:

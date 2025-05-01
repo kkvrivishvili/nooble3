@@ -7,7 +7,8 @@ from typing import Optional, List
 
 from fastapi import APIRouter, Depends, Query, Path
 
-from common.models import TenantInfo, JobListResponse, JobDetailResponse, JobUpdateResponse
+from common.models import TenantInfo
+from models import JobListResponse, JobDetailResponse, JobUpdateResponse, JobsStatsResponse
 from common.errors import (
     ServiceError, handle_errors, ErrorCode,
     ResourceNotFoundError
@@ -321,7 +322,8 @@ from typing import Dict
 
 from fastapi import APIRouter, Query, Depends
 
-from common.models import TenantInfo, JobsStatsResponse
+from common.models import TenantInfo
+from models import JobsStatsResponse
 from common.errors import ServiceError, handle_errors, ErrorCode
 from common.context import with_context, Context
 from common.auth import verify_tenant

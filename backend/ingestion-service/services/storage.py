@@ -147,7 +147,7 @@ async def update_processing_job(
                     "stats": processing_stats
                 },
                 tenant_id=tenant_id,
-                ttl=86400  # 24 horas
+                ttl=CacheManager.ttl_extended  # 24 horas (usando constante estándar)
             )
             
         except Exception as cache_error:

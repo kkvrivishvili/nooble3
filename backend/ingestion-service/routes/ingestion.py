@@ -5,7 +5,6 @@ Endpoints para la ingesta de documentos.
 import logging
 import uuid
 import time
-import traceback
 from typing import List, Optional
 
 from fastapi import APIRouter, UploadFile, File, Form, Depends, Query, Body
@@ -26,7 +25,6 @@ from common.config import get_settings
 from common.config.tiers import get_tier_limits
 from common.db.storage import upload_to_storage
 
-from services.llama_extractors import process_upload_with_llama_index
 from services.queue import queue_document_processing_job
 from services.extraction import validate_file
 from services.llama_core import validate_file_with_llama_index

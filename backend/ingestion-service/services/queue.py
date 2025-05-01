@@ -14,7 +14,7 @@ from common.errors import ServiceError, handle_errors, ErrorCode
 from common.context import Context, with_context, get_full_context
 from common.db import get_supabase_client
 from common.db.tables import get_table_name
-from common.cache.manager import CacheManager
+from common.cache import CacheManager, get_with_cache_aside
 from services.storage import update_document_status, update_processing_job
 from services.extraction import extract_text_from_file, validate_file, get_extractor_for_mimetype
 
@@ -658,18 +658,54 @@ async def get_job_status(job_id: str, tenant_id: str, ctx: Context = None) -> Di
             message="ID de trabajo o tenant no válido"
         )
     
-    # Obtener el estado del trabajo de Redis
+    # Función para obtener el estado del trabajo desde Supabase si no está en caché
+    async def fetch_job_from_db(resource_id, tenant_id):
+        try:
+            # Intentar obtener el estado del trabajo desde la tabla jobs
+            supabase = get_supabase_client()
+            result = await supabase.table(get_table_name("jobs")) \
+                .select("*") \
+                .eq("job_id", job_id) \
+                .eq("tenant_id", tenant_id) \
+                .single() \
+                .execute()
+                
+            if result.error:
+                logger.warning(f"Error al buscar trabajo en base de datos: {result.error}")
+                return None
+                
+            if not result.data:
+                return None
+                
+            # Convertir el resultado a un formato compatible con el que se usa en caché
+            job_data = {
+                "job_id": job_id,
+                "status": result.data.get("status", "unknown"),
+                "progress": result.data.get("progress", 0),
+                "document_id": result.data.get("document_id"),
+                "collection_id": result.data.get("collection_id"),
+                "created_at": result.data.get("created_at"),
+                "updated_at": result.data.get("updated_at"),
+                "error": result.data.get("error"),
+                "processing_stats": result.data.get("processing_stats")
+            }
+            return job_data
+        except Exception as e:
+            logger.error(f"Error al obtener trabajo desde Supabase: {str(e)}")
+            return None
+    
     try:
-        # La clave del estado del trabajo incluye el prefijo, tenant y el ID
-        status_key = f"{JOB_STATUS_PREFIX}{tenant_id}:{job_id}"
-        
-        # Intentar obtener el estado
-        status_data = await CacheManager.get(
-            data_type="system",
-            resource_id=status_key
+        # Usar el patrón Cache-Aside estándar
+        result, metrics = await get_with_cache_aside(
+            data_type="job_status",
+            resource_id=job_id,
+            tenant_id=tenant_id,
+            fetch_from_db_func=fetch_job_from_db,
+            generate_func=None  # No generamos trabajos que no existen
         )
         
-        if not status_data:
+        # Si no se encontró en caché ni en DB
+        if not result:
             logger.warning(f"No se encontró información de estado para el trabajo {job_id}")
             return {
                 "job_id": job_id,
@@ -677,7 +713,10 @@ async def get_job_status(job_id: str, tenant_id: str, ctx: Context = None) -> Di
                 "message": "No se encontró información para este trabajo"
             }
             
-        return status_data
+        # Añadir métricas de caché a los logs
+        logger.debug(f"Métricas de caché para job_status: {metrics}")
+            
+        return result
         
     except Exception as e:
         logger.error(f"Error al obtener estado del trabajo {job_id}: {str(e)}")
