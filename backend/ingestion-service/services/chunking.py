@@ -26,7 +26,7 @@ from llama_index.core import (
     ServiceContext, StorageContext, SimpleDirectoryReader
 )
 from llama_index.core.node_parser import SentenceSplitter
-from llama_index_readers_file import (
+from llama_index.readers.file import (
     PDFReader, DocxReader, CSVReader, 
     PandasExcelReader, MarkdownReader, ImageReader
 )
@@ -41,7 +41,7 @@ from common.context import with_context, Context
 from common.tracking import track_token_usage
 from common.cache.manager import CacheManager
 from common.cache import get_with_cache_aside, invalidate_document_update
-from services.storage import download_file_from_storage
+
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
