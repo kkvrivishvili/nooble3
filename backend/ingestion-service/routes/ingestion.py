@@ -35,13 +35,13 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-@with_context(tenant=True, collection=True)
 @router.post(
     "/upload",
     response_model=None,
     summary="Cargar documento",
     description="Carga un documento para procesamiento y generación de embeddings"
 )
+@with_context(tenant=True, collection=True)
 @handle_errors(error_type="simple", log_traceback=False)
 async def upload_document(
     file: UploadFile = File(...),
@@ -185,15 +185,14 @@ async def upload_document(
             details=error_context
         )
 
-@with_context(tenant=True, collection=True)
 @router.post(
     "/ingest-url",
     response_model=None,
     response_model_exclude_none=True,
-    response_model_exclude={"ctx"},
     summary="Ingerir contenido de URL",
     description="Procesa y genera embeddings para el contenido de una URL"
 )
+@with_context(tenant=True, collection=True)
 @handle_errors(error_type="simple", log_traceback=False)
 async def ingest_url(
     request: UrlIngestionRequest,
@@ -282,15 +281,14 @@ class TextIngestionRequest(BaseModel):
     description: Optional[str] = None
     tags: Optional[List[str]] = None
 
-@with_context(tenant=True, collection=True)
 @router.post(
     "/ingest-text",
     response_model=None,
     response_model_exclude_none=True,
-    response_model_exclude={"ctx"},
-    summary="Ingerir texto",
-    description="Ingiere un texto plano proporcionado directamente"
+    summary="Ingerir texto plano",
+    description="Procesa y genera embeddings para texto plano"
 )
+@with_context(tenant=True, collection=True)
 @handle_errors(error_type="simple", log_traceback=False)
 async def ingest_text(
     request: TextIngestionRequest,
@@ -378,15 +376,14 @@ class BatchUrlsRequest(BaseModel):
     title_prefix: Optional[str] = None
     tags: Optional[List[str]] = None
 
-@with_context(tenant=True, collection=True)
 @router.post(
     "/batch-urls",
     response_model=None,
     response_model_exclude_none=True,
-    response_model_exclude={"ctx"},
     summary="Procesar lote de URLs",
-    description="Ingiere contenido de múltiples URLs en una colección"
+    description="Procesa un lote de URLs en segundo plano"
 )
+@with_context(tenant=True, collection=True)
 @handle_errors(error_type="simple", log_traceback=False)
 async def batch_process_urls(
     request: BatchUrlsRequest,

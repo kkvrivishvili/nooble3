@@ -20,15 +20,14 @@ from common.db.tables import get_table_name
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-@with_context(tenant=True, collection=True)
 @router.get(
     "/documents",
     response_model=DocumentListResponse,
     response_model_exclude_none=True,
-    response_model_exclude={"ctx"},
     summary="Listar documentos",
     description="Obtiene la lista de documentos para un tenant o colección específica"
 )
+@with_context(tenant=True, collection=True)
 @handle_errors(error_type="simple", log_traceback=False)
 async def list_documents(
     collection_id: Optional[str] = Query(None, description="Filtrar por ID de colección"),
@@ -116,15 +115,14 @@ async def list_documents(
             error_code="DOCUMENT_LIST_ERROR"
         )
 
-@with_context(tenant=True)
 @router.get(
     "/documents/{document_id}",
     response_model=DocumentDetailResponse,
     response_model_exclude_none=True,
-    response_model_exclude={"ctx"},
     summary="Obtener documento",
     description="Obtiene detalles de un documento específico"
 )
+@with_context(tenant=True)
 @handle_errors(error_type="simple", log_traceback=False)
 async def get_document(
     document_id: str = Path(..., description="ID del documento"),
@@ -220,15 +218,14 @@ async def get_document(
             error_code="DOCUMENT_FETCH_ERROR"
         )
 
-@with_context(tenant=True)
 @router.delete(
     "/documents/{document_id}",
     response_model=DeleteDocumentResponse,
     response_model_exclude_none=True,
-    response_model_exclude={"ctx"},
     summary="Eliminar documento",
-    description="Elimina un documento y todos sus chunks"
+    description="Elimina un documento y todos sus chunks asociados"
 )
+@with_context(tenant=True)
 @handle_errors(error_type="simple", log_traceback=False)
 async def delete_document(
     document_id: str = Path(..., description="ID del documento a eliminar"),
