@@ -24,7 +24,9 @@ from common.errors import DocumentProcessingError, ValidationError, ServiceError
 from common.context import with_context, Context
 from common.tracking import track_token_usage
 from common.config import get_settings
-from common.cache import get_with_cache_aside, serialize_for_cache
+# Importar CacheManager y get_with_cache_aside de forma separada para evitar ciclos
+from common.cache.manager import CacheManager
+from common.cache.helpers import get_with_cache_aside, serialize_for_cache
 import hashlib
 import tiktoken
 

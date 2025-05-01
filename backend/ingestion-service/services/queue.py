@@ -14,7 +14,9 @@ from common.errors import ServiceError, handle_errors, ErrorCode
 from common.context import Context, with_context, get_full_context
 from common.db import get_supabase_client
 from common.db.tables import get_table_name
-from common.cache import CacheManager, get_with_cache_aside
+# Importar CacheManager y get_with_cache_aside separadamente para evitar ciclos de importación
+from common.cache.manager import CacheManager
+from common.cache.helpers import get_with_cache_aside
 from services.storage import update_document_status, update_processing_job
 from services.extraction import extract_text_from_file, validate_file, get_extractor_for_mimetype
 
@@ -40,23 +42,28 @@ JOB_LOCK_EXPIRY = 600  # 10 minutos en segundos (tiempo máximo para procesar un
 
 async def initialize_queue():
     """Inicializa el sistema de colas."""
-    # Comprobar la disponibilidad del servicio de caché mediante CacheManager
+    # Comprobar la disponibilidad del servicio de caché usando Redis directamente
     try:
-        # Intentar una operación simple para verificar disponibilidad
-        try:
-            test_value = await CacheManager.get(
-                data_type="system",
-                resource_id="queue_test"
-            )
-        except Exception as cache_err:
-            logger.warning(f"CacheManager no disponible: {str(cache_err)}")
-            test_value = None
+        # Importar Redis directamente y verificar conexión
+        import redis.asyncio as redis
+        if settings.redis_url:
+            try:
+                redis_client = redis.from_url(settings.redis_url)
+                # Realizar una operación simple para verificar conexión
+                await redis_client.set("ingestion-service:queue_test", "ok", ex=10)
+                test_value = await redis_client.get("ingestion-service:queue_test")
+            except Exception as cache_err:
+                logger.warning(f"Error conectando a Redis: {str(cache_err)}")
+                test_value = None
         
-        if test_value is not None:
-            logger.info("Sistema de colas inicializado correctamente")
-            return True
+            if test_value is not None:
+                logger.info("Sistema de colas inicializado correctamente")
+                return True
+            else:
+                logger.warning("Redis no disponible - procesamiento asíncrono deshabilitado")
+                return False
         else:
-            logger.warning("Redis no disponible - procesamiento asíncrono deshabilitado")
+            logger.warning("REDIS_URL no configurado - procesamiento asíncrono deshabilitado")
             return False
     except Exception as e:
         logger.warning(f"Redis no disponible - procesamiento asíncrono deshabilitado: {str(e)}")
@@ -326,7 +333,7 @@ async def process_next_job_with_retry(max_retries: int = 3) -> bool:
             await asyncio.sleep(2 ** attempt)  # Backoff exponencial
     return False
 
-@with_context(tenant=True, validate_tenant=True)
+@with_context(tenant=True, validate_tenant=False)
 @handle_errors(error_type="service", log_traceback=True)
 async def process_next_job(ctx: Context = None) -> bool:
     """
@@ -341,8 +348,8 @@ async def process_next_job(ctx: Context = None) -> bool:
     Raises:
         ServiceError: Si no hay un tenant válido en el contexto
     """
-    settings = get_settings()
-    job_lock_expire_seconds = settings.job_lock_expire_seconds
+    # Usar la constante JOB_LOCK_EXPIRY en lugar de un atributo que no existe en settings
+    job_lock_expire_seconds = JOB_LOCK_EXPIRY
     
     # Tomar el siguiente trabajo de la cola
     job_data = await CacheManager.lpop(queue_name=INGESTION_QUEUE)

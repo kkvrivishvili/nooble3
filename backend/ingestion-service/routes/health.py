@@ -10,7 +10,8 @@ from common.models import HealthResponse
 from common.errors import handle_errors
 from common.context import with_context, Context
 from common.config import get_settings
-from common.cache.manager import CacheManager
+# Evitar usar CacheManager directamente aquí para prevenir recursiones
+# Usar directamente el nombre del servicio en lugar de importarlo
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
 from common.utils.http import check_service_health
@@ -32,12 +33,14 @@ async def get_service_status(ctx: Context = None) -> HealthResponse:
     # Verificar sistema de caché unificado
     cache_status = "unavailable"
     try:
-        # Intentar una operación simple con CacheManager
-        await CacheManager.get(
-            data_type="system",
-            resource_id="health_check"
-        )
-        cache_status = "available"
+        # Usar Redis directamente en lugar de CacheManager para verificar estado
+        import redis.asyncio as redis
+        settings = get_settings()
+        if settings.redis_url:
+            redis_client = redis.from_url(settings.redis_url)
+            # Realizar una operación simple para verificar conexión
+            await redis_client.set("ingestion-service:health_check", "ok", ex=10)
+            cache_status = "available"
     except Exception as e:
         logger.warning(f"Cache no disponible: {str(e)}")
     

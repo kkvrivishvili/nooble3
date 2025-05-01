@@ -44,15 +44,18 @@ async def lifespan(app: FastAPI):
         # Inicializar Supabase
         await init_supabase()
         
-        # Verificar conexión a Redis para caché y colas mediante CacheManager
+        # Verificar conexión a Redis para caché y colas sin usar CacheManager
         cache_available = True
         try:
-            # Intentar operación simple para verificar disponibilidad del cache
-            await CacheManager.get(
-                data_type="system",
-                resource_id="health_check"
-            )
-            logger.info("Conexión a Cache establecida correctamente")
+            # Importar Redis directamente y verificar conexión
+            import redis.asyncio as redis
+            if settings.redis_url:
+                redis_client = redis.from_url(settings.redis_url)
+                # Realizar una operación simple para verificar conexión
+                await redis_client.set("ingestion-service:health_check", "ok", ex=10)
+                logger.info("Conexión a Cache establecida correctamente")
+            else:
+                raise ValueError("REDIS_URL no configurado")
         except Exception as e:
             logger.warning(f"No se pudo conectar al sistema de caché: {str(e)}")
             cache_available = False

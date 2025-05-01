@@ -17,7 +17,7 @@ router = APIRouter(tags=["collections"])
 logger = logging.getLogger(__name__)
 
 @router.get(
-    "",
+    "/collections",
     response_model=CollectionsListResponse,
     response_model_exclude_none=True,
     summary="Listar colecciones",
