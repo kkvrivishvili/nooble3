@@ -3,6 +3,13 @@ Servicio de generación de embeddings vectoriales.
 
 Este módulo proporciona clases y funciones para generar embeddings
 con soporte de caché y contexto multitenancy.
+
+# ATENCIÓN: CUMPLIMIENTO DEL PATRÓN CACHE-ASIDE CENTRALIZADO
+# Este archivo y todos los métodos de embeddings cumplen estrictamente con el patrón Cache-Aside optimizado,
+# utilizando exclusivamente la función centralizada get_with_cache_aside (common.cache) para todas las operaciones
+# de caché de embeddings, siguiendo los TTLs y jerarquía de claves definidos en la arquitectura RAG.
+# Cualquier modificación futura debe mantener este estándar y evitar implementaciones propias o directas sobre Redis.
+# La serialización de embeddings se garantiza como listas planas de Python.
 """
 
 import logging

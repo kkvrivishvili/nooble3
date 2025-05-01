@@ -3,6 +3,12 @@ Utilidades para integración con LlamaIndex.
 
 Este módulo proporciona funciones auxiliares para trabajar con LlamaIndex,
 asegurando compatibilidad con el servicio de ingestión y otros servicios.
+
+# ATENCIÓN: PATRÓN CACHE-ASIDE CENTRALIZADO
+# Este archivo implementa el patrón Cache-Aside optimizado para embeddings, usando exclusivamente
+# get_with_cache_aside (common.cache) para todas las operaciones de caché de embeddings. Está alineado
+# con las políticas de caché, jerarquía de claves y serialización estándar de la arquitectura RAG.
+# Cualquier modificación debe mantener este estándar y evitar lógica de caché personalizada.
 """
 
 import logging

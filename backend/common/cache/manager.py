@@ -308,12 +308,6 @@ class CacheManager:
                 current_depth = getattr(task, "_cache_recursion_depth")
                 if current_depth > 0:
                     setattr(task, "_cache_recursion_depth", current_depth - 1)
-                else:
-                    delattr(task, "_cache_recursion_depth")
-                    
-        return None
-    
-    @staticmethod
     async def get(
         data_type: str,
         resource_id: str,
@@ -1235,7 +1229,20 @@ class CacheManager:
         Método estático compatible que llama al método de instancia lpop().
         """
         instance = CacheManager.get_instance()
-        return await instance.lpop(queue_name)
+        return await instance._lpop_impl(queue_name)
+
+    async def _lpop_impl(self, queue_name: str) -> Optional[Any]:
+        """
+        Implementación real de lpop para Redis, sin recursión.
+        """
+        redis_client = await get_redis_client()
+        if not redis_client:
+            return None
+        try:
+            return await redis_client.lpop(queue_name)
+        except Exception as e:
+            logger.warning(f"Error al hacer lpop en Redis lista {queue_name}: {e}")
+            return None
     
     @staticmethod
     async def rpush(
