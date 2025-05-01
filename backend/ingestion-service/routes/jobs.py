@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, Query, Path
 from common.models import TenantInfo, JobListResponse, JobDetailResponse, JobUpdateResponse
 from common.errors import (
     ServiceError, handle_errors, ErrorCode,
-    NotFoundError
+    ResourceNotFoundError
 )
 from common.context import with_context, Context
 from common.auth import verify_tenant
@@ -166,7 +166,7 @@ async def get_job(
             .execute()
             
         if not job_result.data:
-            raise NotFoundError(
+            raise ResourceNotFoundError(
                 message=f"Trabajo con ID {job_id} no encontrado",
                 details={"job_id": job_id}
             )

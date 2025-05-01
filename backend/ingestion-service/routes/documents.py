@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, Query, Path, HTTPException
 from common.models import TenantInfo, DocumentListResponse, DocumentDetailResponse, DeleteDocumentResponse
 from common.errors import (
     ServiceError, handle_errors, ErrorCode,
-    DocumentProcessingError, NotFoundError
+    DocumentProcessingError, ResourceNotFoundError
 )
 from common.context import with_context, Context
 from common.auth import verify_tenant
@@ -153,7 +153,7 @@ async def get_document(
             .execute()
             
         if not result.data:
-            raise NotFoundError(
+            raise ResourceNotFoundError(
                 message=f"Documento con ID {document_id} no encontrado",
                 details={"document_id": document_id}
             )
@@ -256,7 +256,7 @@ async def delete_document(
             .execute()
             
         if not document_result.data:
-            raise NotFoundError(
+            raise ResourceNotFoundError(
                 message=f"Documento con ID {document_id} no encontrado",
                 details={"document_id": document_id}
             )
