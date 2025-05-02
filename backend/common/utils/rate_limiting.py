@@ -379,45 +379,72 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         Returns:
             Respuesta HTTP con headers de rate limit
         """
+        # Validar si es una ruta de health check y evitar procesamiento
+        if hasattr(response, "url") and str(response.url).endswith(("/health", "/status")):
+            return response
+            
+        # Variable para evitar recursión en errores de logging
+        error_in_process = False
+        
         try:
-            # Obtener información de rate limit actualizada
-            current = await CacheManager.get(
-                tenant_id=tenant_id,
-                data_type="rate_limit",
-                resource_id=f"{limit_key}:count"
-            )
-            current = int(current or 0)
+            # Valores por defecto en caso de error
+            current = 0
+            rate_limit = 60  # Valor conservador
+            ttl = 60         # 1 minuto por defecto
             
-            # Obtener límite según configuraciones
-            service_name = None
-            if limit_key in ["agent", "query", "embedding", "chat"]:
-                service_name = limit_key
+            try:
+                # Obtener información de rate limit actualizada
+                current = await CacheManager.get(
+                    tenant_id=tenant_id,
+                    data_type="rate_limit",
+                    resource_id=f"{limit_key}:count"
+                )
+                current = int(current or 0)
+                
+                # Obtener límite según configuraciones
+                service_name = None
+                if limit_key in ["agent", "query", "embedding", "chat"]:
+                    service_name = limit_key
+                
+                # Usar la función estandarizada
+                rate_limit = await get_tier_rate_limit(tenant_id, tier, service_name)
+                
+                # Obtener tiempo para reset
+                ttl = await CacheManager.ttl(
+                    tenant_id=tenant_id,
+                    data_type="rate_limit",
+                    resource_id=f"{limit_key}:count"
+                )
+                
+                # Valor por defecto si no hay TTL
+                if ttl <= 0:
+                    settings = get_settings()
+                    ttl = getattr(settings, "rate_limit_window_seconds", 60)
+            except Exception as cache_error:
+                # Error de caché controlado, usar valores por defecto
+                # Evitar logging detallado aquí para prevenir recursión
+                if not error_in_process:  # Prevenir recursión
+                    error_in_process = True
+                    print(f"Error al consultar datos de rate limit: {str(cache_error)[:100]}")
             
-            # Usar la función estandarizada
-            rate_limit = await get_tier_rate_limit(tenant_id, tier, service_name)
-            
-            # Obtener tiempo para reset
-            ttl = await CacheManager.ttl(
-                tenant_id=tenant_id,
-                data_type="rate_limit",
-                resource_id=f"{limit_key}:count"
-            )
-            
-            # Valor por defecto si no hay TTL
-            if ttl <= 0:
-                settings = get_settings()
-                ttl = getattr(settings, "rate_limit_window_seconds", 60)
-            
-            # Agregar headers estándar de rate limiting
-            # https://tools.ietf.org/id/draft-polli-ratelimit-headers-00.html
-            response.headers["X-RateLimit-Limit"] = str(rate_limit)
-            response.headers["X-RateLimit-Remaining"] = str(max(0, rate_limit - current))
-            response.headers["X-RateLimit-Reset"] = str(int(time.time()) + ttl)
+            # Agregar headers estándar de rate limiting con manejo defensivo
+            try:
+                # https://tools.ietf.org/id/draft-polli-ratelimit-headers-00.html
+                response.headers["X-RateLimit-Limit"] = str(rate_limit)
+                response.headers["X-RateLimit-Remaining"] = str(max(0, rate_limit - current))
+                response.headers["X-RateLimit-Reset"] = str(int(time.time()) + ttl)
+            except Exception as header_error:
+                # Error al establecer headers, no fatal
+                if not error_in_process:  # Prevenir recursión
+                    error_in_process = True
+                    print(f"Error al establecer headers de rate limit: {str(header_error)[:100]}")
             
             return response
         except Exception as e:
-            # En caso de error, no modificar la respuesta
-            logger.error(f"Error al agregar headers de rate limit: {str(e)}")
+            # Catch-all final: en caso de cualquier error, no modificar la respuesta
+            # Usar print en lugar de logger para evitar recursión
+            if not error_in_process:  # Prevenir más recursión
+                print(f"Error crítico en headers de rate limit: {str(e)[:150]}")
             return response
 
 

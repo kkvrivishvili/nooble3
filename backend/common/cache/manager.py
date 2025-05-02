@@ -1044,8 +1044,8 @@ class CacheManager:
     
     @staticmethod
     async def increment_counter(
-        scope: str,
-        amount: int,
+        scope: Optional[str] = None,
+        amount: int = 0,
         resource_id: str = "total",
         tenant_id: Optional[str] = None,
         agent_id: Optional[str] = None,
@@ -1053,13 +1053,15 @@ class CacheManager:
         collection_id: Optional[str] = None,
         token_type: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
-        ttl: Optional[int] = None
+        ttl: Optional[int] = None,
+        counter_type: Optional[str] = None,
     ) -> int:
         """
         Versión estática del método increment_counter para compatibilidad.
         
         Args:
-            scope: Tipo de contador ('token_usage', 'embedding_usage', etc)
+            scope: (Obsoleto) Usar counter_type en su lugar. Se mantiene para compatibilidad.
+            counter_type: Tipo de contador ('token_usage', 'embedding_usage', 'rate_limit', etc)
             amount: Cantidad a incrementar
             resource_id: ID del recurso específico (modelo, operación, etc.)
             tenant_id, agent_id, etc: Componentes contextuales
@@ -1070,9 +1072,17 @@ class CacheManager:
         Returns:
             int: Nuevo valor del contador
         """
+        # Logs para depuración - identificar de dónde vienen las llamadas problemáticas
+        # Descomentar si se necesita
+        # if counter_type and scope and counter_type != scope:
+        #     logger.warning(f"Se proporcionaron tanto counter_type ({counter_type}) como scope ({scope}). Se usará counter_type.")
+        
+        # Preferir counter_type sobre scope si ambos están presentes
+        counter_type_to_use = counter_type or scope
+        
         instance = CacheManager.get_instance()
         return await instance.increment_counter(
-            counter_type=scope,
+            counter_type=counter_type_to_use,
             amount=amount,
             resource_id=resource_id,
             tenant_id=tenant_id,
