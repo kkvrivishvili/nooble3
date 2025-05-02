@@ -1,5 +1,4 @@
-FROM ollama/ollama:latest
-FROM ollama/ollama:latest
+FROM ollama/ollama:0.6.7
 
 # Establecer variables de entorno para reducir logs
 ENV OLLAMA_LOG_LEVEL=warn
@@ -15,8 +14,8 @@ COPY ./scripts/start_ollama.sh /app/
 # Dar permisos de ejecución a los scripts
 RUN chmod +x /app/download_models.sh /app/start_ollama.sh
 
-# Pre-descargar modelos comunes para evitar descargas durante el startup
-RUN /app/download_models.sh
+# No pre-descargamos los modelos durante la construcción
+# Los modelos se descargarán al iniciar el contenedor
 
 # Establecer un healthcheck propio
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \

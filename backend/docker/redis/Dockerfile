@@ -1,4 +1,4 @@
-FROM redis:7-alpine
+FROM redis:7.4.3-alpine
 
 # Copiar configuración personalizada
 COPY redis.conf /usr/local/etc/redis/redis.conf
