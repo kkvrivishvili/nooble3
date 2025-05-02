@@ -1,0 +1,81 @@
+"""
+Paquete de configuración para el servicio de consultas.
+
+Este paquete centraliza toda la configuración específica del servicio,
+siguiendo el patrón de configuración unificado para todos los servicios.
+"""
+
+from config.settings import get_settings, get_health_status, get_collection_config
+from config.constants import (
+    LLM_DEFAULT_TEMPERATURE,
+    LLM_MAX_TOKENS,
+    DEFAULT_SIMILARITY_TOP_K,
+    MAX_SIMILARITY_TOP_K,
+    DEFAULT_RESPONSE_MODE,
+    SIMILARITY_THRESHOLD,
+    CHUNK_SIZE,
+    CHUNK_OVERLAP,
+    EMBEDDING_DIMENSIONS,
+    DEFAULT_EMBEDDING_DIMENSION,
+    CACHE_EFFICIENCY_THRESHOLDS,
+    QUALITY_THRESHOLDS,
+    TIME_INTERVALS,
+    METRICS_CONFIG,
+    TIMEOUTS,
+    # Optimización de consultas
+    MAX_QUERY_RETRIES,
+    MAX_WORKERS,
+    STREAMING_TIMEOUT,
+    # Modelos predeterminados
+    DEFAULT_LLM_MODEL,
+    DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_OLLAMA_MODEL,
+    DEFAULT_OLLAMA_LLM_MODEL,
+    DEFAULT_OLLAMA_EMBEDDING_MODEL,
+    # Configuración de proveedores
+    USE_OLLAMA,
+    # Límites de recursos
+    MAX_DOC_SIZE_MB,
+    # Rate Limiting
+    ENABLE_RATE_LIMITING,
+    DEFAULT_RATE_LIMIT
+)
+
+# Exportar todo lo necesario para facilitar el uso en otros módulos
+__all__ = [
+    "get_settings",
+    "get_health_status",
+    "get_collection_config",
+    "LLM_DEFAULT_TEMPERATURE",
+    "LLM_MAX_TOKENS",
+    "DEFAULT_SIMILARITY_TOP_K",
+    "MAX_SIMILARITY_TOP_K",
+    "DEFAULT_RESPONSE_MODE",
+    "SIMILARITY_THRESHOLD",
+    "CHUNK_SIZE",
+    "CHUNK_OVERLAP",
+    "EMBEDDING_DIMENSIONS",
+    "DEFAULT_EMBEDDING_DIMENSION",
+    "CACHE_EFFICIENCY_THRESHOLDS",
+    "QUALITY_THRESHOLDS",
+    "TIME_INTERVALS",
+    "METRICS_CONFIG",
+    "TIMEOUTS",
+    # Optimización de consultas
+    "MAX_QUERY_RETRIES",
+    "MAX_WORKERS",
+    "STREAMING_TIMEOUT",
+    # Modelos predeterminados
+    "DEFAULT_LLM_MODEL",
+    "DEFAULT_EMBEDDING_MODEL",
+    "DEFAULT_OLLAMA_MODEL",
+    "DEFAULT_OLLAMA_LLM_MODEL",
+    "DEFAULT_OLLAMA_EMBEDDING_MODEL",
+    # Configuración de proveedores
+    "USE_OLLAMA",
+    # Límites de recursos
+    "MAX_DOC_SIZE_MB",
+    # Rate Limiting
+    "ENABLE_RATE_LIMITING",
+    "DEFAULT_RATE_LIMIT"
+]

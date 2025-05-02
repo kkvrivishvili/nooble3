@@ -16,6 +16,15 @@ from common.errors import handle_errors, ServiceError, ErrorCode
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
 from common.tracking import track_operation
+
+# Importar configuración centralizada del servicio
+from config.settings import get_settings
+from config.constants import (
+    TIME_INTERVALS,
+    TIMEOUTS,
+    EMBEDDING_DIMENSIONS,
+    DEFAULT_EMBEDDING_DIMENSION
+)
 from common.cache import (
     get_with_cache_aside,
     invalidate_resource_cache,

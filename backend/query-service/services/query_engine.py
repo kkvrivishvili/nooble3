@@ -7,8 +7,19 @@ from llama_index.core.callbacks import CallbackManager, LlamaDebugHandler
 from llama_index.core.schema import Document, NodeWithScore
 from llama_index.core.query_engine import RetrieverQueryEngine
 
-from common.config import get_settings
 from common.context import with_context, Context
+
+# Importar configuración centralizada del servicio
+from config.settings import get_settings
+from config.constants import (
+    DEFAULT_SIMILARITY_TOP_K,
+    DEFAULT_RESPONSE_MODE,
+    SIMILARITY_THRESHOLD,
+    CHUNK_SIZE,
+    CHUNK_OVERLAP,
+    TIMEOUTS,
+    DEFAULT_LLM_MODEL
+)
 from common.errors import (
     ErrorCode,
     ServiceError, 
@@ -104,7 +115,7 @@ async def process_query_with_sources(
                     model_used = query_engine.response_synthesizer.llm.model_name
                 except:
                     # Usar el modelo por defecto si no podemos extraerlo
-                    model_used = get_settings().default_llm_model
+                    model_used = DEFAULT_LLM_MODEL
             
             tokens_in = count_tokens(query, model_name=model_used)
             tokens_out = count_tokens(response, model_name=model_used)
@@ -288,7 +299,7 @@ async def create_query_engine(
         # Configurar el LLM para generar respuestas
         try:
             # Si no se especifica modelo, usar el default
-            model_name = llm_model if llm_model else settings.default_llm_model
+            model_name = llm_model if llm_model else DEFAULT_LLM_MODEL
             
             # Crear tenant_info si no existe
             if not tenant_info:

@@ -9,10 +9,20 @@ from llama_index.llms.openai import OpenAI
 
 from common.models import TenantInfo
 from common.auth import validate_model_access
-from common.config import get_settings
 from common.llm.ollama import get_llm_model
 from common.context import with_context, Context
 from common.errors import handle_errors, ErrorCode
+
+# Importar configuración centralizada del servicio
+from config.settings import get_settings
+from config.constants import (
+    LLM_DEFAULT_TEMPERATURE,
+    LLM_MAX_TOKENS,
+    TIMEOUTS,
+    DEFAULT_LLM_MODEL,
+    DEFAULT_EMBEDDING_MODEL,
+    USE_OLLAMA
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,19 +45,19 @@ async def get_llm_for_tenant(tenant_info: TenantInfo, requested_model: Optional[
     # Determinar modelo basado en tier del tenant y solicitud
     model_name = await validate_model_access(
         tenant_info, 
-        requested_model or settings.default_llm_model,
+        requested_model or DEFAULT_LLM_MODEL,
         model_type="llm",
         tenant_id=tenant_info.tenant_id
     )
     
     # Configuración común a todos los modelos
     common_params = {
-        "temperature": settings.llm_temperature if hasattr(settings, 'llm_temperature') else 0.7,
-        "max_tokens": settings.llm_max_tokens if hasattr(settings, 'llm_max_tokens') else 2048
+        "temperature": settings.llm_temperature if hasattr(settings, 'llm_temperature') else LLM_DEFAULT_TEMPERATURE,
+        "max_tokens": settings.llm_max_tokens if hasattr(settings, 'llm_max_tokens') else LLM_MAX_TOKENS
     }
     
     # Configurar el LLM según si usamos Ollama u OpenAI
-    if settings.use_ollama:
+    if USE_OLLAMA:
         # get_llm_model devuelve un modelo compatible con LlamaIndex
         logger.info(f"Usando modelo Ollama: {model_name}")
         return get_llm_model(model_name, **common_params)
@@ -96,7 +106,7 @@ async def generate_embedding_via_service(text: str, ctx: Context = None) -> Dict
     try:
         # Preparar solicitud al servicio de embeddings
         payload = {
-            "model": settings.default_embedding_model,
+            "model": DEFAULT_EMBEDDING_MODEL,
             "texts": [text],
             "tenant_id": tenant_id
         }
@@ -155,7 +165,7 @@ async def generate_embedding_via_service(text: str, ctx: Context = None) -> Dict
         if embeddings and len(embeddings) > 0:
             return {
                 "embedding": embeddings[0],
-                "model": response.get("metadata", {}).get("model_used", settings.default_embedding_model)
+                "model": response.get("metadata", {}).get("model_used", DEFAULT_EMBEDDING_MODEL)
             }
         else:
             # Si no hay embeddings, lanzar un error específico

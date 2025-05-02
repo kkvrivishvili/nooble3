@@ -1,8 +1,13 @@
 """
 Configuraciones específicas para el servicio de consultas.
+
+Este módulo implementa la configuración específica del servicio de consultas
+utilizando el sistema centralizado de configuración, separando las configuraciones
+específicas del servicio de las configuraciones globales.
 """
 
 from typing import Dict, Any, Optional, List
+from pydantic import Field, BaseModel
 
 from common.config import get_service_settings
 from common.models import HealthResponse

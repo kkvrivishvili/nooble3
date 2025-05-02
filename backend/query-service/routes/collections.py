@@ -20,7 +20,12 @@ from common.errors import (
 )
 from common.context import with_context, Context
 from common.auth.tenant import TenantInfo, verify_tenant
-from common.config import get_settings
+# Importar configuración centralizada del servicio
+from config.settings import get_settings
+from config.constants import (
+    CHUNK_SIZE,
+    CHUNK_OVERLAP
+)
 from common.cache import CacheManager, invalidate_document_update
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name, get_tenant_collections

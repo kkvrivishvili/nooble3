@@ -16,7 +16,14 @@ from common.errors import (
 from common.context import with_context, Context
 from common.auth.tenant import TenantInfo, verify_tenant
 from common.auth import validate_model_access
-from common.config import get_settings
+# Importar configuración centralizada del servicio
+from config.settings import get_settings
+from config.constants import (
+    DEFAULT_SIMILARITY_TOP_K,
+    MAX_SIMILARITY_TOP_K,
+    DEFAULT_RESPONSE_MODE,
+    SIMILARITY_THRESHOLD
+)
 from common.config.tiers import get_available_llm_models
 from common.tracking import track_token_usage
 from services.query_engine import create_query_engine, process_query_with_sources

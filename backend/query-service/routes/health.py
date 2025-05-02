@@ -20,12 +20,22 @@ from redis.asyncio import Redis
 from common.models import HealthResponse, ServiceStatusResponse
 from common.errors import handle_errors
 from common.context import with_context, Context
-from common.config import get_settings
-from common.utils.http import check_service_health
 from common.helpers.health import basic_health_check, detailed_status_check, get_service_health
 from common.cache.manager import get_redis_client
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
+
+# Importar configuración centralizada del servicio
+from config.settings import get_settings
+from config.constants import (
+    TIME_INTERVALS,
+    METRICS_CONFIG,
+    QUALITY_THRESHOLDS,
+    CACHE_EFFICIENCY_THRESHOLDS,
+    EMBEDDING_DIMENSIONS,
+    DEFAULT_EMBEDDING_DIMENSION,
+    TIMEOUTS
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -34,7 +44,7 @@ settings = get_settings()
 # Variables globales para métricas y seguimiento
 service_start_time = time.time()
 query_latencies: List[float] = []  # Almacena las últimas latencias de consulta
-MAX_LATENCY_SAMPLES = 100          # Máximo número de muestras para cálculo de latencia
+MAX_LATENCY_SAMPLES = METRICS_CONFIG["max_latency_samples"]  # Máximo número de muestras para cálculo de latencia
 
 @router.get(
     "/health",
@@ -135,7 +145,7 @@ async def service_status(ctx: Context = None) -> ServiceStatusResponse:
             "vector_store_metrics": vector_metrics,
             
             # Información de configuración
-            "embedding_dimensions": settings.embedding_dimensions,
+            "embedding_dimensions": EMBEDDING_DIMENSIONS,
             "default_response_mode": settings.default_response_mode
         }
     )
@@ -148,10 +158,13 @@ async def check_embedding_service() -> bool:
     Returns:
         bool: True si el servicio está disponible, False en caso contrario
     """
-    return await check_service_health(
-        service_url=settings.embedding_service_url, 
-        service_name="embedding-service"
-    )
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUTS["health_check"]) as client:
+            response = await client.get(f"{settings.embedding_service_url}/health")
+            return response.status_code == 200
+    except Exception as e:
+        logger.warning(f"Error verificando disponibilidad de embedding-service: {e}")
+        return False
 
 async def check_embedding_service_status() -> str:
     """
@@ -167,7 +180,7 @@ async def check_embedding_service_status() -> str:
             return "unavailable"
             
         # Verificar detalles usando /status
-        async with httpx.AsyncClient(timeout=2.0) as client:
+        async with httpx.AsyncClient(timeout=TIMEOUTS["status_check_timeout"]) as client:
             response = await client.get(f"{settings.embedding_service_url}/status")
             
             if response.status_code != 200:
@@ -200,16 +213,23 @@ async def check_vector_stores() -> str:
         # Intentar consulta básica
         result = await supabase.table(table_name).select("count").limit(1).execute()
         
-        # Si hay algún problema con el almacenamiento secundario, marcar como degradado
+        # Verificar también acceso a caché Redis
         redis_client = await get_redis_client()
-        if not redis_client:
+        redis_check = await redis_client.ping()
+        
+        if result and redis_check:
+            # Ambos sistemas están disponibles
+            return "available"
+        elif result or redis_check:
+            # Al menos uno está disponible, pero no ambos
             return "degraded"
-            
-        return "available"
+        else:
+            # Ninguno está disponible
+            return "unavailable"
     except Exception as e:
         logger.warning(f"Error verificando vector stores: {e}")
         return "unavailable"
-        
+
 async def check_vector_stores_detailed() -> str:
     """
     Verifica el estado detallado de las bases de datos vectoriales.
@@ -217,6 +237,7 @@ async def check_vector_stores_detailed() -> str:
     Returns:
         str: Estado detallado de los vector stores
     """
+    # Para el endpoint /status, realizamos la misma verificación pero con más detalles
     return await check_vector_stores()
 
 async def check_indices_status() -> str:
@@ -227,20 +248,31 @@ async def check_indices_status() -> str:
         str: Estado de los índices ("available", "degraded" o "unavailable")
     """
     try:
-        # Verificar que los índices estén disponibles
+        # Verificar que los índices existan y estén funcionando
         supabase = get_supabase_client()
-        table_name = get_table_name("collections")
+        table_name = get_table_name("document_chunks")
         
-        # Contar colecciones con índices
-        result = await supabase.table(table_name).select("collection_id").execute()
-        collections = result.data
+        # Consultar la metadata de los índices
+        # Esta es una verificación simple para consultas futuras
+        test_query = (
+            f"""
+            SELECT count(*)
+            FROM {table_name}
+            LIMIT 1
+            """
+        )
         
-        if not collections:
-            return "degraded"  # No hay colecciones configuradas
+        result = await supabase.rpc("execute_sql", {"query": test_query}).execute()
         
-        return "available"
+        if result.data and len(result.data) > 0:
+            # Los índices parecen estar funcionando
+            return "available"
+        else:
+            # Resultados inesperados
+            return "degraded"
     except Exception as e:
-        logger.warning(f"Error verificando índices: {e}")
+        # Error accediendo a los índices
+        logger.warning(f"Error verificando estado de índices: {e}")
         return "unavailable"
 
 async def get_vector_store_metrics() -> Dict[str, Any]:
@@ -251,29 +283,39 @@ async def get_vector_store_metrics() -> Dict[str, Any]:
         Dict[str, Any]: Métricas de vector stores
     """
     try:
-        supabase = get_supabase_client()
         metrics = {
             "total_collections": 0,
+            "total_documents": 0,
             "total_chunks": 0,
-            "avg_chunks_per_collection": 0,
-            "empty_collections": 0
+            "unique_tenants": 0,
+            "vector_dimensions": EMBEDDING_DIMENSIONS,
+            "indices": []
         }
         
-        # Obtener número de colecciones
+        # Consultar estadísticas de las tablas
+        supabase = get_supabase_client()
+        
+        # Colecciones
         collections_table = get_table_name("collections")
-        collections_result = await supabase.table(collections_table).select("collection_id").execute()
-        collections = collections_result.data
-        metrics["total_collections"] = len(collections)
+        collections_result = await supabase.table(collections_table).select("count").execute()
+        if collections_result.data:
+            metrics["total_collections"] = collections_result.data[0].get("count", 0)
         
-        # Obtener número total de chunks
+        # Chunks y documentos
         chunks_table = get_table_name("document_chunks")
-        chunks_result = await supabase.table(chunks_table).select("count").execute()
-        total_chunks = chunks_result.data[0]["count"] if chunks_result.data else 0
-        metrics["total_chunks"] = total_chunks
+        chunks_query = f"""
+        SELECT 
+            COUNT(*) as total_chunks,
+            COUNT(DISTINCT document_id) as total_documents,
+            COUNT(DISTINCT tenant_id) as unique_tenants
+        FROM {chunks_table}
+        """
         
-        # Calcular promedio si hay colecciones
-        if metrics["total_collections"] > 0:
-            metrics["avg_chunks_per_collection"] = round(total_chunks / metrics["total_collections"], 2)
+        chunks_result = await supabase.rpc("execute_sql", {"query": chunks_query}).execute()
+        if chunks_result.data and len(chunks_result.data) > 0:
+            metrics["total_chunks"] = chunks_result.data[0].get("total_chunks", 0)
+            metrics["total_documents"] = chunks_result.data[0].get("total_documents", 0)
+            metrics["unique_tenants"] = chunks_result.data[0].get("unique_tenants", 0)
         
         return metrics
     except Exception as e:
@@ -289,37 +331,44 @@ def get_performance_metrics() -> Dict[str, Any]:
     """
     global query_latencies
     
-    if not query_latencies:
-        return {
-            "query_count": 0,
-            "avg_latency_ms": 0,
-            "p95_latency_ms": 0,
-            "p99_latency_ms": 0
-        }
-    
     metrics = {
-        "query_count": len(query_latencies),
-        "avg_latency_ms": round(statistics.mean(query_latencies), 2),
+        "latencies_ms": {
+            "avg": None,
+            "p50": None,
+            "p90": None,
+            "p99": None,
+            "min": None,
+            "max": None,
+            "samples": len(query_latencies)
+        }
     }
     
-    # Añadir percentiles si hay suficientes datos
-    if len(query_latencies) >= 5:
-        metrics["p95_latency_ms"] = round(statistics.quantiles(query_latencies, n=100)[94], 2)
-        metrics["p99_latency_ms"] = round(statistics.quantiles(query_latencies, n=100)[98], 2)
+    # Calcular estadísticas si hay suficientes muestras
+    if query_latencies:
+        metrics["latencies_ms"]["avg"] = sum(query_latencies) / len(query_latencies)
+        metrics["latencies_ms"]["min"] = min(query_latencies)
+        metrics["latencies_ms"]["max"] = max(query_latencies)
+        
+        # Percentiles
+        sorted_latencies = sorted(query_latencies)
+        metrics["latencies_ms"]["p50"] = sorted_latencies[len(sorted_latencies) // 2]
+        metrics["latencies_ms"]["p90"] = sorted_latencies[int(len(sorted_latencies) * 0.9)]
+        metrics["latencies_ms"]["p99"] = sorted_latencies[int(len(sorted_latencies) * 0.99)]
     
     return metrics
 
-def record_query_latency(latency_ms: float) -> None:
+def record_query_latency(latency_ms: float):
     """
     Registra la latencia de una consulta para cálculo de métricas.
     
     Args:
         latency_ms: Latencia de la consulta en milisegundos
     """
-    global query_latencies
+    global query_latencies, MAX_LATENCY_SAMPLES
     
+    # Añadir a la lista de latencias
     query_latencies.append(latency_ms)
     
-    # Mantener solo las últimas MAX_LATENCY_SAMPLES muestras
+    # Limitar el tamaño de la lista
     if len(query_latencies) > MAX_LATENCY_SAMPLES:
         query_latencies = query_latencies[-MAX_LATENCY_SAMPLES:]
