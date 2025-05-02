@@ -15,7 +15,16 @@ import logging
 import time
 from typing import List, Dict, Any, Optional, Tuple
 
-from common.config import get_settings
+# Importación de configuración centralizada
+from config.constants import (
+    EMBEDDING_DIMENSIONS,
+    DEFAULT_EMBEDDING_DIMENSION,
+    TIMEOUTS,
+    QUALITY_THRESHOLDS
+)
+from config.settings import get_settings
+
+# Importaciones comunes
 from common.errors import handle_errors, ServiceError, ErrorCode
 from common.context import with_context, Context
 from common.config.tiers import get_available_embedding_models

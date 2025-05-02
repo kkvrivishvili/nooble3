@@ -15,7 +15,6 @@ con soporte de caché y contexto multitenancy.
 import logging
 from typing import List, Dict, Any, Optional
 
-from common.config import get_settings
 from common.config.tiers import get_available_embedding_models
 from common.errors import (
     ServiceError, handle_errors, ErrorCode,
@@ -26,6 +25,14 @@ from common.context import with_context, Context
 from common.tracking import track_token_usage, estimate_prompt_tokens
 from common.auth.models import validate_model_access
 from common.cache import generate_resource_id_hash
+
+# Importar configuración centralizada
+from config.constants import (
+    EMBEDDING_DIMENSIONS,
+    DEFAULT_EMBEDDING_DIMENSION,
+    TIMEOUTS
+)
+from config.settings import get_settings
 
 # Importar la nueva implementación compatible con el servicio de ingestión
 from services.llama_index_utils import generate_embeddings_with_llama_index
@@ -52,12 +59,19 @@ class CachedEmbeddingProvider:
         self.embed_batch_size = embed_batch_size
         self.tenant_id = tenant_id
         self.collection_id = collection_id  # Añadir collection_id para especificidad en caché
-        self.dimensions = settings.default_embedding_dimension
+        
+        # Determinar dimensiones del embedding desde la configuración centralizada
+        model_name_lower = model_name.lower()
+        self.dimensions = DEFAULT_EMBEDDING_DIMENSION
+        for name, dims in EMBEDDING_DIMENSIONS.items():
+            if name in model_name_lower:
+                self.dimensions = dims
+                break
         
         # Límites de procesamiento para controlar uso de memoria y tokens
-        self.max_batch_size = min(self.embed_batch_size, settings.max_embedding_batch_size) if hasattr(settings, 'max_embedding_batch_size') else self.embed_batch_size
-        self.max_tokens_per_batch = settings.max_tokens_per_batch if hasattr(settings, 'max_tokens_per_batch') else 50000
-        self.max_token_length_per_text = settings.max_token_length_per_text if hasattr(settings, 'max_token_length_per_text') else 8000
+        self.max_batch_size = settings.max_batch_size
+        self.max_tokens_per_batch = settings.max_tokens_per_batch
+        self.max_token_length_per_text = settings.max_token_length_per_text
     
     @handle_errors(error_type="simple", log_traceback=False, error_map={
         EmbeddingGenerationError: ("EMBEDDING_GENERATION_ERROR", 500),

@@ -1,44 +1,29 @@
 """
-Configuraciones específicas para el servicio de embeddings.
+Archivo de configuración legado para el servicio de embeddings.
+
+Este archivo ahora redirecciona a la configuración centralizada en el paquete 'config'.
+Se mantiene por compatibilidad con el código existente.
 """
 
 from typing import Dict, Any, Optional, List
 
+# Importar desde la configuración centralizada
+from config.settings import get_settings, get_health_status
+from config.constants import (
+    EMBEDDING_DIMENSIONS,
+    QUALITY_THRESHOLDS,
+    CACHE_EFFICIENCY_THRESHOLDS,
+    OLLAMA_API_ENDPOINTS,
+    TIMEOUTS
+)
+
+# Mantener compatibilidad con importaciones del código existente
 from common.config import (
-    get_service_settings,
     get_available_embedding_models,
     get_embedding_model_details
 )
-from common.models import HealthResponse
 
-def get_settings():
-    """
-    Obtiene la configuración específica para el servicio de embeddings.
-    
-    Esta función utiliza get_service_settings() centralizada que ya incluye
-    todas las configuraciones específicas para el servicio de embeddings.
-    
-    Returns:
-        Settings: Configuración para el servicio de embeddings
-    """
-    # Usar la función centralizada que ya incluye las configuraciones específicas
-    return get_service_settings("embedding-service")
-
-def get_health_status() -> HealthResponse:
-    """
-    Obtiene el estado de salud del servicio de embeddings.
-    
-    Returns:
-        HealthResponse: Estado de salud del servicio
-    """
-    settings = get_settings()
-    
-    return HealthResponse(
-        service=settings.service_name,
-        version=settings.service_version,
-        status="healthy",
-        timestamp=None  # Se generará automáticamente
-    )
+# La función get_health_status está importada desde config.settings
 
 def get_model_details_for_tier(tier: str) -> Dict[str, Dict[str, Any]]:
     """

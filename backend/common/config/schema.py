@@ -145,27 +145,16 @@ AGENT_SERVICE_CONFIGURATIONS = {
 }
 
 # Configuraciones específicas para el servicio de embeddings
+# Nota: La mayoría de configuraciones específicas se han migrado al servicio de embeddings
+# en sus propios módulos de configuración (config/settings.py y config/constants.py)
 EMBEDDING_SERVICE_CONFIGURATIONS = {
     **COMMON_CONFIGURATIONS,
+    # Se mantienen solo configuraciones de integración o que dependen de servicios externos
     "default_embedding_model": ConfigurationSchema(
         key="default_embedding_model",
-        description="Modelo por defecto para embeddings",
+        description="Modelo por defecto para embeddings (referencia para otros servicios)",
         config_type="string",
-        default_value="text-embedding-ada-002",
-        is_sensitive=False,
-    ),
-    "embedding_cache_enabled": ConfigurationSchema(
-        key="embedding_cache_enabled",
-        description="Si se debe habilitar el caché de embeddings",
-        config_type="boolean",
-        default_value=True,
-        is_sensitive=False,
-    ),
-    "embedding_batch_size": ConfigurationSchema(
-        key="embedding_batch_size",
-        description="Tamaño de lote para procesamiento de embeddings",
-        config_type="integer",
-        default_value=16,
+        default_value="text-embedding-3-small",
         is_sensitive=False,
     ),
     "openai_api_key": ConfigurationSchema(

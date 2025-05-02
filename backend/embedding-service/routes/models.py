@@ -10,8 +10,11 @@ from common.models import TenantInfo, ModelListResponse
 from common.errors import handle_errors
 from common.context import with_context, Context
 from common.auth.tenant import TenantInfo, verify_tenant
-from common.config import get_settings
 from common.config.tiers import get_available_embedding_models, get_embedding_model_details
+
+# Importar configuración centralizada
+from config.settings import get_settings
+from config.constants import EMBEDDING_DIMENSIONS
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

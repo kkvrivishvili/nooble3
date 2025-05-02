@@ -95,12 +95,9 @@ class Settings(BaseSettings):
     allow_cors: bool = Field(True, description="Permitir CORS")
     cors_origins: List[str] = Field(["*"], description="Orígenes permitidos para CORS")
 
-    # =========== Embeddings ===========
-    embedding_batch_size: int = Field(128, description="Tamaño de lote para embeddings")
-    embedding_dimensions: int = Field(1536, description="Dimensiones de embeddings")
-    embedding_cache_ttl: int = Field(604800, description="TTL para caché de embeddings (7 días)")
-    max_embedding_batch_size: int = Field(10, description="Máximo tamaño de lote para API de embeddings")
-    embedding_cache_enabled: bool = Field(True, description="Habilitar caché para embeddings")
+    # =========== Embeddings =========== 
+    # Nota: Las configuraciones específicas de embeddings se han migrado al servicio de embeddings
+    # Solo se mantienen los modelos predeterminados que son usados por múltiples servicios
     
     # =========== Query Service ===========
     default_similarity_top_k: int = Field(4, description="Número de resultados similares por defecto")

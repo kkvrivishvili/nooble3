@@ -20,11 +20,21 @@ import numpy as np
 from common.models import HealthResponse, ServiceStatusResponse
 from common.errors import handle_errors
 from common.context import with_context, Context
-from common.config import get_settings
 from common.helpers.health import basic_health_check, detailed_status_check, get_service_health
 from common.cache.manager import CacheManager, get_redis_client
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
+
+# Importar configuración centralizada
+from config.constants import (
+    EMBEDDING_DIMENSIONS,
+    DEFAULT_EMBEDDING_DIMENSION,
+    QUALITY_THRESHOLDS,
+    CACHE_EFFICIENCY_THRESHOLDS,
+    OLLAMA_API_ENDPOINTS,
+    TIMEOUTS,
+    METRICS_CONFIG
+)
 
 # Importamos directamente el cliente para evitar dependencias circulares
 from llama_index.embeddings.openai import OpenAIEmbedding
@@ -34,13 +44,13 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-# Variables globales para métricas y seguimiento
+# Variables globales para métricas y seguimiento (inicializadas con valores de config.constants)
 service_start_time = time.time()
 embedding_latencies: List[float] = []      # Latencias de generación de embeddings
 embedding_cache_hits: int = 0              # Contador de hits en cache
 embedding_cache_misses: int = 0            # Contador de misses en cache
-MAX_LATENCY_SAMPLES = 100                  # Máximo número de muestras para cálculo de latencia
-LAST_API_RATE_CHECK = time.time() - 3600   # Última vez que se verificó el rate limit
+MAX_LATENCY_SAMPLES = METRICS_CONFIG['max_latency_samples']  # Máximo número de muestras para cálculo de latencia
+LAST_API_RATE_CHECK = time.time() - TIME_INTERVALS["rate_limit_expiry"]   # Última vez que se verificó el rate limit
 
 @router.get("/health", response_model=None, 
            summary="Estado básico del servicio",
@@ -246,6 +256,14 @@ async def check_cache_efficiency() -> str:
     global embedding_cache_hits, embedding_cache_misses
     
     try:
+        # Obtener umbrales de configuración centralizada
+        from config.constants import CACHE_EFFICIENCY_THRESHOLDS
+        
+        # Valores de configuración
+        min_requests = CACHE_EFFICIENCY_THRESHOLDS["min_requests"]
+        good_hit_ratio = CACHE_EFFICIENCY_THRESHOLDS["good_hit_ratio"]
+        degraded_hit_ratio = CACHE_EFFICIENCY_THRESHOLDS["degraded_hit_ratio"]
+        
         # Verificar si la caché está disponible y funcionando
         redis_client = await get_redis_client()
         if not redis_client:
@@ -253,18 +271,18 @@ async def check_cache_efficiency() -> str:
         
         # Si no hay suficientes datos, asumir disponible
         total_requests = embedding_cache_hits + embedding_cache_misses
-        if total_requests < 10:
+        if total_requests < min_requests:
             return "available"
         
         # Calcular hit ratio
         hit_ratio = embedding_cache_hits / total_requests if total_requests > 0 else 0
         
         # Criterios de eficiencia basados en hit ratio
-        if hit_ratio >= 0.5:  # Al menos 50% de hit ratio es bueno
+        if hit_ratio >= good_hit_ratio:
             return "available"
-        elif hit_ratio >= 0.2:  # Entre 20% y 50% es degradado
+        elif hit_ratio >= degraded_hit_ratio:
             return "degraded"
-        else:  # Menos del 20% es muy ineficiente
+        else:
             return "degraded"
     
     except Exception as e:
@@ -279,10 +297,14 @@ async def check_ollama_service() -> bool:
         bool: True si el servicio está disponible, False en caso contrario
     """
     try:
-        base_url = settings.ollama_base_url.rstrip('/')
-        health_url = f"{base_url}/api/health"  # Endpoint de salud de Ollama
+        # Obtener configuración centralizada
+        from config.constants import OLLAMA_API_ENDPOINTS, TIMEOUTS
         
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        base_url = settings.ollama_base_url.rstrip('/')
+        health_url = f"{base_url}{OLLAMA_API_ENDPOINTS['health']}"
+        timeout = TIMEOUTS['health_check']
+        
+        async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.get(health_url)
             if response.status_code == 200:
                 return True
@@ -304,10 +326,14 @@ async def check_ollama_model(model: str) -> bool:
         bool: True si el modelo está disponible, False en caso contrario
     """
     try:
-        base_url = settings.ollama_base_url.rstrip('/')
-        models_url = f"{base_url}/api/tags"  # Endpoint para listar modelos en Ollama
+        # Obtener configuración centralizada
+        from config.constants import OLLAMA_API_ENDPOINTS, TIMEOUTS
         
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        base_url = settings.ollama_base_url.rstrip('/')
+        models_url = f"{base_url}{OLLAMA_API_ENDPOINTS['models']}"
+        timeout = TIMEOUTS['model_check']
+        
+        async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.get(models_url)
             
             if response.status_code != 200:
@@ -337,22 +363,31 @@ def verify_embedding_quality(embedding: list) -> bool:
         bool: True si el embedding es de calidad aceptable, False en caso contrario
     """
     try:
+        # Obtener los umbrales de configuración centralizada
+        from config.constants import QUALITY_THRESHOLDS
+        
+        # Valores de configuración
+        min_distinct_values = QUALITY_THRESHOLDS["min_distinct_values"]
+        sample_size = QUALITY_THRESHOLDS["distinct_values_sample_size"]
+        max_abs_value = QUALITY_THRESHOLDS["max_absolute_value"]
+        norm_tolerance = QUALITY_THRESHOLDS["norm_tolerance"]
+        
         # 1. Verificar que no sea un vector nulo
         if not embedding or len(embedding) == 0:
             return False
             
-        # 2. Verificar que no tenga todos valores iguales (embedding degenerado)
-        if len(set(embedding[:10])) < 3:  # Si los primeros 10 valores tienen menos de 3 valores distintos
+        # 2. Verificar que no tenga valores repetidos (embedding degenerado)
+        if len(set(embedding[:sample_size])) < min_distinct_values:  
             return False
             
         # 3. Verificar que no tenga valores extremos
         embedding_array = np.array(embedding)
-        if np.max(np.abs(embedding_array)) > 100:  # Valores muy grandes (inusuales en embeddings normalizados)
+        if np.max(np.abs(embedding_array)) > max_abs_value:
             return False
             
         # 4. Verificar norma del vector (debe ser cercana a 1 para embeddings normalizados)
         norm = np.linalg.norm(embedding_array)
-        if abs(norm - 1.0) > 0.2:  # Si difiere mucho de 1
+        if abs(norm - 1.0) > norm_tolerance:
             return False
             
         return True
@@ -481,6 +516,9 @@ async def check_api_limits() -> Dict[str, Any]:
     Returns:
         Dict[str, Any]: Información sobre límites de API
     """
+    # Obtener configuración centralizada para métricas simuladas
+    from config.constants import MOCK_METRICS, TIME_INTERVALS
+    
     if settings.use_ollama:
         return {
             "has_rate_limits": False,
@@ -489,15 +527,15 @@ async def check_api_limits() -> Dict[str, Any]:
         }
     else:
         # Para OpenAI en una implementación real verificaríamos los límites reales
-        # Por ahora usamos valores estáticos
+        # Por ahora usamos valores simulados de la configuración centralizada
         return {
             "has_rate_limits": True,
             "provider": "openai",
             "limit_type": "rpm",
-            "current_rpm": 10,
-            "max_rpm": 60,
-            "usage_percentage": 16.7,
-            "quota_reset": "1 minute"
+            "current_rpm": 10,  # Valor simulado
+            "max_rpm": 60,      # Valor simulado
+            "usage_percentage": 16.7,  # Valor simulado
+            "quota_reset": f"{TIME_INTERVALS['rate_limit_expiry'] // 60} minutes"
         }
 
 def get_embedding_dimensions() -> int:
@@ -507,26 +545,18 @@ def get_embedding_dimensions() -> int:
     Returns:
         int: Número de dimensiones del modelo
     """
+    # Obtener configuración centralizada
+    from config.constants import EMBEDDING_DIMENSIONS, DEFAULT_EMBEDDING_DIMENSION
+    
     model_name = settings.default_embedding_model.lower()
     
-    # Mapeo de modelos conocidos a dimensiones
-    dimensions = {
-        "text-embedding-ada-002": 1536,
-        "text-embedding-3-small": 1536,
-        "text-embedding-3-large": 3072,
-        "ada": 1024,
-        "llama2": 4096,
-        "mistral": 4096,
-        "nomic-embed-text": 768  # Dimensión del modelo nomic-embed-text
-    }
-    
     # Buscar dimensiones por nombre parcial
-    for name, dims in dimensions.items():
+    for name, dims in EMBEDDING_DIMENSIONS.items():
         if name in model_name:
             return dims
     
     # Valor predeterminado
-    return 1536
+    return DEFAULT_EMBEDDING_DIMENSION
 
 def get_performance_metrics() -> Dict[str, Any]:
     """
@@ -536,6 +566,10 @@ def get_performance_metrics() -> Dict[str, Any]:
         Dict[str, Any]: Métricas de rendimiento
     """
     global embedding_latencies
+    
+    # Obtener configuración centralizada
+    from config.constants import METRICS_CONFIG
+    min_samples = METRICS_CONFIG["min_samples_for_percentiles"]
     
     if not embedding_latencies:
         return {
@@ -551,7 +585,7 @@ def get_performance_metrics() -> Dict[str, Any]:
     }
     
     # Añadir percentiles si hay suficientes datos
-    if len(embedding_latencies) >= 5:
+    if len(embedding_latencies) >= min_samples:
         metrics["p95_latency_ms"] = round(statistics.quantiles(embedding_latencies, n=100)[94], 2)
         metrics["p99_latency_ms"] = round(statistics.quantiles(embedding_latencies, n=100)[98], 2)
     
@@ -566,11 +600,15 @@ def record_embedding_latency(latency_ms: float) -> None:
     """
     global embedding_latencies
     
+    # Obtener configuración centralizada
+    from config.constants import METRICS_CONFIG
+    max_samples = METRICS_CONFIG["max_latency_samples"]
+    
     embedding_latencies.append(latency_ms)
     
-    # Mantener solo las últimas MAX_LATENCY_SAMPLES muestras
-    if len(embedding_latencies) > MAX_LATENCY_SAMPLES:
-        embedding_latencies = embedding_latencies[-MAX_LATENCY_SAMPLES:]
+    # Mantener solo las últimas max_samples muestras
+    if len(embedding_latencies) > max_samples:
+        embedding_latencies = embedding_latencies[-max_samples:]
 
 def record_cache_hit() -> None:
     """

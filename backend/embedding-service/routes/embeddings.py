@@ -18,29 +18,38 @@ from common.errors import (
     handle_errors, ValidationError, EmbeddingGenerationError, RateLimitExceeded,
     ServiceError, BatchTooLargeError, TextTooLargeError, EmbeddingModelError
 )
-from common.config import get_settings
-from common.config.tiers import get_available_embedding_models, get_available_llm_models
+from common.config.tiers import get_available_embedding_models
 from common.tracking import track_token_usage, estimate_prompt_tokens
 from common.cache import generate_resource_id_hash
 
+# Importar configuración centralizada
+from config.constants import (
+    EMBEDDING_DIMENSIONS,
+    DEFAULT_EMBEDDING_DIMENSION,
+    TIMEOUTS
+)
+from config.settings import get_settings
+
+# Servicios locales
 from services.embedding_provider import CachedEmbeddingProvider
 
 router = APIRouter()
 settings = get_settings()
 logger = logging.getLogger(__name__)
 
-async def _validate_and_get_model(tenant_info: TenantInfo, requested_model: str, model_type: str) -> Tuple[str, Dict]:
+async def _validate_and_get_model(tenant_info: TenantInfo, requested_model: str) -> Tuple[str, Dict]:
     """
-    Valida y obtiene el modelo apropiado, estandarizando el manejo de modelos no permitidos.
+    Valida y obtiene el modelo de embedding apropiado, estandarizando el manejo de modelos no permitidos.
     
     Args:
         tenant_info: Información del tenant
         requested_model: Modelo solicitado por el usuario
-        model_type: Tipo de modelo ('embedding' o 'llm')
         
     Returns:
         Tuple[str, Dict]: Modelo validado y metadatos
     """
+    model_type = "embedding"  # El servicio de embeddings solo maneja modelos de embedding
+    
     try:
         validated_model = await validate_model_access(tenant_info, requested_model, model_type, tenant_id=tenant_info.tenant_id)
         return validated_model, {}  # Modelo validado sin downgrade
@@ -54,13 +63,9 @@ async def _validate_and_get_model(tenant_info: TenantInfo, requested_model: str,
         }
         logger.info(f"Cambiando al modelo predeterminado: {e.message}", extra=error_context)
         
-        # Obtener modelos disponibles según el tipo
-        if model_type == "embedding":
-            allowed_models = get_available_embedding_models(tenant_info.subscription_tier, tenant_id=tenant_info.tenant_id)
-            default_model = settings.default_embedding_model
-        else:  # llm
-            allowed_models = get_available_llm_models(tenant_info.subscription_tier, tenant_id=tenant_info.tenant_id)
-            default_model = settings.default_llm_model
+        # Obtener modelos de embedding disponibles
+        allowed_models = get_available_embedding_models(tenant_info.subscription_tier, tenant_id=tenant_info.tenant_id)
+        default_model = settings.default_embedding_model
             
         # Usar el primer modelo disponible o el predeterminado
         validated_model = allowed_models[0] if allowed_models else default_model
@@ -105,7 +110,7 @@ async def generate_embeddings(
     collection_id = ctx.get_collection_id() or request.collection_id  # Priorizar contexto, pero permitir override
     
     # Validar modelo usando la función estandarizada
-    model_name, metadata = await _validate_and_get_model(tenant_info, model_name, "embedding")
+    model_name, metadata = await _validate_and_get_model(tenant_info, model_name)
     
     # Crear proveedor de embeddings con caché
     embedding_provider = CachedEmbeddingProvider(model_name=model_name, tenant_id=tenant_id)
@@ -202,7 +207,7 @@ async def batch_generate_embeddings(
     conversation_id = getattr(request, 'conversation_id', None)
     
     # Validar modelo usando la función estandarizada
-    model_name, metadata = await _validate_and_get_model(tenant_info, model_name, "embedding")
+    model_name, metadata = await _validate_and_get_model(tenant_info, model_name)
     
     # Separar textos y metadatos, mantener índices originales
     original_indices = []
@@ -355,7 +360,7 @@ async def internal_embed(
         
         # Validar modelo usando la función estandarizada
         try:
-            model_name, metadata = await _validate_and_get_model(tenant_info, model_name, "embedding")
+            model_name, metadata = await _validate_and_get_model(tenant_info, model_name)
         except Exception as validation_err:
             # En caso de error usar modelo predeterminado
             model_name = settings.default_embedding_model

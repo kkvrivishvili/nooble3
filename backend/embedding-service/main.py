@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from common.config import get_settings, is_development_environment, should_use_mock_config
+# Utilidades comunes para todos los servicios
 from common.errors import setup_error_handling
 from common.utils.logging import init_logging
 from common.context import Context
@@ -16,8 +16,11 @@ from common.db.supabase import init_supabase
 from common.swagger import configure_swagger_ui
 from common.cache.manager import CacheManager
 from common.utils.rate_limiting import setup_rate_limiting
+from common.config.tiers import is_development_environment, should_use_mock_config
 
-from config import get_settings
+# Configuración centralizada
+from config.settings import get_settings
+from config.constants import TIMEOUTS
 from routes import register_routes
 
 # Configuración
