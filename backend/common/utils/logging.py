@@ -167,10 +167,40 @@ def init_logging(log_level: Optional[str] = None, service_name: Optional[str] = 
         force=True  # Forzar reconfigiración incluso si ya ha sido llamada
     )
     
+    # Filtro para ocultar o truncar mensajes de licencia
+    class LicenseFilter(logging.Filter):
+        """Filtro para evitar que se muestren mensajes de licencia largos en los logs."""
+        def __init__(self, max_length=100):
+            super().__init__()
+            self.max_length = max_length
+            # Palabras clave que indican mensajes de licencia
+            self.license_keywords = ["license", "eula", "terms of service", "copyright", "all rights reserved", "llama-2", "llama-3"]
+        
+        def filter(self, record):
+            # Si el mensaje contiene palabras de licencia y es muy largo, truncarlo
+            if hasattr(record, 'msg') and isinstance(record.msg, str):
+                msg_lower = record.msg.lower()
+                if any(keyword in msg_lower for keyword in self.license_keywords) and len(record.msg) > self.max_length:
+                    # Truncar el mensaje
+                    record.msg = record.msg[:self.max_length] + "... [licencia truncada]"
+            return True
+    
+    # Crear y aplicar el filtro
+    license_filter = LicenseFilter(max_length=100)
+    root_logger = logging.getLogger()
+    root_logger.addFilter(license_filter)
+    
     # Establecer niveles específicos para algunos loggers
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("uvicorn").setLevel(logging.INFO)
+    
+    # Reducir los logs de bibliotecas que suelen mostrar licencias
+    logging.getLogger("langchain").setLevel(logging.WARNING)
+    logging.getLogger("langchain_core").setLevel(logging.WARNING)
+    logging.getLogger("langchain_openai").setLevel(logging.WARNING)
+    logging.getLogger("llama_index").setLevel(logging.WARNING)
+    logging.getLogger("openai").setLevel(logging.WARNING)
     
     # Log de inicio
     logging.info(f"Logging iniciado para el servicio '{service}' con nivel: {logging.getLevelName(level)}")

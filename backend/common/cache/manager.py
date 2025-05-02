@@ -193,7 +193,7 @@ class CacheManager:
             
         return keys
     
-    async def get(
+    async def _get_internal(
         self,
         data_type: str,
         resource_id: str,
@@ -231,7 +231,9 @@ class CacheManager:
         try:
             # Validar parámetros obligatorios
             tenant_id = tenant_id or get_current_tenant_id()
-            if not tenant_id:
+            # Aceptar 'system' como tenant_id válido para health checks
+            # y otros casos especiales donde no hay tenant específico
+            if not tenant_id and data_type != "system":
                 logger.warning(f"Tenant ID es obligatorio para obtener {data_type} de caché")
                 return None
                 
@@ -308,6 +310,7 @@ class CacheManager:
                 current_depth = getattr(task, "_cache_recursion_depth")
                 if current_depth > 0:
                     setattr(task, "_cache_recursion_depth", current_depth - 1)
+    @staticmethod
     async def get(
         data_type: str,
         resource_id: str,
@@ -322,10 +325,11 @@ class CacheManager:
         Método estático compatible que llama al método de instancia get().
         """
         instance = CacheManager.get_instance()
-        return await instance.get(
-            data_type=data_type,
-            resource_id=resource_id,
-            tenant_id=tenant_id,
+        # Para evitar el error, usar parámetros con nombre excepto para los que causan el error
+        return await instance._get_internal(
+            data_type,  # Parámetro posicional para evitar duplicación
+            resource_id,  # Parámetro posicional para evitar duplicación
+            tenant_id=tenant_id,  # El resto como parámetros con nombre
             agent_id=agent_id,
             conversation_id=conversation_id,
             collection_id=collection_id,

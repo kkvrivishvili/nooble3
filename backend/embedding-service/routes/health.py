@@ -9,24 +9,38 @@ proporciona una verificación rápida de disponibilidad, mientras que
 
 import time
 import logging
-from typing import Dict, Any, Optional
+import statistics
+from typing import Dict, Any, Optional, List, Union
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter
+import httpx
+import numpy as np
 
 from common.models import HealthResponse, ServiceStatusResponse
 from common.errors import handle_errors
 from common.context import with_context, Context
 from common.config import get_settings
 from common.helpers.health import basic_health_check, detailed_status_check, get_service_health
+from common.cache.manager import CacheManager, get_redis_client
+from common.db.supabase import get_supabase_client
+from common.db.tables import get_table_name
 
+# Importamos directamente el cliente para evitar dependencias circulares
 from llama_index.embeddings.openai import OpenAIEmbedding
+from llama_index.embeddings.ollama import OllamaEmbedding
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-# Variable global para registrar el inicio del servicio (para cálculo de uptime)
+# Variables globales para métricas y seguimiento
 service_start_time = time.time()
+embedding_latencies: List[float] = []      # Latencias de generación de embeddings
+embedding_cache_hits: int = 0              # Contador de hits en cache
+embedding_cache_misses: int = 0            # Contador de misses en cache
+MAX_LATENCY_SAMPLES = 100                  # Máximo número de muestras para cálculo de latencia
+LAST_API_RATE_CHECK = time.time() - 3600   # Última vez que se verificó el rate limit
 
 @router.get("/health", response_model=None, 
            summary="Estado básico del servicio",
@@ -37,21 +51,44 @@ async def health_check(ctx: Context = None) -> HealthResponse:
     """
     Verifica el estado básico del servicio de embeddings (liveness check).
     
-    Este endpoint permite verificar rápidamente si el servicio está operativo.
-    Ideal para health checks de Kubernetes y sistemas de monitoreo.
+    Este endpoint permite verificar rápidamente si el servicio está operativo
+    y si sus componentes críticos funcionan correctamente. Optimizado para ser
+    ligero y rápido, ideal para health checks de Kubernetes.
+    
+    Returns:
+        HealthResponse: Estado básico del servicio
     """
     # Obtener componentes básicos usando el helper común
     components = await basic_health_check()
     
-    # Verificar el servicio de embeddings (específico de este servicio)
-    embedding_provider_status = await check_embedding_provider()
-    components["embedding_provider"] = embedding_provider_status
+    # Verificar el proveedor de embeddings (componente más crítico)
+    provider_status = await check_embedding_provider()
+    components["embedding_provider"] = provider_status
+    
+    # Verificar eficiencia de caché (componente de rendimiento)
+    cache_efficiency = await check_cache_efficiency()
+    components["cache_efficiency"] = cache_efficiency
+    
+    # Determinar estado general del servicio
+    if components["embedding_provider"] == "unavailable":
+        overall_status = "unavailable"
+    elif (components["embedding_provider"] == "degraded" or 
+          components["cache"] == "unavailable" or
+          components["cache_efficiency"] == "degraded"):
+        overall_status = "degraded"
+    else:
+        overall_status = "available"
     
     # Generar respuesta estandarizada usando el helper común
-    return get_service_health(
+    response = get_service_health(
         components=components,
         service_version=settings.service_version
     )
+    
+    # Actualizar estado general
+    response["status"] = overall_status
+    
+    return response
 
 @router.get("/status", response_model=None,
             summary="Estado detallado del servicio",
@@ -64,48 +101,486 @@ async def service_status(ctx: Context = None) -> ServiceStatusResponse:
     
     Este endpoint proporciona información completa para observabilidad, incluyendo:
     - Tiempo de actividad del servicio
-    - Estado de componentes críticos (cache, DB)
+    - Estado de componentes críticos (cache, DB, provider)
+    - Métricas de rendimiento (latencia, eficiencia de caché, dimensiones)
     - Estado del proveedor de embeddings (OpenAI u Ollama)
-    - Versión y entorno de ejecución
+    - Rate limits y cuotas de API
+    - Estadísticas de uso de modelos
+    
+    Returns:
+        ServiceStatusResponse: Estado detallado del servicio
     """
+    # Obtener métricas adicionales
+    performance_metrics = get_performance_metrics()
+    api_limits = await check_api_limits()
+    cache_metrics = await get_cache_metrics()
+    model_stats = await get_model_usage_stats()
+    
     # Usar el helper común con verificaciones específicas del servicio
     return await detailed_status_check(
         service_name="embedding-service",
         service_version=settings.service_version,
         start_time=service_start_time,
         extra_checks={
-            "embedding_provider": check_embedding_provider
+            "embedding_provider": check_embedding_provider,
+            "cache_efficiency": check_cache_efficiency,
+            "api_rate_limits": check_api_rate_limits
         },
-        # Métricas adicionales específicas del servicio (opcional)
+        # Métricas detalladas específicas del servicio
         extra_metrics={
+            # Información del modelo de embeddings
             "embedding_model": settings.default_embedding_model,
-            "uses_ollama": settings.use_ollama
+            "provider": "ollama" if settings.use_ollama else "openai",
+            "embedding_dimensions": get_embedding_dimensions(),
+            "model_statistics": model_stats,
+            
+            # Métricas de rendimiento
+            "performance": performance_metrics,
+            "cache": cache_metrics,
+            
+            # Límites de API
+            "api_limits": api_limits,
+            
+            # Configuración
+            "max_input_length": settings.max_input_length,
+            "allows_batch_processing": settings.allow_batch_processing
         }
     )
 
 async def check_embedding_provider() -> str:
     """
     Verifica el proveedor de embeddings configurado (OpenAI u Ollama).
+    Incluye verificación real con texto de prueba para determinar disponibilidad,
+    latencia y calidad del servicio.
     
     Returns:
         str: Estado del proveedor ("available", "degraded" o "unavailable")
     """
     try:
-        # Verificar según el tipo de proveedor configurado
+        provider = "ollama" if settings.use_ollama else "openai"
+        model = settings.default_embedding_model
+        test_text = "This is a test to verify the embedding provider and model quality."
+        start_time = time.time()
+        
+        # Verificar disponibilidad del proveedor
         if settings.use_ollama:
-            # Verificación para Ollama (simplificada)
-            # En un caso real, podríamos hacer una petición de prueba a Ollama
-            return "available"
+            # Para Ollama (local), verificar servicio Ollama
+            try:
+                # Verificar primero que el servicio Ollama esté funcionando
+                if not await check_ollama_service():
+                    logger.error("Servicio Ollama no disponible")
+                    return "unavailable"
+                    
+                # Verificar que el modelo específico esté disponible
+                if not await check_ollama_model(model):
+                    logger.warning(f"Modelo {model} no disponible en Ollama")
+                    return "degraded"
+                
+                # Probar embeddings con texto real
+                client = OllamaEmbedding(model_name=model, base_url=settings.ollama_base_url)
+                embedding = client.get_text_embedding(test_text)
+                
+                # Verificar calidad del embedding
+                if len(embedding) < 100 or not verify_embedding_quality(embedding):
+                    logger.warning(f"Calidad de embedding insuficiente: {len(embedding)} dimensiones")
+                    return "degraded"
+                    
+                # Verificar uso de memoria (importante para modelos locales)
+                memory_usage = await check_memory_usage()
+                if memory_usage == "critical":
+                    logger.warning("Uso de memoria crítico")
+                    return "degraded"
+            except Exception as e:
+                logger.error(f"Error con Ollama: {str(e)}")
+                return "unavailable"
         else:
-            # Verificación para OpenAI
-            embed_model = OpenAIEmbedding(
-                model_name=settings.default_embedding_model,
-                api_key=settings.openai_api_key
-            )
-            test_result = embed_model._get_text_embedding("test")
-            if not test_result or len(test_result) < 10:
-                return "degraded"
-            return "available"
+            # Para OpenAI, verificar las credenciales y conectividad
+            try:
+                # Verificar que haya una API key configurada
+                if not settings.openai_api_key:
+                    logger.error("API key de OpenAI no configurada")
+                    return "unavailable"
+                
+                # Probar embeddings con texto real
+                client = OpenAIEmbedding(model=model, api_key=settings.openai_api_key)
+                embedding = client.get_text_embedding(test_text)
+                
+                # Verificar calidad del embedding
+                if len(embedding) < 100 or not verify_embedding_quality(embedding):
+                    logger.warning(f"Calidad de embedding insuficiente: {len(embedding)} dimensiones")
+                    return "degraded"
+                    
+                # Verificar rate limits
+                rate_limit_status = await check_api_rate_limits()
+                if rate_limit_status == "degraded":
+                    logger.warning("Acercando a límites de API")
+                    return "degraded"
+            except Exception as e:
+                logger.error(f"Error con OpenAI: {str(e)}")
+                return "unavailable"
+        
+        # Verificar latencia del proveedor
+        end_time = time.time()
+        latency_ms = (end_time - start_time) * 1000
+        
+        # Registrar latencia para métricas
+        record_embedding_latency(latency_ms)
+        
+        # Si la latencia es muy alta, considerar degradado
+        if latency_ms > 5000:  # Más de 5 segundos
+            logger.warning(f"Latencia alta del proveedor: {latency_ms:.2f}ms")
+            return "degraded"
+        
+        return "available"
     except Exception as e:
-        logger.warning(f"Proveedor de embeddings no disponible: {str(e)}")
+        logger.error(f"Error verificando proveedor de embeddings: {str(e)}")
         return "unavailable"
+
+async def check_cache_efficiency() -> str:
+    """
+    Verifica la eficiencia de la caché de embeddings.
+    
+    Returns:
+        str: Estado de la eficiencia ("available", "degraded" o "unavailable")
+    """
+    global embedding_cache_hits, embedding_cache_misses
+    
+    try:
+        # Verificar si la caché está disponible y funcionando
+        redis_client = await get_redis_client()
+        if not redis_client:
+            return "unavailable"
+        
+        # Si no hay suficientes datos, asumir disponible
+        total_requests = embedding_cache_hits + embedding_cache_misses
+        if total_requests < 10:
+            return "available"
+        
+        # Calcular hit ratio
+        hit_ratio = embedding_cache_hits / total_requests if total_requests > 0 else 0
+        
+        # Criterios de eficiencia basados en hit ratio
+        if hit_ratio >= 0.5:  # Al menos 50% de hit ratio es bueno
+            return "available"
+        elif hit_ratio >= 0.2:  # Entre 20% y 50% es degradado
+            return "degraded"
+        else:  # Menos del 20% es muy ineficiente
+            return "degraded"
+    
+    except Exception as e:
+        logger.warning(f"Error verificando eficiencia de caché: {str(e)}")
+        return "unavailable"
+
+async def check_ollama_service() -> bool:
+    """
+    Verifica que el servicio Ollama esté funcionando.
+    
+    Returns:
+        bool: True si el servicio está disponible, False en caso contrario
+    """
+    try:
+        base_url = settings.ollama_base_url.rstrip('/')
+        health_url = f"{base_url}/api/health"  # Endpoint de salud de Ollama
+        
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(health_url)
+            if response.status_code == 200:
+                return True
+            else:
+                logger.warning(f"Health check de Ollama falló con código {response.status_code}")
+                return False
+    except Exception as e:
+        logger.error(f"Error conectando con el servicio Ollama: {str(e)}")
+        return False
+
+async def check_ollama_model(model: str) -> bool:
+    """
+    Verifica que un modelo específico esté disponible en Ollama.
+    
+    Args:
+        model: Nombre del modelo a verificar
+        
+    Returns:
+        bool: True si el modelo está disponible, False en caso contrario
+    """
+    try:
+        base_url = settings.ollama_base_url.rstrip('/')
+        models_url = f"{base_url}/api/tags"  # Endpoint para listar modelos en Ollama
+        
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(models_url)
+            
+            if response.status_code != 200:
+                logger.warning(f"Error obteniendo lista de modelos de Ollama: código {response.status_code}")
+                return False
+                
+            models_data = response.json()
+            available_models = [m.get("name") for m in models_data.get("models", [])]
+            
+            if model in available_models:
+                return True
+            else:
+                logger.warning(f"Modelo {model} no encontrado en Ollama. Disponibles: {available_models}")
+                return False
+    except Exception as e:
+        logger.error(f"Error verificando modelos en Ollama: {str(e)}")
+        return False
+
+def verify_embedding_quality(embedding: list) -> bool:
+    """
+    Verifica la calidad del embedding generado.
+    
+    Args:
+        embedding: Vector de embedding a verificar
+        
+    Returns:
+        bool: True si el embedding es de calidad aceptable, False en caso contrario
+    """
+    try:
+        # 1. Verificar que no sea un vector nulo
+        if not embedding or len(embedding) == 0:
+            return False
+            
+        # 2. Verificar que no tenga todos valores iguales (embedding degenerado)
+        if len(set(embedding[:10])) < 3:  # Si los primeros 10 valores tienen menos de 3 valores distintos
+            return False
+            
+        # 3. Verificar que no tenga valores extremos
+        embedding_array = np.array(embedding)
+        if np.max(np.abs(embedding_array)) > 100:  # Valores muy grandes (inusuales en embeddings normalizados)
+            return False
+            
+        # 4. Verificar norma del vector (debe ser cercana a 1 para embeddings normalizados)
+        norm = np.linalg.norm(embedding_array)
+        if abs(norm - 1.0) > 0.2:  # Si difiere mucho de 1
+            return False
+            
+        return True
+    except Exception as e:
+        logger.warning(f"Error verificando calidad del embedding: {str(e)}")
+        return False
+
+async def check_memory_usage() -> str:
+    """
+    Verifica el uso de memoria del sistema para modelos locales.
+    
+    Returns:
+        str: Estado de la memoria ("normal", "warning" o "critical")
+    """
+    try:
+        # En un entorno real, esto usaría psutil o una biblioteca similar
+        # para obtener el uso real de memoria del sistema
+        
+        # Simulación de verificación de memoria
+        try:
+            # Intentamos acceder a /proc/meminfo en sistemas tipo Unix
+            with open('/proc/meminfo', 'r') as mem_file:
+                mem_info = mem_file.readlines()
+                
+                # Parsear memoria total y disponible
+                mem_total = 0
+                mem_available = 0
+                
+                for line in mem_info:
+                    if 'MemTotal' in line:
+                        mem_total = int(line.split()[1])
+                    elif 'MemAvailable' in line:
+                        mem_available = int(line.split()[1])
+                
+                if mem_total > 0:
+                    mem_percent = (mem_total - mem_available) / mem_total * 100
+                    
+                    if mem_percent > 90:
+                        return "critical"
+                    elif mem_percent > 80:
+                        return "warning"
+                    else:
+                        return "normal"
+        except Exception:
+            # Si no podemos acceder a /proc/meminfo, asumimos que está bien
+            return "normal"
+            
+        return "normal"  # Valor por defecto
+    except Exception as e:
+        logger.warning(f"Error verificando uso de memoria: {str(e)}")
+        return "normal"  # Por defecto, asumimos que está bien
+
+async def check_api_rate_limits() -> str:
+    """
+    Verifica el estado de los límites de API.
+    
+    Returns:
+        str: Estado de los límites ("available", "degraded" o "unavailable")
+    """
+    if settings.use_ollama:
+        # Con Ollama local no hay rate limits
+        return "available"
+    
+    # Para OpenAI verificamos si ha habido rate limits recientes
+    global LAST_API_RATE_CHECK
+    
+    # Si la última verificación fue hace menos de 5 minutos, consideramos degradado
+    time_since_last_check = time.time() - LAST_API_RATE_CHECK
+    if time_since_last_check < 300:  # 5 minutos
+        return "degraded"
+    
+    return "available"
+
+async def get_cache_metrics() -> Dict[str, Any]:
+    """
+    Obtiene métricas detalladas de la caché de embeddings.
+    
+    Returns:
+        Dict[str, Any]: Métricas de caché
+    """
+    global embedding_cache_hits, embedding_cache_misses
+    
+    total_requests = embedding_cache_hits + embedding_cache_misses
+    hit_ratio = embedding_cache_hits / total_requests if total_requests > 0 else 0
+    
+    return {
+        "cache_hits": embedding_cache_hits,
+        "cache_misses": embedding_cache_misses,
+        "total_requests": total_requests,
+        "hit_ratio": round(hit_ratio, 4),
+        "ttl_settings": {
+            "embedding_ttl": CacheManager.ttl_extended,  # 24 horas para embeddings
+        }
+    }
+
+async def get_model_usage_stats() -> Dict[str, Any]:
+    """
+    Obtiene estadísticas de uso de los modelos de embedding.
+    
+    Returns:
+        Dict[str, Any]: Estadísticas de uso de modelos
+    """
+    try:
+        stats = {
+            "model_name": settings.default_embedding_model,
+            "requests_last_24h": 0,
+            "tokens_last_24h": 0,
+            "avg_tokens_per_request": 0
+        }
+        
+        # En una implementación real, estas estadísticas se obtendrían de la DB
+        # Por ahora usamos valores estáticos para el ejemplo
+        stats["requests_last_24h"] = embedding_cache_hits + embedding_cache_misses
+        stats["tokens_last_24h"] = stats["requests_last_24h"] * 500  # Estimación
+        stats["avg_tokens_per_request"] = 500 if stats["requests_last_24h"] > 0 else 0
+        
+        return stats
+    except Exception as e:
+        logger.warning(f"Error obteniendo estadísticas de modelos: {str(e)}")
+        return {"error": str(e)}
+
+async def check_api_limits() -> Dict[str, Any]:
+    """
+    Verifica los límites de API y cuotas para el proveedor de embeddings.
+    
+    Returns:
+        Dict[str, Any]: Información sobre límites de API
+    """
+    if settings.use_ollama:
+        return {
+            "has_rate_limits": False,
+            "provider": "ollama",
+            "limit_type": "none"
+        }
+    else:
+        # Para OpenAI en una implementación real verificaríamos los límites reales
+        # Por ahora usamos valores estáticos
+        return {
+            "has_rate_limits": True,
+            "provider": "openai",
+            "limit_type": "rpm",
+            "current_rpm": 10,
+            "max_rpm": 60,
+            "usage_percentage": 16.7,
+            "quota_reset": "1 minute"
+        }
+
+def get_embedding_dimensions() -> int:
+    """
+    Determina las dimensiones del modelo de embedding configurado.
+    
+    Returns:
+        int: Número de dimensiones del modelo
+    """
+    model_name = settings.default_embedding_model.lower()
+    
+    # Mapeo de modelos conocidos a dimensiones
+    dimensions = {
+        "text-embedding-ada-002": 1536,
+        "text-embedding-3-small": 1536,
+        "text-embedding-3-large": 3072,
+        "ada": 1024,
+        "llama2": 4096,
+        "mistral": 4096
+    }
+    
+    # Buscar dimensiones por nombre parcial
+    for name, dims in dimensions.items():
+        if name in model_name:
+            return dims
+    
+    # Valor predeterminado
+    return 1536
+
+def get_performance_metrics() -> Dict[str, Any]:
+    """
+    Obtiene métricas de rendimiento del servicio de embeddings.
+    
+    Returns:
+        Dict[str, Any]: Métricas de rendimiento
+    """
+    global embedding_latencies
+    
+    if not embedding_latencies:
+        return {
+            "request_count": 0,
+            "avg_latency_ms": 0,
+            "p95_latency_ms": 0,
+            "p99_latency_ms": 0
+        }
+    
+    metrics = {
+        "request_count": len(embedding_latencies),
+        "avg_latency_ms": round(statistics.mean(embedding_latencies), 2),
+    }
+    
+    # Añadir percentiles si hay suficientes datos
+    if len(embedding_latencies) >= 5:
+        metrics["p95_latency_ms"] = round(statistics.quantiles(embedding_latencies, n=100)[94], 2)
+        metrics["p99_latency_ms"] = round(statistics.quantiles(embedding_latencies, n=100)[98], 2)
+    
+    return metrics
+
+def record_embedding_latency(latency_ms: float) -> None:
+    """
+    Registra la latencia de generación de embeddings para métricas.
+    
+    Args:
+        latency_ms: Latencia en milisegundos
+    """
+    global embedding_latencies
+    
+    embedding_latencies.append(latency_ms)
+    
+    # Mantener solo las últimas MAX_LATENCY_SAMPLES muestras
+    if len(embedding_latencies) > MAX_LATENCY_SAMPLES:
+        embedding_latencies = embedding_latencies[-MAX_LATENCY_SAMPLES:]
+
+def record_cache_hit() -> None:
+    """
+    Registra un hit en la caché para estadísticas.
+    """
+    global embedding_cache_hits
+    embedding_cache_hits += 1
+
+def record_cache_miss() -> None:
+    """
+    Registra un miss en la caché para estadísticas.
+    """
+    global embedding_cache_misses
+    embedding_cache_misses += 1

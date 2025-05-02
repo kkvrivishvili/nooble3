@@ -1,3 +1,4 @@
+
 # Estándar del Patrón Cache-Aside
 
 **Tags:** `#cache` `#performance` `#pattern` `#multitenancy` `#redis`
