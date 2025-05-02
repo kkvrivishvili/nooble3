@@ -214,7 +214,7 @@ async def get_tenant_configurations(
     # Verificar si Supabase está deshabilitado
     from ..config import get_settings
     settings = get_settings()
-    if settings.LOAD_CONFIG_FROM_SUPABASE.lower() == "false":
+    if settings.load_config_from_supabase == False or str(settings.load_config_from_supabase).lower() == "false":
         # Retornar configuración por defecto en modo offline
         logger.debug(f"Supabase está en modo offline, retornando configuraciones por defecto para {tenant_id}")
         default_configurations = {

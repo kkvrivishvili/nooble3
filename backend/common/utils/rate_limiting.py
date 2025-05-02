@@ -173,7 +173,7 @@ async def apply_rate_limit(tenant_id: str, tier: str, limit_key: str = "api") ->
             else:
                 # Incrementar contador existente
                 await CacheManager.increment_counter(
-                    scope="rate_limit",
+                    counter_type="rate_limit",
                     amount=1,
                     resource_id=f"{limit_key}:count",
                     tenant_id=tenant_id

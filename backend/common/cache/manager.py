@@ -964,8 +964,8 @@ class CacheManager:
 
     async def increment_counter(
         self,
-        counter_type: str,
-        amount: int,
+        counter_type: Optional[str] = None,
+        amount: int = 0,
         resource_id: str = "total",
         tenant_id: Optional[str] = None,
         agent_id: Optional[str] = None,
@@ -973,7 +973,8 @@ class CacheManager:
         collection_id: Optional[str] = None,
         token_type: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
-        ttl: Optional[int] = None
+        ttl: Optional[int] = None,
+        scope: Optional[str] = None
     ) -> int:
         """
         Incrementa un contador en caché y devuelve el nuevo valor.
@@ -986,13 +987,20 @@ class CacheManager:
             token_type: Tipo de token si es un contador de tokens
             metadata: Metadatos adicionales del contador
             ttl: Tiempo de vida del contador en segundos (usar None para ttl_extended)
+            scope: Alias de counter_type para compatibilidad con versiones anteriores
             
         Returns:
             int: Nuevo valor del contador
         """
         tenant_id = tenant_id or get_current_tenant_id()
         
-        counter_key_parts = [tenant_id, f"counter:{counter_type}"]
+        # Usar counter_type si está definido, o scope como fallback
+        counter_type_to_use = counter_type or scope
+        if not counter_type_to_use:
+            logger.warning(f"Se debe proporcionar counter_type o scope para increment_counter")
+            counter_type_to_use = "unknown"
+        
+        counter_key_parts = [tenant_id, f"counter:{counter_type_to_use}"]
         
         if token_type:
             counter_key_parts.append(f"type:{token_type}")
