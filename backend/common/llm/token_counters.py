@@ -46,6 +46,8 @@ try:
             "llama3": 1.4,
             # Mistral
             "mistral": 1.4,
+            # Qwen
+            "qwen3:1.7b": 1.4,
             # Default para modelos desconocidos
             "default": 1.3
         }
@@ -65,6 +67,7 @@ except Exception as e:
         "llama2": 1.4,
         "llama3": 1.4,
         "mistral": 1.4,
+        "qwen3:1.7b": 1.4,
         "default": 1.3
     }
 

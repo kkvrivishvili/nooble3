@@ -129,7 +129,7 @@ async def service_status(ctx: Context = None) -> ServiceStatusResponse:
         # Métricas detalladas específicas del servicio
         extra_metrics={
             # Información del modelo de embeddings
-            "embedding_model": settings.default_embedding_model,
+            "embedding_model": settings.default_ollama_embedding_model if settings.use_ollama else settings.default_embedding_model,
             "provider": "ollama" if settings.use_ollama else "openai",
             "embedding_dimensions": get_embedding_dimensions(),
             "model_statistics": model_stats,
@@ -516,7 +516,8 @@ def get_embedding_dimensions() -> int:
         "text-embedding-3-large": 3072,
         "ada": 1024,
         "llama2": 4096,
-        "mistral": 4096
+        "mistral": 4096,
+        "nomic-embed-text": 768  # Dimensión del modelo nomic-embed-text
     }
     
     # Buscar dimensiones por nombre parcial

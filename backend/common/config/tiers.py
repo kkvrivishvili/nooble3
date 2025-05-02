@@ -432,6 +432,16 @@ def get_llm_model_details(model_id: str) -> Dict[str, Any]:
             "cost_per_1k_input_tokens": 0,
             "cost_per_1k_output_tokens": 0,
             "capabilities": ["text_generation", "chat"]
+        },
+        "qwen3:1.7b": {
+            "context_window": 8192,
+            "description": "Modelo Qwen3 de Alibaba (1.7b) a través de Ollama",
+            "max_output_tokens": 4096,
+            "provider": "ollama",
+            "version": "3",
+            "cost_per_1k_input_tokens": 0,
+            "cost_per_1k_output_tokens": 0,
+            "capabilities": ["text_generation", "chat", "function_calling"]
         }
     }
     

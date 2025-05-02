@@ -136,7 +136,7 @@ class OllamaLLM(BaseLLM):
             stop_sequences: Secuencias donde detener la generación
             **kwargs: Parámetros adicionales para la API de Ollama
         """
-        self.model_name = model_name or getattr(settings, "default_ollama_llm_model", "llama3")
+        self.model_name = model_name or getattr(settings, "default_ollama_llm_model", "qwen3:1.7b")
         self.base_url = base_url or settings.ollama_base_url
         self.temperature = temperature
         self.max_tokens = max_tokens or getattr(settings, "llm_max_tokens", 2048)

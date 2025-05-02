@@ -68,10 +68,10 @@ class Settings(BaseSettings):
     default_embedding_model: str = Field("text-embedding-3-small", env="DEFAULT_OPENAI_EMBEDDING_MODEL", description="Modelo predeterminado para embeddings")
     
     # =========== Configuración de Ollama ===========
-    use_ollama: bool = Field(False, env="USE_OLLAMA", description="Usar Ollama en lugar de OpenAI")
+    use_ollama: bool = Field(True, env="USE_OLLAMA", description="Usar Ollama en lugar de OpenAI")
     ollama_api_url: str = Field("http://ollama:11434", env="OLLAMA_API_URL", description="URL de la API de Ollama")
-    default_ollama_model: str = Field("llama3:1b", env="DEFAULT_OLLAMA_MODEL", description="Modelo predeterminado para Ollama")
-    default_ollama_llm_model: str = Field("llama3:1b", env="DEFAULT_OLLAMA_LLM_MODEL", description="Modelo LLM predeterminado para Ollama")
+    default_ollama_model: str = Field("qwen3:1.7b", env="DEFAULT_OLLAMA_MODEL", description="Modelo predeterminado para Ollama")
+    default_ollama_llm_model: str = Field("qwen3:1.7b", env="DEFAULT_OLLAMA_LLM_MODEL", description="Modelo LLM predeterminado para Ollama")
     default_ollama_embedding_model: str = Field("nomic-embed-text", env="DEFAULT_OLLAMA_EMBEDDING_MODEL", description="Modelo de embedding para Ollama")
     
     # =========== API AI =========== 
@@ -115,6 +115,7 @@ class Settings(BaseSettings):
             "gpt-4": 8192,
             "gpt-4-turbo": 16384,
             "llama3": 8192,
+            "qwen3:1.7b": 8192,
         },
         description="Capacidad de tokens por modelo"
     )

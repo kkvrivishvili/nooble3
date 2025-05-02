@@ -25,8 +25,7 @@ COPY common/ ./common/
 COPY agent-service/ ./agent-service/
 COPY .env.example ./.env
 
-# Hacer ejecutables los scripts
-RUN chmod +x /app/common/init_ollama.sh /app/common/wait-for-it.sh
+# Hacer ejecutables los scripts que puedan existir
 # Asegurar que los scripts siempre tengan permisos ejecutables
 RUN find /app -name "*.sh" -type f -exec chmod +x {} \;
 
@@ -51,4 +50,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD curl -f http://localhost:8003/health || exit 1
 
 # Comando para ejecutar el servicio
-CMD ["/app/common/init_ollama.sh", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8003"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8003"]

@@ -120,9 +120,9 @@ async def service_status(ctx: Context = None) -> ServiceStatusResponse:
         extra_metrics={
             # Configuración de LLM
             "llm": {
-                "provider": settings.llm_provider,
-                "default_model": settings.default_llm_model,
-                "available_models": settings.available_llm_models if hasattr(settings, "available_llm_models") else [settings.default_llm_model],
+                "provider": "ollama" if settings.use_ollama else "openai",
+                "default_model": settings.default_ollama_llm_model if settings.use_ollama else settings.default_llm_model,
+                "available_models": [settings.default_ollama_llm_model] if settings.use_ollama else (settings.available_llm_models if hasattr(settings, "available_llm_models") else [settings.default_llm_model]),
                 "metrics": llm_metrics
             },
             
@@ -266,44 +266,59 @@ async def check_llm_service() -> str:
         str: Estado del servicio ("available", "degraded" o "unavailable")
     """
     try:
-        global service_call_counts, llm_error_count
+        global service_call_counts, llm_error_count, llm_latency_ms
         service_call_counts["llm_service"] += 1
         
-        # Obtener el cliente LLM (simulado para el ejemplo)
-        llm_provider = settings.llm_provider
-        llm_model = settings.default_llm_model
+        # Determinar el proveedor y modelo a verificar
+        llm_provider = "ollama" if settings.use_ollama else "openai"
         
-        if not llm_provider or not llm_model:
-            logger.warning("Configuración LLM incompleta")
+        # Seleccionar el modelo adecuado según el proveedor
+        if llm_provider == "ollama":
+            llm_model = settings.default_ollama_llm_model  # qwen3:1.7b
+        else:
+            llm_model = settings.default_llm_model         # OpenAI model
+        
+        if not llm_model:
+            logger.warning("Configuración de modelo LLM incompleta")
             return "unavailable"
             
-        # Verificar disponibilidad con una llamada simple
-        # En una implementación real, esto haría una llamada real a la API
-        # y verificaría latencia, errores, etc.
+        # Verificar disponibilidad según el proveedor
+        llm_ok = False
         
-        # Simulación de verificación
-        llm_ok = True  # Simular estado correcto
-        
-        if llm_provider == "openai":
-            # Aquí iría el código real para verificar OpenAI
-            # Por ejemplo, una solicitud simple para verificar las claves de API
-            # y disponibilidad del modelo
-            pass
-        elif llm_provider == "anthropic":
-            # Verificación específica para Anthropic
-            pass
-        elif llm_provider == "azure_openai":
-            # Verificación específica para Azure OpenAI
-            pass
-        elif llm_provider == "ollama":
-            # Verificación específica para Ollama local
-            pass
-        else:
-            logger.warning(f"Proveedor LLM desconocido: {llm_provider}")
-            return "unknown"
+        try:
+            if llm_provider == "ollama":
+                # Verificar que Ollama esté disponible y el modelo cargado
+                import httpx
+                url = f"{settings.ollama_api_url}/api/show"
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    response = await client.post(url, json={"name": llm_model})
+                    llm_ok = response.status_code == 200
+                    
+                    if not llm_ok:
+                        logger.warning(f"Modelo Ollama {llm_model} no disponible: {response.status_code}")
+            
+            elif llm_provider == "openai":
+                # Solo verificamos que tengamos la clave API configurada
+                llm_ok = bool(settings.openai_api_key)
+                
+            elif llm_provider == "anthropic":
+                # Verificación específica para Anthropic
+                llm_ok = bool(settings.anthropic_api_key) if hasattr(settings, "anthropic_api_key") else False
+                
+            elif llm_provider == "azure_openai":
+                # Verificación específica para Azure OpenAI
+                llm_ok = bool(getattr(settings, "azure_openai_api_key", None))
+                
+            else:
+                logger.warning(f"Proveedor LLM desconocido: {llm_provider}")
+                return "unknown"
+                
+        except Exception as e:
+            logger.error(f"Error verificando servicio LLM {llm_provider}/{llm_model}: {str(e)}")
+            llm_ok = False
+            llm_error_count += 1
             
         # Registrar latencia simulada para métricas
-        global llm_latency_ms
         llm_latency_ms.append(500)  # Valor simulado de 500ms
         
         # Mantener solo las últimas muestras

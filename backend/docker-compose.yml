@@ -2,7 +2,9 @@ version: '3.8'
 
 services:
   redis:
-    image: redis:alpine
+    build:
+      context: ./docker/redis
+      dockerfile: Dockerfile
     ports:
       - "6379:6379"
     volumes:
@@ -15,13 +17,22 @@ services:
       retries: 3
 
   ollama:
-    image: ollama/ollama:latest
+    build:
+      context: ./docker/ollama
+      dockerfile: Dockerfile
     ports:
       - "11434:11434"
     volumes:
       - ollama-data:/root/.ollama
+    environment:
+      - OLLAMA_LOG_LEVEL=warn       # Reducir verbosidad de logs
+      - OLLAMA_VERBOSE=false        # Desactivar mensajes detallados
     healthcheck:
-      disable: true  # deshabilitado por problemas de disponibilidad intermitente
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     restart: always
 
   embedding-service:
@@ -62,7 +73,7 @@ services:
       - LOG_LEVEL=INFO
       - USE_OLLAMA=${USE_OLLAMA:-true}
       - DEFAULT_OLLAMA_EMBEDDING_MODEL=${DEFAULT_OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
-      - DEFAULT_OLLAMA_LLM_MODEL=${DEFAULT_OLLAMA_LLM_MODEL:-llama3:1b}
+      - DEFAULT_OLLAMA_LLM_MODEL=${DEFAULT_OLLAMA_LLM_MODEL:-qwen3:1.7b}
     depends_on:
       redis:
         condition: service_healthy
@@ -108,7 +119,7 @@ services:
       - LOG_LEVEL=INFO
       - USE_OLLAMA=${USE_OLLAMA:-true}
       - DEFAULT_OLLAMA_EMBEDDING_MODEL=${DEFAULT_OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
-      - DEFAULT_OLLAMA_LLM_MODEL=${DEFAULT_OLLAMA_LLM_MODEL:-llama3:1b}
+      - DEFAULT_OLLAMA_LLM_MODEL=${DEFAULT_OLLAMA_LLM_MODEL:-qwen3:1.7b}
     depends_on:
       redis:
         condition: service_healthy
@@ -157,7 +168,7 @@ services:
       - LOG_LEVEL=INFO
       - USE_OLLAMA=${USE_OLLAMA:-true}
       - DEFAULT_OLLAMA_EMBEDDING_MODEL=${DEFAULT_OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
-      - DEFAULT_OLLAMA_LLM_MODEL=${DEFAULT_OLLAMA_LLM_MODEL:-llama3:1b}
+      - DEFAULT_OLLAMA_LLM_MODEL=${DEFAULT_OLLAMA_LLM_MODEL:-qwen3:1.7b}
       - JOB_LOCK_EXPIRE_SECONDS=600
     depends_on:
       redis:
@@ -210,7 +221,7 @@ services:
       - LOG_LEVEL=INFO
       - USE_OLLAMA=${USE_OLLAMA:-true}
       - DEFAULT_OLLAMA_EMBEDDING_MODEL=${DEFAULT_OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
-      - DEFAULT_OLLAMA_LLM_MODEL=${DEFAULT_OLLAMA_LLM_MODEL:-llama3:1b}
+      - DEFAULT_OLLAMA_LLM_MODEL=${DEFAULT_OLLAMA_LLM_MODEL:-qwen3:1.7b}
     depends_on:
       redis:
         condition: service_healthy
