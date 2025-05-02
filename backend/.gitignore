@@ -70,6 +70,10 @@ pytestdebug.log
 dump.rdb
 *.rdb
 
+# Markdown
+# Permitimos archivos .md para documentación local
+# *.md
+
 # Database
 *.sqlite3
 *.sqlite

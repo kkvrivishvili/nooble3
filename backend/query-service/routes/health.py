@@ -84,14 +84,14 @@ async def health_check(ctx: Context = None) -> HealthResponse:
     else:
         overall_status = "available"
     
-    # Generar respuesta estandarizada
+    # Generar respuesta estandarizada usando objeto HealthResponse adecuadamente
     response = get_service_health(
         components=components,
         service_version=settings.service_version
     )
     
-    # Actualizar estado general
-    response["status"] = overall_status
+    # Actualizar estado general (status ahora es un atributo del objeto, no un índice de diccionario)
+    response.status = overall_status
     
     return response
 
@@ -159,11 +159,26 @@ async def check_embedding_service() -> bool:
         bool: True si el servicio está disponible, False en caso contrario
     """
     try:
+        service_url = settings.embedding_service_url
+        logger.info(f"Verificando disponibilidad del embedding-service en {service_url}/health")
+        
         async with httpx.AsyncClient(timeout=TIMEOUTS["health_check"]) as client:
-            response = await client.get(f"{settings.embedding_service_url}/health")
-            return response.status_code == 200
+            response = await client.get(f"{service_url}/health")
+            
+            if response.status_code == 200:
+                logger.info(f"Servicio embedding-service disponible: código {response.status_code}")
+                return True
+            else:
+                logger.warning(f"Estado degradado en embedding-service: código {response.status_code}")
+                return False
+    except httpx.ConnectError as e:
+        logger.warning(f"Error de conexión con embedding-service: {e}. URL: {settings.embedding_service_url}")
+        return False
+    except httpx.TimeoutException as e:
+        logger.warning(f"Timeout al verificar embedding-service: {e}. URL: {settings.embedding_service_url}")
+        return False
     except Exception as e:
-        logger.warning(f"Error verificando disponibilidad de embedding-service: {e}")
+        logger.warning(f"Error verificando disponibilidad de embedding-service: {e.__class__.__name__}: {e}")
         return False
 
 async def check_embedding_service_status() -> str:

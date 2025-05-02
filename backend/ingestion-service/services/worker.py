@@ -9,6 +9,8 @@ from typing import Set, Dict, Any
 
 from common.errors import handle_errors, ServiceError, ErrorCode
 from common.context import with_context, Context
+from config.settings import get_settings
+from config.constants import MAX_WORKERS, TIME_INTERVALS
 
 from .queue import process_next_job, initialize_queue, shutdown_queue
 

@@ -18,16 +18,23 @@ from common.errors import (
     handle_errors, ErrorCode
 )
 from common.context import with_context, Context
-from common.config import get_settings
 from common.utils.http import call_service
 from common.cache import invalidate_document_update
 from common.tracking import track_token_usage
+
+# Importar configuración centralizada del servicio
+from config.settings import get_settings
+from config.constants import (
+    DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_EMBEDDING_DIMENSION,
+    MAX_EMBEDDING_RETRIES,
+    TIMEOUTS
+)
 
 # Importar componentes de LlamaIndex necesarios
 from llama_index.core import Document
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
 
 @with_context(tenant=True)
 @handle_errors(error_type="service", log_traceback=True)

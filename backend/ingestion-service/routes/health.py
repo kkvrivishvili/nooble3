@@ -22,12 +22,29 @@ import redis.asyncio as redis
 from common.models import HealthResponse, ServiceStatusResponse
 from common.errors import handle_errors
 from common.context import with_context, Context
-from common.config import get_settings
 from common.utils.http import check_service_health
 from common.helpers.health import basic_health_check, detailed_status_check, get_service_health
 from common.cache.manager import get_redis_client
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
+
+# Importar configuración centralizada del servicio
+from config.settings import get_settings, get_health_status
+from config.constants import (
+    MAX_WORKERS,
+    SUPPORTED_MIMETYPES,
+    CHUNK_SIZE,
+    CHUNK_OVERLAP,
+    CACHE_EFFICIENCY_THRESHOLDS,
+    QUALITY_THRESHOLDS,
+    TIME_INTERVALS,
+    METRICS_CONFIG,
+    TIMEOUTS,
+    # Importar constantes para la cola de trabajos
+    JOBS_QUEUE_KEY,
+    MAX_QUEUE_SIZE,
+    WORKER_CONCURRENCY
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -100,8 +117,8 @@ async def health_check(ctx: Context = None) -> HealthResponse:
         service_version=settings.service_version
     )
     
-    # Actualizar estado general
-    response["status"] = overall_status
+    # Actualizar estado general (usando atributo en lugar de acceso tipo diccionario)
+    response.status = overall_status
     
     return response
 
@@ -246,8 +263,8 @@ async def check_jobs_queue() -> str:
             logger.warning("No se pudo obtener cliente Redis para la cola de trabajos")
             return "unavailable"
         
-        # Verificar acceso a la cola
-        queue_key = settings.jobs_queue_key
+        # Verificar acceso a la cola usando directamente las constantes
+        queue_key = JOBS_QUEUE_KEY
         processing_key = f"{queue_key}:processing"
         failed_key = f"{queue_key}:failed"
         
@@ -262,8 +279,8 @@ async def check_jobs_queue() -> str:
         # Registrar backlog actual para métricas
         record_queue_backlog(pending_jobs)
         
-        # Criterios para determinar estado
-        if pending_jobs > settings.max_queue_size * 0.9:
+        # Criterios para determinar estado usando las constantes directamente
+        if pending_jobs > MAX_QUEUE_SIZE * 0.9:
             logger.warning(f"Cola de trabajos casi llena: {pending_jobs} trabajos pendientes")
             return "degraded"
             
@@ -271,7 +288,7 @@ async def check_jobs_queue() -> str:
             logger.warning(f"Muchos trabajos fallidos: {failed_jobs} en la cola de errores")
             return "degraded"
             
-        if processing_jobs > settings.worker_concurrency * 2:
+        if processing_jobs > WORKER_CONCURRENCY * 2:
             logger.warning(f"Demasiados trabajos en procesamiento: {processing_jobs}")
             return "degraded"
         

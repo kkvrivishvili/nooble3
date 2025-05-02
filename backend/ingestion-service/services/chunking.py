@@ -35,16 +35,26 @@ from bs4 import BeautifulSoup
 
 # Componentes internos del sistema
 from common.errors import ServiceError, ErrorCode, DocumentProcessingError, ValidationError, handle_errors
-from common.config import get_settings
 from common.config.tiers import get_tier_limits
 from common.context import with_context, Context
 from common.tracking import track_token_usage
 from common.cache.manager import CacheManager
 from common.cache import get_with_cache_aside, invalidate_document_update
 
+# Importar configuración centralizada del servicio
+from config.settings import get_settings
+from config.constants import (
+    CHUNK_SIZE,
+    CHUNK_OVERLAP,
+    MAX_WORKERS,
+    MAX_DOC_SIZE_MB,
+    SUPPORTED_MIMETYPES,
+    EXTRACTION_CONFIG,
+    TIMEOUTS
+)
+
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
 
 # Implementación personalizada de HTMLReader
 class CustomHTMLReader:

@@ -2,6 +2,8 @@
 
 Este documento describe los endpoints de verificación de salud y estado implementados en el servicio de ingestión.
 
+> **ACTUALIZACIÓN (2025-05-02)**: Se ha implementado una configuración centralizada para el servicio. Todos los parámetros de salud ahora se gestionan desde `config/constants.py` y `config/settings.py`.
+
 ## Endpoints disponibles
 
 ### 1. `/health` - Verificación básica de disponibilidad

@@ -21,9 +21,15 @@ from common.context import with_context, Context
 from common.auth import verify_tenant
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
-from common.config import get_settings
 from common.config.tiers import get_tier_limits
 from common.db.storage import upload_to_storage
+
+# Importar configuración centralizada del servicio
+from config.settings import get_settings, get_document_processor_config
+from config.constants import (
+    MAX_DOC_SIZE_MB,
+    SUPPORTED_MIMETYPES
+)
 
 from services.queue import queue_document_processing_job
 from services.chunking import validate_file
