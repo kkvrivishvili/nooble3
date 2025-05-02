@@ -1055,6 +1055,7 @@ class CacheManager:
         metadata: Optional[Dict[str, Any]] = None,
         ttl: Optional[int] = None,
         counter_type: Optional[str] = None,
+        **kwargs  # Para capturar parámetros adicionales inesperados
     ) -> int:
         """
         Versión estática del método increment_counter para compatibilidad.
@@ -1072,27 +1073,50 @@ class CacheManager:
         Returns:
             int: Nuevo valor del contador
         """
-        # Logs para depuración - identificar de dónde vienen las llamadas problemáticas
-        # Descomentar si se necesita
-        # if counter_type and scope and counter_type != scope:
-        #     logger.warning(f"Se proporcionaron tanto counter_type ({counter_type}) como scope ({scope}). Se usará counter_type.")
-        
-        # Preferir counter_type sobre scope si ambos están presentes
-        counter_type_to_use = counter_type or scope
-        
-        instance = CacheManager.get_instance()
-        return await instance.increment_counter(
-            counter_type=counter_type_to_use,
-            amount=amount,
-            resource_id=resource_id,
-            tenant_id=tenant_id,
-            agent_id=agent_id,
-            conversation_id=conversation_id,
-            collection_id=collection_id,
-            token_type=token_type,
-            metadata=metadata,
-            ttl=ttl
-        )
+        try:
+            # Evitar recursión infinita, acceder directamente a la instancia sin usar increment_counter
+            instance = CacheManager.get_instance()
+            
+            # Preferir counter_type sobre scope si ambos están presentes
+            counter_type_to_use = counter_type or scope
+            
+            # En lugar de llamar recursivamente, replicamos la lógica esencial usando el método de instancia            
+            if counter_type_to_use is None:
+                logger.warning(f"Se debe proporcionar counter_type o scope para increment_counter")
+                counter_type_to_use = "unknown"
+                
+            # Obtenemos cliente redis y construimos la clave
+            redis_client = await instance._get_redis_client()
+            counter_key_parts = [tenant_id or "default", f"counter:{counter_type_to_use}"]
+            
+            # Añadir otros componentes del contexto si están presentes
+            if agent_id:
+                counter_key_parts.append(f"agent:{agent_id}")
+            if conversation_id:
+                counter_key_parts.append(f"conversation:{conversation_id}")
+            if collection_id:
+                counter_key_parts.append(f"collection:{collection_id}")
+            if token_type:
+                counter_key_parts.append(f"token_type:{token_type}")
+                
+            counter_key_parts.append(f"resource:{resource_id}")
+            counter_key = ":".join([part for part in counter_key_parts if part])
+            
+            # Incrementar contador en Redis
+            new_value = await redis_client.incrby(counter_key, amount)
+            if ttl:
+                await redis_client.expire(counter_key, ttl)
+                
+            # Actualizar metadata si está presente
+            if metadata:
+                metadata_key = f"{counter_key}:metadata"
+                await redis_client.hset(metadata_key, mapping=metadata)
+                await redis_client.expire(metadata_key, ttl or instance.ttl_extended)
+                
+            return new_value
+        except Exception as e:
+            logger.warning(f"Error en increment_counter estático: {str(e)}")
+            return amount  # Valor por defecto seguro
     
     async def get_counter(
         self,

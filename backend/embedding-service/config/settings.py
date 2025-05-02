@@ -84,6 +84,12 @@ class EmbeddingServiceSettings(BaseSettings):
         description="Longitud máxima de entrada en caracteres"
     )
     
+    # Parámetro para RAG - consultas de similitud
+    max_similarity_top_k: int = Field(
+        4,
+        description="Número máximo de documentos similares a recuperar en consultas RAG"
+    )
+    
     # TTL para caché de embeddings
     embedding_cache_ttl: int = Field(
         604800,  # 7 días por defecto
