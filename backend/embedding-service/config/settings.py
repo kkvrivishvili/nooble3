@@ -103,8 +103,13 @@ class EmbeddingServiceSettings(BaseSettings):
     )
 
     default_ollama_embedding_model: str = Field(
-        "nomic-embed-text",
-        description="Modelo de embedding predeterminado para Ollama"
+        "nomic-embed-text:latest",
+        description="Modelo de embedding predeterminado para Ollama (con version)"
+    )
+
+    ollama_base_url: str = Field(
+        "http://ollama:11434",
+        description="URL base para el servicio Ollama"
     )
 
     # Tamaño de lote para procesamiento por API

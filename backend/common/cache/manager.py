@@ -28,18 +28,25 @@ _memory_expiry: Dict[str, float] = {}
 _redis_client = None
 
 async def get_redis_client() -> Optional[Any]:
-    """Obtiene un cliente Redis compartido para CacheManager"""
+    """Obtiene un cliente Redis compartido para CacheManager con configuración mejorada para resiliencia"""
     global _redis_client
     if _redis_client is None:
         from ..config import get_settings
         settings = get_settings()
-        pool = redis.ConnectionPool.from_url(
-            settings.redis_url,
-            max_connections=settings.redis_max_connections,
-            decode_responses=True
-        )
-        client = redis.Redis(connection_pool=pool)
         try:
+            # Configuración más robusta con parámetros explícitos
+            pool = redis.ConnectionPool.from_url(
+                settings.redis_url,
+                max_connections=settings.redis_max_connections,
+                decode_responses=True,
+                socket_timeout=5.0,            # Timeout para operaciones de socket
+                socket_connect_timeout=5.0,    # Timeout para conexión inicial
+                health_check_interval=15,      # Verificar la conexión cada 15 segundos
+                retry_on_timeout=True          # Reintentar automáticamente en caso de timeout
+            )
+            client = redis.Redis(connection_pool=pool)
+            
+            # Verificar conexión con ping
             await client.ping()
             logger.info("Redis conectado exitosamente en CacheManager")
             _redis_client = client

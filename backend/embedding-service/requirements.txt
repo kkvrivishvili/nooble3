@@ -9,13 +9,14 @@ openai==1.69.0
 tiktoken==0.9.0
 
 # LlamaIndex para funcionalidad de embeddings
-llama-index==0.12.26
 llama-index-core==0.12.26
 llama-index-embeddings-openai==0.3.0
+llama-index-embeddings-ollama==0.6.0
 llama-index-vector-stores-supabase==0.3.0
+# Nota: Versiones específicas para evitar conflictos
 
 # Almacenamiento y caché
-redis==5.2.2  # Compatible con Redis 7.4.3
+redis==5.0.0  # Compatible con Redis 7.4.3
 supabase==2.15.0
 
 # Utilidades

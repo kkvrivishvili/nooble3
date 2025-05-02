@@ -399,10 +399,9 @@ def get_service_settings(service_name: str, service_version: Optional[str] = Non
         }
     
     elif service_name == "embedding-service":
-        # Configuraciones específicas para embeddings
-        settings.embedding_cache_enabled = os.getenv("EMBEDDING_CACHE_ENABLED", "true").lower() in ["true", "1", "yes"]
-        settings.embedding_batch_size = int(os.getenv("EMBEDDING_BATCH_SIZE", "100"))
-        settings.max_embedding_batch_size = int(os.getenv("MAX_EMBEDDING_BATCH_SIZE", "10"))
+        # Configuraciones específicas para embeddings se manejan en embedding-service/config/settings.py
+        # No asignamos configuraciones específicas aquí para evitar errores con campos no definidos
+        pass
     
     elif service_name == "query-service":
         # Configuraciones específicas para queries

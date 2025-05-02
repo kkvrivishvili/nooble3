@@ -5,7 +5,7 @@ pydantic==2.10.6
 pydantic-settings==2.8.1
 python-multipart==0.0.20
 httpx==0.28.1
-redis==5.2.2  # Compatible con Redis 7.4.3
+redis==5.0.0  # Compatible con Redis 7.4.3
 supabase==2.15.0
 
 # Procesamiento de documentos

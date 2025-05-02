@@ -1,32 +1,15 @@
 #!/bin/bash
-#!/bin/bash
 
-# Script personalizado para iniciar Ollama e instalar modelos necesarios
+# Script para configuración inicial de Ollama
+# Este script no se usará como CMD/ENTRYPOINT
+# Sirve como referencia de los comandos necesarios para inicializar Ollama
 
-# Establecer variables de entorno para reducir verbosidad si no están ya definidas
-export OLLAMA_LOG_LEVEL=${OLLAMA_LOG_LEVEL:-warn}
-export OLLAMA_VERBOSE=${OLLAMA_VERBOSE:-false}
+# IMPORTANTE: Este script no debería sobrescribir el comportamiento de la imagen
+# base de Ollama, ya que ya tiene su propio ENTRYPOINT/CMD que ejecutará 'ollama serve'
 
-echo "Iniciando Ollama con nivel de log: $OLLAMA_LOG_LEVEL"
+# Para descargar modelos, usar estos comandos:
+# ollama pull nomic-embed-text
+# ollama pull qwen3:1.7b
 
-# Iniciar Ollama en segundo plano
-ollama serve &
-SERVE_PID=$!
-
-# Esperar a que Ollama esté disponible
-echo "Esperando a que el servicio Ollama esté listo..."
-until curl -s -o /dev/null -w '' http://localhost:11434/api/health; do
-    echo "Esperando a Ollama..."
-    sleep 2
-done
-
-echo "Servicio Ollama iniciado correctamente."
-
-# Descargar modelos necesarios
-echo "Descargando modelos necesarios..."
-/app/download_models.sh
-
-echo "Configuración completada, manteniendo el servicio Ollama activo"
-
-# Traer Ollama al primer plano
-wait $SERVE_PID
+# Este archivo se mantiene como referencia pero no se usará directamente
+# La descarga de modelos la haremos a través del servicio 'ollama-init'

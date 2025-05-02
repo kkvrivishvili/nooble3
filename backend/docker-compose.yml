@@ -24,9 +24,19 @@ services:
       - "11434:11434"
     volumes:
       - ollama-data:/root/.ollama
+      # Montar los scripts para que puedan ser ejecutados manualmente si es necesario
+      - ./docker/ollama/scripts:/scripts
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     environment:
-      - OLLAMA_LOG_LEVEL=warn       # Reducir verbosidad de logs
+      - OLLAMA_LOG_LEVEL=info       # Ajustado para ver más información durante configuración
       - OLLAMA_VERBOSE=false        # Desactivar mensajes detallados
+      - CUDA_VISIBLE_DEVICES=0      # Usar la primera GPU (RTX 3090)
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:11434/api/health"]
       interval: 30s

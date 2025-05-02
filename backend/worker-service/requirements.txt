@@ -16,7 +16,7 @@ tzlocal==5.2.0
 pytz==2023.3
 
 # Almacenamiento y caché
-redis==5.2.2  # Compatible con Redis 7.4.3
+redis==5.0.0  # Compatible con Redis 7.4.3
 supabase==2.15.0
 
 # Utilidades
