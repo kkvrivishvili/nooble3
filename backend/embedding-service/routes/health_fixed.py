@@ -431,22 +431,13 @@ def verify_embedding_quality(embedding: list) -> bool:
         if np.max(np.abs(embedding_array)) > max_abs_value:
             return False
             
-        # 4. Verificar la norma del vector
+        # 4. Verificar la norma (para embeddings normalizados debe ser cercana a 1.0)
         embedding_norm = np.linalg.norm(embedding_array)
         
-        # NOTA: No todos los modelos producen embeddings normalizados con norma = 1.0
-        # Algunos modelos como nomic-embed-text pueden tener normas diferentes
-        # Solo verificamos que la norma no sea extremadamente pequeña (cercana a 0)
-        # o extremadamente grande, lo que indicaría un embedding degenerado
-        
-        if embedding_norm < 0.001:  # Evitar vectores nulos o casi nulos
-            logger.warning(f"Embedding con norma demasiado pequeña: {embedding_norm}")
+        # Para embeddings normalizados, debe estar cerca de 1.0
+        # Permitimos algo de tolerancia para diferentes implementaciones
+        if abs(embedding_norm - 1.0) > norm_tolerance and abs(embedding_norm) > norm_tolerance:
             return False
-            
-        # Registrar la norma para referencia, pero no fallar por esto
-        logger.info(f"Norma del embedding: {embedding_norm:.4f}")
-        
-        # No verificamos si la norma es exactamente 1.0, ya que esto varía según el modelo
             
         return True
     except Exception as e:
