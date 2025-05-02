@@ -211,6 +211,28 @@ async def get_tenant_configurations(
     except ImportError:
         pass
 
+    # Verificar si Supabase está deshabilitado
+    from ..config import get_settings
+    settings = get_settings()
+    if settings.LOAD_CONFIG_FROM_SUPABASE.lower() == "false":
+        # Retornar configuración por defecto en modo offline
+        logger.debug(f"Supabase está en modo offline, retornando configuraciones por defecto para {tenant_id}")
+        default_configurations = {
+            # Configuraciones generales
+            "default_embedding_model": "nomic-embed-text", 
+            "default_llm_model": "gpt-3.5-turbo",
+            "rate_limit_per_minute": 60,
+            "tier": "business" if tenant_id != "default" else "free",
+            
+            # Configuraciones específicas por scope
+            f"{scope}_default_ttl": 3600,
+            f"{scope}_cache_enabled": True,
+            
+            # Modo offline
+            "offline_mode": True
+        }
+        return default_configurations
+
     try:
         # Intentar obtener desde caché primero
         cache_key = f"config:{tenant_id}:{scope}"

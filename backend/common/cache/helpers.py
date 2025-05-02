@@ -924,7 +924,7 @@ async def track_cache_metrics(
         # Usar la función centralizada de incremento de contador
         from common.cache.manager import CacheManager
         await CacheManager.increment_counter(
-            counter_type=counter_type,
+            scope=counter_type,
             amount=amount,
             resource_id=data_type,
             tenant_id=tenant_id,

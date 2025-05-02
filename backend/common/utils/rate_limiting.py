@@ -104,8 +104,8 @@ async def apply_rate_limit(tenant_id: str, tier: str, limit_key: str = "api") ->
         
         error_context["service_name"] = service_name
         
-        # Obtener configuración desde settings
-        settings = await get_settings()
+        # Obtener configuración desde settings (la función es síncrona, no necesita await)
+        settings = get_settings()
         
         # Obtener límite según configuraciones específicas del tenant usando la función estandarizada
         try:
@@ -164,18 +164,19 @@ async def apply_rate_limit(tenant_id: str, tier: str, limit_key: str = "api") ->
             if current_count == 0:
                 # Primera solicitud en este periodo
                 await CacheManager.set(
-                    tenant_id=tenant_id,
                     data_type="rate_limit",
                     resource_id=f"{limit_key}:count",
-                    data=1,
+                    value=1,
+                    tenant_id=tenant_id,
                     ttl=limit_period
                 )
             else:
                 # Incrementar contador existente
-                await CacheManager.increment(
-                    tenant_id=tenant_id,
-                    data_type="rate_limit",
-                    resource_id=f"{limit_key}:count"
+                await CacheManager.increment_counter(
+                    scope="rate_limit",
+                    amount=1,
+                    resource_id=f"{limit_key}:count",
+                    tenant_id=tenant_id
                 )
                 
             logger.debug(f"Rate limit para tenant {tenant_id}: {current_count+1}/{rate_limit}", 
@@ -404,7 +405,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             
             # Valor por defecto si no hay TTL
             if ttl <= 0:
-                settings = await get_settings()
+                settings = get_settings()
                 ttl = getattr(settings, "rate_limit_window_seconds", 60)
             
             # Agregar headers estándar de rate limiting

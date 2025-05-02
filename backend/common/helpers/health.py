@@ -151,7 +151,7 @@ async def detailed_status_check(
     
     # Añadir métricas adicionales si se proporcionaron
     if extra_metrics:
-        response.metrics = extra_metrics
+        response.metadata = extra_metrics
     
     return response
 

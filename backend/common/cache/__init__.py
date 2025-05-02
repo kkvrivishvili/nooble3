@@ -24,7 +24,7 @@ from ..config import get_settings
 # Función para obtener configuraciones de caché del sistema centralizado
 async def _get_cache_settings():
     """Obtiene configuraciones de caché desde el sistema centralizado."""
-    settings = await get_settings()
+    settings = get_settings()
     return {
         "ttl_extended": settings.cache_ttl_extended,       # 24 horas
         "ttl_standard": settings.cache_ttl_standard,       # 1 hora

@@ -450,7 +450,7 @@ class CacheManager:
         Método estático compatible que llama al método de instancia set().
         """
         instance = CacheManager.get_instance()
-        return await instance.set(
+        return await instance._set_internal(
             data_type=data_type,
             resource_id=resource_id,
             value=value,
@@ -458,10 +458,75 @@ class CacheManager:
             agent_id=agent_id,
             conversation_id=conversation_id,
             collection_id=collection_id,
-            ttl=ttl,
-            use_memory=use_memory
+            ttl=ttl
         )
     
+    
+    async def _set_internal(
+        self,
+        data_type: str,
+        resource_id: str,
+        value: Any,
+        tenant_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        collection_id: Optional[str] = None,
+        ttl: Optional[int] = None,
+        use_memory: bool = True
+    ) -> bool:
+        """
+        Lógica real de almacenamiento en caché (privado).
+        """
+        tenant_id = tenant_id or get_current_tenant_id() or "system"
+        key = self._build_key(
+            data_type, resource_id, tenant_id, agent_id, conversation_id, collection_id
+        )
+
+        # Determinar TTL
+        if ttl is None:
+            ttl = DEFAULT_TTL_MAPPING.get(data_type, TTL_STANDARD)
+        elif ttl == 0:
+            ttl = 0
+        try:
+            # Usar la función de serialización centralizada en lugar de importarla en cada llamada
+            try:
+                value_to_cache = self._serialize_for_cache(value, data_type)
+            except Exception as e:
+                logger.warning(f"Error de serialización al guardar {data_type} en caché: {e}")
+                await track_cache_metrics(
+                    data_type=data_type,
+                    tenant_id=tenant_id,
+                    metric_type=METRIC_SERIALIZATION_ERROR,
+                    value=1,
+                    metadata={"error": str(e)}
+                )
+                return False
+            
+            # Convertir a JSON si no es un tipo primitivo
+            if not isinstance(value_to_cache, (str, bytes)):
+                serialized = json.dumps(value_to_cache)
+            else:
+                serialized = value_to_cache
+                
+            # Guardar con TTL
+            redis_client = await get_redis_client()
+            if not redis_client:
+                logger.warning("Redis no disponible, no se puede guardar en caché.")
+                return False
+            if ttl > 0:
+                await redis_client.setex(key, ttl, serialized)
+            else:
+                await redis_client.set(key, serialized)
+                
+            # Guardar en memoria para acceso rápido
+            if use_memory:
+                self._add_to_memory_cache(key, value_to_cache, ttl)
+                
+            return True
+        except Exception as e:
+            logger.warning(f"Error al guardar en Redis con clave {key}: {e}")
+            return False
+
     def _add_to_memory_cache(self, key: str, value: Any, ttl: int = TTL_STANDARD):
         """
         Añade una entrada a la caché en memoria con TTL y limpieza de exceso de tamaño.
