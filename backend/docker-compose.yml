@@ -1,6 +1,7 @@
 version: '3.8'
 
 services:
+  # Base de datos PostgreSQL con extensiones de Supabase
   supabase:
     build:
       context: ./docker/supabase
@@ -17,9 +18,196 @@ services:
       retries: 10
       start_period: 30s
     environment:
-      - POSTGRES_PASSWORD=postgres
-      - POSTGRES_USER=postgres
-      - POSTGRES_DB=postgres
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_DB=${POSTGRES_DB:-postgres}
+      - JWT_SECRET=${JWT_SECRET:-super-secret-jwt-token-with-at-least-32-characters-long}
+      - JWT_EXP=${JWT_EXPIRY:-3600}
+
+  # Supabase Studio (UI para administrar la base de datos)
+  studio:
+    image: supabase/studio:latest
+    container_name: supabase-studio
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      STUDIO_PG_META_URL: http://meta:8080
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      DEFAULT_ORGANIZATION_NAME: ${STUDIO_DEFAULT_ORGANIZATION:-Default Organization}
+      DEFAULT_PROJECT_NAME: ${STUDIO_DEFAULT_PROJECT:-Default Project}
+      SUPABASE_URL: http://kong:8000
+      SUPABASE_PUBLIC_URL: ${SUPABASE_PUBLIC_URL:-http://localhost:8000}
+      SUPABASE_ANON_KEY: ${ANON_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNreXBsYW5lIiwicm9sZSI6ImFub24iLCJpYXQiOjE2ODk3MTAwMDAsImV4cCI6MTY4OTcxMzYwMH0.v9Avcfi2PVq-AYrfhZ9YXsxukgz1t3zZlL--9wUB-b0}
+      SUPABASE_SERVICE_KEY: ${SERVICE_ROLE_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNreXBsYW5lIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTY4OTcxMDAwMCwiZXhwIjoxNjg5NzEzNjAwfQ.iE5vp5iV_4oSBK1d9YUQ26ynE-dTjOYxwaqP8-siMSA}
+      AUTH_JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-token-with-at-least-32-characters-long}
+      NEXT_PUBLIC_ENABLE_LOGS: true
+      NEXT_ANALYTICS_BACKEND_PROVIDER: postgres
+    depends_on:
+      - kong
+      - meta
+
+  # API Gateway
+  kong:
+    image: kong:2.8.1
+    container_name: supabase-kong
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /var/lib/kong/kong.yml
+      KONG_DNS_ORDER: LAST,A,CNAME
+      KONG_PLUGINS: request-transformer,cors,key-auth,acl
+      KONG_NGINX_PROXY_PROXY_BUFFER_SIZE: 160k
+      KONG_NGINX_PROXY_PROXY_BUFFERS: 64 160k
+    volumes:
+      - ./docker/supabase/volumes/api/kong.yml:/var/lib/kong/kong.yml:ro
+
+  # Servicio de Autenticación
+  auth:
+    image: supabase/gotrue
+    container_name: supabase-auth
+    restart: unless-stopped
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: 9999
+      API_EXTERNAL_URL: ${API_EXTERNAL_URL:-http://localhost:8000}
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_HOST: supabase
+      GOTRUE_DB_PORT: 5432
+      GOTRUE_DB_USER: supabase_auth_admin
+      GOTRUE_DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      GOTRUE_DB_DATABASE: ${POSTGRES_DB:-postgres}
+      GOTRUE_SITE_URL: ${SITE_URL:-http://localhost:3000}
+      GOTRUE_URI_ALLOW_LIST: ${ADDITIONAL_REDIRECT_URLS:-}
+      GOTRUE_DISABLE_SIGNUP: ${DISABLE_SIGNUP:-false}
+      GOTRUE_JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-token-with-at-least-32-characters-long}
+      GOTRUE_JWT_EXPIRY: ${JWT_EXPIRY:-3600}
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: ${ENABLE_EMAIL_SIGNUP:-true}
+      GOTRUE_MAILER_AUTOCONFIRM: ${ENABLE_EMAIL_AUTOCONFIRM:-false}
+    depends_on:
+      supabase:
+        condition: service_healthy
+
+  # API RESTful para PostgreSQL
+  rest:
+    image: postgrest/postgrest:v11.2.0
+    container_name: supabase-rest
+    restart: unless-stopped
+    environment:
+      PGRST_DB_URI: postgres://authenticator:${POSTGRES_PASSWORD:-postgres}@supabase:5432/${POSTGRES_DB:-postgres}
+      PGRST_DB_SCHEMAS: ${PGRST_DB_SCHEMAS:-public,storage,graphql_public}
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-token-with-at-least-32-characters-long}
+      PGRST_DB_USE_LEGACY_GUCS: "false"
+    depends_on:
+      supabase:
+        condition: service_healthy
+
+  # Servidor de tiempo real
+  realtime:
+    image: supabase/realtime
+    container_name: supabase-realtime
+    restart: unless-stopped
+    environment:
+      PORT: 4000
+      DB_HOST: supabase
+      DB_PORT: 5432
+      DB_USER: supabase_admin
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      DB_NAME: ${POSTGRES_DB:-postgres}
+      DB_AFTER_CONNECT_QUERY: 'SET search_path TO _realtime'
+      DB_ENC_KEY: supabase_realtime_encryption_key
+      API_JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-token-with-at-least-32-characters-long}
+      SECRETS_ENCRYPTION_KEY: ${REALTIME_ENCRYPTION_KEY:-super-secret-realtime-encryption-key}
+      SUBSCRIPTION_MAX_RECORD_SIZE_BYTES: 1073741824
+    command:
+      - server
+    depends_on:
+      supabase:
+        condition: service_healthy
+
+  # Servicio de almacenamiento
+  storage:
+    image: supabase/storage-api
+    container_name: supabase-storage
+    restart: unless-stopped
+    environment:
+      TENANT_ID: stub
+      REGION: us-east-1
+      GLOBAL_S3_BUCKET: storage
+      SYSTEM_BUCKET_ID: stub_storage
+      POSTGREST_URL: http://rest:3000
+      PGRST_JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-token-with-at-least-32-characters-long}
+      DATABASE_URL: postgres://supabase_storage_admin:${POSTGRES_PASSWORD:-postgres}@supabase:5432/${POSTGRES_DB:-postgres}
+      PGREST_URL: http://rest:3000
+      PGOPTIONS: -c search_path=storage,public
+      FILE_SIZE_LIMIT: 52428800
+      FILE_STORAGE_BACKEND: file
+      STORAGE_BACKEND: file
+      FILE_STORAGE_UPLOAD_DIRECTORY: /var/lib/storage
+      IMGPROXY_URL: http://imgproxy:5001
+    volumes:
+      - ./docker/supabase/volumes/storage:/var/lib/storage:Z
+    depends_on:
+      supabase:
+        condition: service_healthy
+      rest:
+        condition: service_started
+      imgproxy:
+        condition: service_started
+
+  # Metadata service para introspección de la base de datos
+  meta:
+    image: supabase/postgres-meta
+    container_name: supabase-meta
+    restart: unless-stopped
+    environment:
+      PG_META_PORT: 8080
+      PG_META_DB_HOST: supabase
+      PG_META_DB_PORT: 5432
+      PG_META_DB_NAME: ${POSTGRES_DB:-postgres}
+      PG_META_DB_USER: supabase_admin
+      PG_META_DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    depends_on:
+      supabase:
+        condition: service_healthy
+
+  # Servicio de procesamiento de imágenes
+  imgproxy:
+    image: darthsim/imgproxy:v3.19.0
+    container_name: supabase-imgproxy
+    restart: unless-stopped
+    environment:
+      IMGPROXY_BIND: :5001
+      IMGPROXY_LOCAL_FILESYSTEM_ROOT: /
+      IMGPROXY_USE_ETAG: "true"
+
+  # Edge Functions runtime
+  functions:
+    image: supabase/edge-runtime
+    container_name: supabase-edge-functions
+    restart: unless-stopped
+    environment:
+      JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-token-with-at-least-32-characters-long}
+      SUPABASE_URL: http://kong:8000
+      SUPABASE_ANON_KEY: ${ANON_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNreXBsYW5lIiwicm9sZSI6ImFub24iLCJpYXQiOjE2ODk3MTAwMDAsImV4cCI6MTY4OTcxMzYwMH0.v9Avcfi2PVq-AYrfhZ9YXsxukgz1t3zZlL--9wUB-b0}
+      SUPABASE_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNreXBsYW5lIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTY4OTcxMDAwMCwiZXhwIjoxNjg5NzEzNjAwfQ.iE5vp5iV_4oSBK1d9YUQ26ynE-dTjOYxwaqP8-siMSA}
+      SUPABASE_DB_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@supabase:5432/${POSTGRES_DB:-postgres}
+      VERIFY_JWT: "${FUNCTIONS_VERIFY_JWT:-false}"
+    ports:
+      - "${FUNCTIONS_HTTP_PORT:-9000}:9000"
+    volumes:
+      - ./docker/supabase/volumes/functions:/home/deno/functions:Z
+    command:
+      - start
+      - --main-service
+      - /home/deno/functions/main
+    depends_on:
+      supabase:
+        condition: service_healthy
 
   redis:
     build:
