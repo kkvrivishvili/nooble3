@@ -6,49 +6,41 @@ set -e
 
 echo "Iniciando configuración de base de datos Supabase..."
 
-# Esperar a que Postgres esté completamente disponible
-until pg_isready -U postgres -d postgres; do
-  echo "Esperando que PostgreSQL esté disponible..."
-  sleep 1
-done
+# Asegurarse que Postgres esté completamente disponible
+pg_isready -U postgres -h localhost
 
-# Crear la base de datos y el usuario para la aplicación si no existen
-psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
-    -- Crear usuario de aplicación si no existe
-    DO \$\$
-    BEGIN
-        IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'app_user') THEN
-            CREATE ROLE app_user WITH LOGIN PASSWORD 'app_password';
-        END IF;
-    END
-    \$\$;
+# Crear la base de datos
+echo "Creando base de datos nooble3_db..."
+psql -U postgres -c "DROP DATABASE IF EXISTS nooble3_db WITH (FORCE);"
+sleep 1
+psql -U postgres -c "CREATE DATABASE nooble3_db;"
 
-    -- Crear base de datos de la aplicación si no existe
-    SELECT 'CREATE DATABASE nooble3_db'
-    WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'nooble3_db');
+# Crear el usuario de la aplicación
+echo "Creando usuario app_user..."
+psql -U postgres -c "DROP ROLE IF EXISTS app_user;"
+psql -U postgres -c "CREATE ROLE app_user WITH LOGIN PASSWORD 'app_password';"
 
-    -- Otorgar permisos al usuario de la aplicación
-    GRANT ALL PRIVILEGES ON DATABASE nooble3_db TO app_user;
-EOSQL
+# Otorgar permisos al usuario en la base de datos
+echo "Otorgando permisos al usuario app_user sobre la base de datos nooble3_db..."
+psql -U postgres -c "GRANT ALL PRIVILEGES ON DATABASE nooble3_db TO app_user;"
 
-# Cambiar a la base de datos de la aplicación para crear esquema
-psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "nooble3_db" <<-EOSQL
-    -- Crear esquema de la aplicación
-    CREATE SCHEMA IF NOT EXISTS public;
-    CREATE SCHEMA IF NOT EXISTS auth;
-    CREATE SCHEMA IF NOT EXISTS storage;
+# Conectar a la base de datos y crear los esquemas
+echo "Creando esquemas en nooble3_db..."
+psql -U postgres -d nooble3_db -c "CREATE SCHEMA IF NOT EXISTS public;"
+psql -U postgres -d nooble3_db -c "CREATE SCHEMA IF NOT EXISTS auth;"
+psql -U postgres -d nooble3_db -c "CREATE SCHEMA IF NOT EXISTS storage;"
 
-    -- Asignar permisos al usuario de la aplicación
-    GRANT ALL ON SCHEMA public TO app_user;
-    GRANT ALL ON SCHEMA auth TO app_user;
-    GRANT ALL ON SCHEMA storage TO app_user;
-    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO app_user;
-    ALTER DEFAULT PRIVILEGES IN SCHEMA auth GRANT ALL ON TABLES TO app_user;
-    ALTER DEFAULT PRIVILEGES IN SCHEMA storage GRANT ALL ON TABLES TO app_user;
-EOSQL
+# Otorgar permisos sobre los esquemas
+echo "Otorgando permisos sobre los esquemas..."
+psql -U postgres -d nooble3_db -c "GRANT ALL ON SCHEMA public TO app_user;"
+psql -U postgres -d nooble3_db -c "GRANT ALL ON SCHEMA auth TO app_user;"
+psql -U postgres -d nooble3_db -c "GRANT ALL ON SCHEMA storage TO app_user;"
+psql -U postgres -d nooble3_db -c "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO app_user;"
+psql -U postgres -d nooble3_db -c "ALTER DEFAULT PRIVILEGES IN SCHEMA auth GRANT ALL ON TABLES TO app_user;"
+psql -U postgres -d nooble3_db -c "ALTER DEFAULT PRIVILEGES IN SCHEMA storage GRANT ALL ON TABLES TO app_user;"
 
 # Ejecutar el archivo SQL con el esquema principal
 echo "Aplicando esquema principal de la base de datos..."
-psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "nooble3_db" -f /docker-entrypoint-initdb.d/supabase-schema.sql
+psql -U postgres -d nooble3_db -f /scripts/supabase-schema.sql
 
 echo "Configuración de la base de datos completada."

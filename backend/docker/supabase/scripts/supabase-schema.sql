@@ -1,10 +1,7 @@
 -- Schema para sistema RAG con soporte multitenancy
 -- Adaptado para el patrón cache-aside y sistema de embebidos
 
--- Configuración de extensiones requeridas
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-CREATE EXTENSION IF NOT EXISTS "pg_trgm";  -- Para búsqueda de texto
-CREATE EXTENSION IF NOT EXISTS "vector";   -- Para búsquedas vectoriales
+-- Las extensiones ya se han configurado en setup.sh
 
 -- Tabla de tenants
 CREATE TABLE IF NOT EXISTS public.tenants (
