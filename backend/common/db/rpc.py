@@ -280,31 +280,28 @@ async def ensure_conversation_exists(
 
 
 async def increment_token_usage(
-    tenant_id: str, 
+    tenant_id: str,
     tokens: int,
     agent_id: Optional[str] = None,
     conversation_id: Optional[str] = None,
     token_type: str = "llm"
 ) -> bool:
     """
-    Incrementa el contador de tokens usados por un tenant de forma atómica.
+    Incrementa el uso de tokens para un tenant específico.
     
-    AVISO DE OBSOLESCENCIA:
-    Esta función está obsoleta y será eliminada en futuras versiones.
-    Por favor, use common.tracking.track_token_usage() en su lugar.
-    
-    Esta función ahora utiliza internamente TokenAttributionService para mantener
-    consistencia con el resto del sistema.
+    OBSOLETO: Esta función está obsoleta y será eliminada en futuras versiones.
+    Use la función centralizada common.tracking.track_token_usage() en su lugar,
+    que proporciona soporte para idempotencia y tipos estandarizados.
     
     Args:
-        tenant_id: ID del tenant que realiza la solicitud
-        tokens: Número de tokens a incrementar
-        agent_id: ID del agente con el que se interactúa (opcional)
+        tenant_id: ID del tenant
+        tokens: Cantidad de tokens a registrar
+        agent_id: ID del agente (opcional)
         conversation_id: ID de la conversación (opcional)
-        token_type: Tipo de tokens a contabilizar ('llm' o 'embedding')
+        token_type: Tipo de tokens ("llm" o "embedding")
         
     Returns:
-        True si se incrementó correctamente
+        bool: True si la operación fue exitosa
         
     Raises:
         ServiceError: Si hay un error al incrementar los tokens

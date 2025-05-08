@@ -1,46 +1,26 @@
--- =============================================
--- INIT_3_TOKEN_FUNCTIONS.SQL - FUNCIONES PARA CONTABILIZACIÓN DE TOKENS
--- =============================================
--- Este archivo define las funciones unificadas para tracking de tokens,
--- incluyendo contabilización, idempotencia, y consulta.
--- Fecha: 2025-05-08
-
 -- ===========================================
--- PARTE 1: FUNCIONES AUXILIARES Y TRIGGERS
+-- FASE 2: IMPLEMENTACIÓN DE IDEMPOTENCIA
 -- ===========================================
 
--- Crear función para actualizar automáticamente las estadísticas mensuales
-CREATE OR REPLACE FUNCTION ai.update_monthly_stats()
-RETURNS TRIGGER AS $$
-BEGIN
-    -- Insertar o actualizar resumen mensual
-    INSERT INTO ai.monthly_token_usage (
-        tenant_id, year_month, token_type, tokens, metadata
-    )
-    VALUES (
-        NEW.tenant_id,
-        to_char(NEW.date, 'YYYY-MM'),
-        NEW.token_type,
-        NEW.tokens,
-        jsonb_build_object('last_update', NOW(), 'source', 'daily_update')
-    )
-    ON CONFLICT (tenant_id, year_month, token_type)
-    DO UPDATE SET
-        tokens = ai.monthly_token_usage.tokens + NEW.tokens,
-        metadata = ai.monthly_token_usage.metadata || 
-                  jsonb_build_object('last_update', NOW()),
-        updated_at = NOW();
-        
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
+-- Crear tabla para control de idempotencia
+CREATE TABLE IF NOT EXISTS ai.token_idempotency (
+    idempotency_key TEXT PRIMARY KEY,
+    tenant_id UUID NOT NULL REFERENCES public.tenants(tenant_id) ON DELETE CASCADE,
+    tokens INTEGER NOT NULL,
+    token_type ai.token_type NOT NULL,
+    operation ai.operation_type,
+    model TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    processed BOOLEAN DEFAULT TRUE,
+    metadata JSONB DEFAULT '{}'::jsonb
+);
 
--- Crear trigger para actualización automática
-DROP TRIGGER IF EXISTS trg_update_monthly_stats ON ai.daily_token_usage;
-CREATE TRIGGER trg_update_monthly_stats
-AFTER INSERT ON ai.daily_token_usage
-FOR EACH ROW
-EXECUTE FUNCTION ai.update_monthly_stats();
+-- Crear índices para expiración y limpieza
+CREATE INDEX IF NOT EXISTS idx_token_idempotency_created 
+ON ai.token_idempotency(created_at);
+
+CREATE INDEX IF NOT EXISTS idx_token_idempotency_tenant 
+ON ai.token_idempotency(tenant_id);
 
 -- Crear función para limpieza automática de registros antiguos
 CREATE OR REPLACE FUNCTION ai.cleanup_token_idempotency()
@@ -71,7 +51,7 @@ EXCEPTION WHEN OTHERS THEN
 END $$;
 
 -- ===========================================
--- PARTE 2: FUNCIONES PRINCIPALES DE TRACKING
+-- FASE 3: PROCEDIMIENTO UNIFICADO
 -- ===========================================
 
 -- Función unificada para tracking de tokens
@@ -269,10 +249,6 @@ EXCEPTION WHEN OTHERS THEN
 END;
 $$ LANGUAGE plpgsql;
 
--- ===========================================
--- PARTE 3: FUNCIONES DE COMPATIBILIDAD
--- ===========================================
-
 -- Función wrapper para mantener compatibilidad con el código existente
 CREATE OR REPLACE FUNCTION ai.increment_token_usage(p_tenant_id UUID, p_tokens INTEGER)
 RETURNS VOID AS $$
@@ -296,149 +272,3 @@ BEGIN
     );
 END;
 $$ LANGUAGE plpgsql;
-
--- ===========================================
--- PARTE 4: FUNCIONES DE CONSULTA
--- ===========================================
-
--- Función que retorna las estadísticas de tokens (total, LLM y embedding)
-CREATE OR REPLACE FUNCTION ai.get_token_stats(p_tenant_id UUID)
-RETURNS TABLE (
-    token_usage INTEGER,
-    embedding_token_usage INTEGER,
-    llm_tokens INTEGER,
-    embedding_tokens INTEGER,
-    fine_tuning_tokens INTEGER,
-    total_token_usage INTEGER
-)
-LANGUAGE plpgsql
-AS $$
-BEGIN
-    RETURN QUERY
-    SELECT 
-        COALESCE(ts.token_usage, 0) as token_usage,
-        COALESCE(ts.embedding_token_usage, 0) as embedding_token_usage,
-        COALESCE(ts.llm_tokens, 0) as llm_tokens,
-        COALESCE(ts.embedding_tokens, 0) as embedding_tokens,
-        COALESCE(ts.fine_tuning_tokens, 0) as fine_tuning_tokens,
-        COALESCE(ts.llm_tokens, 0) + COALESCE(ts.embedding_tokens, 0) + COALESCE(ts.fine_tuning_tokens, 0) as total_token_usage
-    FROM ai.tenant_stats ts
-    WHERE ts.tenant_id = p_tenant_id;
-END;
-$$;
-
--- Función para obtener estadísticas de tokens por período
-CREATE OR REPLACE FUNCTION ai.get_token_usage_stats(
-    tenant_id UUID,
-    period TEXT DEFAULT 'daily',
-    start_date DATE DEFAULT (CURRENT_DATE - INTERVAL '30 days')::DATE,
-    end_date DATE DEFAULT CURRENT_DATE
-)
-RETURNS JSONB
-LANGUAGE plpgsql
-AS $$
-DECLARE
-    result JSONB;
-BEGIN
-    IF period = 'daily' THEN
-        WITH stats AS (
-            SELECT 
-                date,
-                token_type::TEXT,
-                SUM(tokens) as tokens
-            FROM ai.daily_token_usage
-            WHERE tenant_id = $1
-            AND date BETWEEN start_date AND end_date
-            GROUP BY date, token_type
-            ORDER BY date
-        )
-        SELECT jsonb_build_object(
-            'period', 'daily',
-            'tenant_id', tenant_id,
-            'stats', jsonb_object_agg(date, token_data)
-        ) INTO result
-        FROM (
-            SELECT 
-                date,
-                jsonb_object_agg(token_type, tokens) as token_data
-            FROM stats
-            GROUP BY date
-        ) t;
-        
-        -- Si no hay datos, devolver estructura vacía
-        IF result IS NULL THEN
-            result := jsonb_build_object(
-                'period', 'daily',
-                'tenant_id', tenant_id,
-                'stats', '{}'::jsonb
-            );
-        END IF;
-        
-    ELSIF period = 'monthly' THEN
-        WITH stats AS (
-            SELECT 
-                year_month,
-                token_type::TEXT,
-                tokens
-            FROM ai.monthly_token_usage
-            WHERE tenant_id = $1
-            AND year_month BETWEEN to_char(start_date, 'YYYY-MM') AND to_char(end_date, 'YYYY-MM')
-            ORDER BY year_month
-        )
-        SELECT jsonb_build_object(
-            'period', 'monthly',
-            'tenant_id', tenant_id,
-            'stats', jsonb_object_agg(year_month, token_data)
-        ) INTO result
-        FROM (
-            SELECT 
-                year_month,
-                jsonb_object_agg(token_type, tokens) as token_data
-            FROM stats
-            GROUP BY year_month
-        ) t;
-        
-        -- Si no hay datos, devolver estructura vacía
-        IF result IS NULL THEN
-            result := jsonb_build_object(
-                'period', 'monthly',
-                'tenant_id', tenant_id,
-                'stats', '{}'::jsonb
-            );
-        END IF;
-    ELSE
-        -- Período no soportado
-        result := jsonb_build_object(
-            'error', 'Período no soportado. Use "daily" o "monthly".',
-            'period', period,
-            'tenant_id', tenant_id,
-            'stats', '{}'::jsonb
-        );
-    END IF;
-    
-    RETURN result;
-EXCEPTION WHEN OTHERS THEN
-    RETURN jsonb_build_object(
-        'error', SQLERRM,
-        'period', period,
-        'tenant_id', tenant_id,
-        'stats', '{}'::jsonb
-    );
-END;
-$$;
-
--- Función para obtener el propietario de un agente (para token accounting)
-CREATE OR REPLACE FUNCTION ai.get_agent_owner(p_agent_id UUID)
-RETURNS UUID
-LANGUAGE plpgsql
-AS $$
-DECLARE
-    v_owner_tenant_id UUID;
-BEGIN
-    SELECT tenant_id INTO v_owner_tenant_id
-    FROM ai.agent_configs
-    WHERE agent_id = p_agent_id;
-    
-    RETURN v_owner_tenant_id;
-END;
-$$;

@@ -1,93 +1,147 @@
 -- =============================================
--- INIT_1_SCHEMA.SQL - ESQUEMA BASE Y TABLAS PRINCIPALES
+-- INIT_1_SCHEMA.SQL - DEFINICIONES DE ESQUEMA Y TABLAS PRINCIPALES
 -- =============================================
--- Este archivo define el esquema inicial y las tablas principales
--- para el sistema multi-tenant de Linktree AI.
--- Fecha: 2025-04-03
+-- Este archivo establece el esquema base y las tablas principales del sistema multi-tenant.
+-- Incluye la creación de esquemas, extensiones necesarias, y tablas fundamentales.
+-- Fecha: 2025-05-08
+
+-- ===========================================
+-- PARTE 1: EXTENSIONES Y ESQUEMAS
 -- ===========================================
 
--- PARTE 1: ESQUEMA BASE Y EXTENSIONES
--- ===========================================
--- Crear el esquema AI si no existe
-CREATE SCHEMA IF NOT EXISTS ai;
-
--- Asegurarse de que pgvector esté instalado para embeddings
-CREATE EXTENSION IF NOT EXISTS vector;
+-- Asegurar que las extensiones necesarias estén disponibles
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+-- Crear esquemas si no existen
+CREATE SCHEMA IF NOT EXISTS ai;
+CREATE SCHEMA IF NOT EXISTS vectors;
 
 -- ===========================================
--- PARTE 2: TABLAS PRINCIPALES
+-- PARTE 2: TIPOS ENUMERADOS
 -- ===========================================
--- Tabla base de tenants (esquema público)
+
+-- Crear tipos enumerados para estandarizar valores
+DO $$
+BEGIN
+    -- Verificar si el tipo token_type ya existe
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'token_type') THEN
+        CREATE TYPE ai.token_type AS ENUM ('llm', 'embedding', 'fine_tuning');
+    END IF;
+    
+    -- Verificar si el tipo operation_type ya existe
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'operation_type') THEN
+        CREATE TYPE ai.operation_type AS ENUM (
+            'query', 'chat', 'summarize', 'vector_search', 
+            'generation', 'classification', 'extraction'
+        );
+    END IF;
+END
+$$;
+
+-- ===========================================
+-- PARTE 3: TABLAS PRINCIPALES
+-- ===========================================
+
+-- Tabla de tenants (organizaciones)
 CREATE TABLE IF NOT EXISTS public.tenants (
     tenant_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     name TEXT NOT NULL,
-    slug TEXT UNIQUE NOT NULL,
-    subscription_tier TEXT DEFAULT 'free',
-    is_active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
-    public_profile BOOLEAN DEFAULT TRUE,
-    token_quota INTEGER DEFAULT 1000000,
-    tokens_used INTEGER DEFAULT 0
-);
-
--- Tabla para estadísticas de uso de tenants
-CREATE TABLE IF NOT EXISTS ai.tenant_stats (
-    tenant_id UUID PRIMARY KEY,
-    -- Contadores de tokens
-    token_usage INTEGER DEFAULT 0,
-    embedding_token_usage INTEGER DEFAULT 0,
-    -- Contadores de documentos
-    document_count INTEGER DEFAULT 0,
-    -- Actividad
-    last_activity TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    tier TEXT NOT NULL DEFAULT 'free',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    CONSTRAINT fk_tenant
-        FOREIGN KEY(tenant_id)
-        REFERENCES public.tenants(tenant_id)
-        ON DELETE CASCADE
+    metadata JSONB DEFAULT '{}'::jsonb
 );
 
--- ===========================================
--- PARTE 3: TABLA DE CONFIGURACIONES MULTI-TENANT
--- ===========================================
--- Tabla principal de configuraciones por tenant con soporte para jerarquía
-CREATE TABLE IF NOT EXISTS ai.tenant_configurations (
-    id UUID DEFAULT uuid_generate_v4(),
+-- Tabla de configuraciones por tenant
+CREATE TABLE IF NOT EXISTS public.tenant_config (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id UUID NOT NULL REFERENCES public.tenants(tenant_id) ON DELETE CASCADE,
-    config_key TEXT NOT NULL,
-    config_value TEXT,
-    environment TEXT DEFAULT 'development',
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
-    config_type TEXT DEFAULT 'string',
-    is_sensitive BOOLEAN DEFAULT FALSE,
-    scope TEXT DEFAULT 'tenant',
-    scope_id TEXT DEFAULT NULL,
-    PRIMARY KEY (tenant_id, config_key, environment, scope, scope_id)
+    key TEXT NOT NULL,
+    value JSONB NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    CONSTRAINT tenant_config_unique UNIQUE (tenant_id, key)
 );
 
--- Índices para optimizar consultas de configuración
-CREATE INDEX IF NOT EXISTS idx_tenant_config_tenant
-ON ai.tenant_configurations(tenant_id);
+-- Tabla de estadísticas de uso por tenant
+CREATE TABLE IF NOT EXISTS ai.tenant_stats (
+    tenant_id UUID PRIMARY KEY REFERENCES public.tenants(tenant_id) ON DELETE CASCADE,
+    token_usage INTEGER DEFAULT 0,
+    embedding_token_usage INTEGER DEFAULT 0,
+    llm_tokens INTEGER DEFAULT 0,
+    embedding_tokens INTEGER DEFAULT 0,
+    fine_tuning_tokens INTEGER DEFAULT 0,
+    document_count INTEGER DEFAULT 0,
+    vector_count INTEGER DEFAULT 0,
+    knowledge_base_count INTEGER DEFAULT 0,
+    agent_count INTEGER DEFAULT 0,
+    last_activity TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
 
-CREATE INDEX IF NOT EXISTS idx_tenant_config_key
-ON ai.tenant_configurations(config_key);
+-- ===========================================
+-- PARTE 4: TABLAS DE TRACKING DE TOKENS
+-- ===========================================
 
-CREATE INDEX IF NOT EXISTS idx_tenant_config_environment
-ON ai.tenant_configurations(environment);
+-- Tabla diaria de uso de tokens más detallada
+CREATE TABLE IF NOT EXISTS ai.daily_token_usage (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id UUID NOT NULL REFERENCES public.tenants(tenant_id) ON DELETE CASCADE,
+    date DATE NOT NULL DEFAULT CURRENT_DATE,
+    token_type ai.token_type NOT NULL,
+    tokens INTEGER NOT NULL DEFAULT 0,
+    operation ai.operation_type,
+    model TEXT,
+    metadata JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    CONSTRAINT daily_token_usage_unique UNIQUE (tenant_id, date, token_type, operation, model)
+);
 
-CREATE INDEX IF NOT EXISTS idx_tenant_config_scope 
-ON ai.tenant_configurations(tenant_id, scope, scope_id, environment);
+-- Crear índices para consultas eficientes
+CREATE INDEX IF NOT EXISTS idx_daily_token_usage_tenant ON ai.daily_token_usage(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_daily_token_usage_date ON ai.daily_token_usage(date);
+CREATE INDEX IF NOT EXISTS idx_daily_token_usage_type ON ai.daily_token_usage(token_type);
+CREATE INDEX IF NOT EXISTS idx_daily_token_usage_model ON ai.daily_token_usage(model);
 
--- Crear tenant por defecto si no existe
-INSERT INTO public.tenants (tenant_id, name, slug, subscription_tier)
-VALUES (
-    '00000000-0000-0000-0000-000000000000', 
-    'Default Tenant', 
-    'default',
-    'system'
-)
-ON CONFLICT (tenant_id) DO NOTHING;
+-- Tabla de resumen mensual para consultas rápidas de facturación
+CREATE TABLE IF NOT EXISTS ai.monthly_token_usage (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id UUID NOT NULL REFERENCES public.tenants(tenant_id) ON DELETE CASCADE,
+    year_month TEXT NOT NULL, -- formato 'YYYY-MM'
+    token_type ai.token_type NOT NULL,
+    tokens INTEGER NOT NULL DEFAULT 0,
+    metadata JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    CONSTRAINT monthly_token_usage_unique UNIQUE (tenant_id, year_month, token_type)
+);
+
+-- Crear índices para consultas eficientes
+CREATE INDEX IF NOT EXISTS idx_monthly_token_usage_tenant ON ai.monthly_token_usage(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_monthly_token_usage_yearmonth ON ai.monthly_token_usage(year_month);
+CREATE INDEX IF NOT EXISTS idx_monthly_token_usage_type ON ai.monthly_token_usage(token_type);
+
+-- Tabla para control de idempotencia de tokens
+CREATE TABLE IF NOT EXISTS ai.token_idempotency (
+    idempotency_key TEXT PRIMARY KEY,
+    tenant_id UUID NOT NULL REFERENCES public.tenants(tenant_id) ON DELETE CASCADE,
+    tokens INTEGER NOT NULL,
+    token_type ai.token_type NOT NULL,
+    operation ai.operation_type,
+    model TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    processed BOOLEAN DEFAULT TRUE,
+    metadata JSONB DEFAULT '{}'::jsonb
+);
+
+-- Crear índices para expiración y limpieza
+CREATE INDEX IF NOT EXISTS idx_token_idempotency_created 
+ON ai.token_idempotency(created_at);
+
+CREATE INDEX IF NOT EXISTS idx_token_idempotency_tenant 
+ON ai.token_idempotency(tenant_id);
+
+-- Inicialización de tablas y default data pueden ir en secciones posteriores

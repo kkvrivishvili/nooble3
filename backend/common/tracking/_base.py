@@ -5,6 +5,9 @@ import time
 import uuid
 import logging
 import json
+import hashlib
+import random
+import asyncio
 from typing import Dict, Any, List, Optional
 
 # Usamos solo las importaciones necesarias sin crear ciclos
@@ -26,7 +29,8 @@ async def track_token_usage(
     collection_id: Optional[str] = None,
     token_type: str = "llm",
     operation: str = "query",
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = None,
+    idempotency_key: Optional[str] = None
 ) -> bool:
     if tokens <= 0:
         return True
@@ -137,23 +141,118 @@ async def track_token_usage(
     except Exception as rate_err:
         logger.warning(f"Error verificando límites de rate: {str(rate_err)}")
     
-    # Registrar uso en base de datos
+    # Generar clave de idempotencia si no se proporcionó una
+    if idempotency_key is None and operation and tenant_id:
+        # Componentes para formar una clave única
+        # Usamos datos significativos de la operación para evitar duplicaciones
+        key_components = [
+            str(tenant_id),
+            str(tokens),
+            token_type,
+            str(operation or ""),
+            str(model or ""),
+            str(agent_id or ""),
+            str(conversation_id or ""),
+            str(int(time.time()))
+        ]
+        # Generar hash para idempotencia (MD5 es suficiente para este caso de uso)
+        idempotency_key = hashlib.md5("|".join(key_components).encode()).hexdigest()
+        logger.debug(f"Generada clave de idempotencia: {idempotency_key} para tenant {tenant_id}")
+    
+    # Registrar uso en base de datos utilizando la nueva implementación RPC
     try:
-        # Usar RPC para incrementar el contador de tokens
-        await rpc_increment_token_usage(
-            tenant_id=tenant_id,
-            agent_id=agent_id,
-            conversation_id=conversation_id,
-            token_type=token_type,
-            operation=operation,
-            tokens=tokens,
-            model=model,
-            metadata=full_metadata
-        )
-        return True
+        logger.debug(f"Iniciando tracking de {tokens} tokens ({token_type}) para tenant {tenant_id}")
+        
+        # Usar RPC para incrementar el contador de tokens con idempotencia
+        supabase = get_supabase_client()
+        
+        # Preparar datos para la función RPC
+        rpc_data = {
+            "p_tenant_id": tenant_id,
+            "p_tokens": tokens,
+            "p_token_type": token_type,
+            "p_operation": operation,
+            "p_model": model,
+            "p_metadata": json.dumps(full_metadata),
+            "p_agent_id": agent_id,
+            "p_conversation_id": conversation_id,
+            "p_idempotency_key": idempotency_key
+        }
+        
+        logger.debug(f"Llamando a RPC track_token_usage con idempotency_key={idempotency_key}")
+            
+        # Llamar a la función RPC mejorada
+        result = await supabase.rpc("track_token_usage", rpc_data).execute()
+        
+        # Verificar resultado
+        if result.data is True:
+            logger.debug(f"Tracking de tokens exitoso con nuevo procedimiento unificado")
+            return True
+        else:
+            logger.warning(f"Resultado inesperado del RPC track_token_usage: {result.data}")
+            
+            # NOTA IMPORTANTE: Este es un mecanismo de fallback para mantener
+            # compatibilidad durante la migración. La dependencia circular
+            # (track_token_usage -> rpc_increment_token_usage -> track_token_usage)
+            # es intencional y temporal hasta que todos los servicios migren.
+            
+            # Usar la implementación anterior como fallback
+            logger.info(f"Utilizando mecanismo de fallback para tracking de tokens")
+            await rpc_increment_token_usage(
+                tenant_id=tenant_id,
+                agent_id=agent_id,
+                conversation_id=conversation_id,
+                token_type=token_type,
+                operation=operation,
+                tokens=tokens,
+                model=model,
+                metadata=full_metadata
+            )
+            return True
+            
     except Exception as db_err:
-        logger.error(f"Error registrando uso de tokens en base de datos: {str(db_err)}")
-        return False
+        logger.error(f"Error registrando uso de tokens: {str(db_err)}", exc_info=True)
+        
+        # Implementar reintento con backoff exponencial simple antes de usar el fallback
+        max_retries = 2
+        base_delay = 0.5  # 500ms inicial
+        
+        for retry in range(max_retries):
+            try:
+                # Calcular delay con jitter para evitar tormentas de reintentos
+                delay = base_delay * (2 ** retry) * (0.9 + 0.2 * random.random())
+                logger.info(f"Reintentando tracking de tokens ({retry+1}/{max_retries}) en {delay:.2f}s")
+                
+                # Esperar antes de reintentar
+                await asyncio.sleep(delay)
+                
+                # Reintentar la llamada RPC
+                result = await supabase.rpc("track_token_usage", rpc_data).execute()
+                if result.data is True:
+                    logger.info(f"Reintento {retry+1} exitoso")
+                    return True
+            except Exception as retry_err:
+                logger.warning(f"Error en reintento {retry+1}: {str(retry_err)}")
+        
+        # Intentar con la implementación anterior como último recurso
+        # Este mecanismo de fallback es temporal hasta completar la migración
+        logger.warning(f"Usando fallback después de {max_retries} reintentos fallidos")
+        try:
+            await rpc_increment_token_usage(
+                tenant_id=tenant_id,
+                agent_id=agent_id,
+                conversation_id=conversation_id,
+                token_type=token_type,
+                operation=operation,
+                tokens=tokens,
+                model=model,
+                metadata=full_metadata
+            )
+            logger.info(f"Fallback a rpc_increment_token_usage exitoso")
+            return True
+        except Exception as fallback_err:
+            logger.error(f"Error en fallback de tracking: {str(fallback_err)}", exc_info=True)
+            return False
 
 async def track_query(
     tenant_id: str,

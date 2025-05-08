@@ -27,7 +27,7 @@ from common.errors import (
     RetrievalError, GenerationError, InvalidQueryParamsError,
     EmbeddingGenerationError, EmbeddingModelError, TextTooLargeError
 )
-from common.tracking import track_token_usage, estimate_prompt_tokens
+from common.tracking import track_token_usage, estimate_prompt_tokens, TOKEN_TYPE_LLM, OPERATION_QUERY
 from common.llm.token_counters import count_tokens
 from common.models import TenantInfo
 from common.cache import (
@@ -117,11 +117,25 @@ async def process_query_with_sources(
                     # Usar el modelo por defecto si no podemos extraerlo
                     model_used = DEFAULT_LLM_MODEL
             
+            # Identificar proveedor del modelo para metadatos enriquecidos
+            if "llama-3.2-70b" in model_used.lower() or "llama-3.1-8b" in model_used.lower():
+                provider = "groq"
+            elif "qwen" in model_used.lower():
+                provider = "ollama"
+            else:
+                provider = "other"
+            
+            # Cálculo preciso de tokens según el modelo
             tokens_in = count_tokens(query, model_name=model_used)
             tokens_out = count_tokens(response, model_name=model_used)
             tokens_total = tokens_in + tokens_out
             
-            # Tracking de tokens directamente usando la función centralizada
+            # Generación de clave de idempotencia para evitar doble conteo
+            query_hash = hashlib.md5(query.encode()).hexdigest()[:10]
+            operation_id = f"{collection_id}:{query_hash}"
+            idempotency_key = f"query:{tenant_id}:{operation_id}:{int(time.time())}"
+            
+            # Tracking de tokens con constantes estandarizadas y soporte de idempotencia
             await track_token_usage(
                 tenant_id=tenant_id,
                 tokens=tokens_total,
@@ -129,10 +143,15 @@ async def process_query_with_sources(
                 agent_id=agent_id,
                 conversation_id=None,
                 collection_id=collection_id,
-                token_type="llm",
-                operation="query",
+                token_type=TOKEN_TYPE_LLM,
+                operation=OPERATION_QUERY,
+                idempotency_key=idempotency_key,
                 metadata={
-                    "query": query,
+                    "provider": provider,
+                    "model_family": "llama" if "llama" in model_used.lower() else 
+                                   "qwen" if "qwen" in model_used.lower() else "other",
+                    "query_hash": query_hash,
+                    "operation_id": operation_id,
                     "tokens_in": tokens_in,
                     "tokens_out": tokens_out,
                     "elapsed_time": time.time() - start_time

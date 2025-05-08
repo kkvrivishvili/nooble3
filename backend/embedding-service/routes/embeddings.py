@@ -4,6 +4,7 @@ Endpoints para generación de embeddings vectoriales.
 
 import logging
 import time
+import hashlib
 from typing import List, Dict, Any, Optional, Tuple
 from fastapi import APIRouter, Depends, Body, HTTPException
 
@@ -19,7 +20,7 @@ from common.errors import (
     ServiceError, BatchTooLargeError, TextTooLargeError, EmbeddingModelError
 )
 from common.config.tiers import get_available_embedding_models
-from common.tracking import track_token_usage, estimate_prompt_tokens
+from common.tracking import track_token_usage, estimate_prompt_tokens, TOKEN_TYPE_EMBEDDING, OPERATION_QUERY, OPERATION_BATCH, OPERATION_INTERNAL
 from common.cache import generate_resource_id_hash
 
 # Importar configuración centralizada
@@ -124,7 +125,16 @@ async def generate_embeddings(
         for text in texts:
             total_tokens += await estimate_prompt_tokens(text)
         
-        # Registrar uso de tokens con el sistema centralizado
+        # Determinar si es OpenAI o Ollama para metadatos enriquecidos
+        provider = "openai" if "openai" in model_name.lower() else "ollama" if "ollama" in model_name.lower() else "other"
+        
+        # Generar clave de idempotencia específica para embeddings
+        # Crear hash único basado en el contenido, evitando textos muy grandes
+        content_hash = hashlib.md5("".join([text[:50] for text in texts]).encode()).hexdigest()[:10]
+        operation_id = f"embed:{len(texts)}:{content_hash}"
+        idempotency_key = f"embed:{tenant_id}:{operation_id}:{int(time.time())}"
+        
+        # Registrar uso de tokens con el sistema centralizado usando constantes estandarizadas
         try:
             await track_token_usage(
                 tenant_id=tenant_id,
@@ -133,9 +143,16 @@ async def generate_embeddings(
                 agent_id=agent_id,
                 conversation_id=conversation_id,
                 collection_id=collection_id,
-                token_type="embedding",
-                operation="query",
-                metadata={"num_texts": len(texts)}
+                token_type=TOKEN_TYPE_EMBEDDING,  # Usar constante estandarizada
+                operation=OPERATION_QUERY,        # Usar constante estandarizada
+                idempotency_key=idempotency_key,  # Prevenir doble conteo
+                metadata={
+                    "provider": provider,
+                    "operation_id": operation_id,
+                    "num_texts": len(texts),
+                    "total_chars": sum(len(text) for text in texts),
+                    "average_length": sum(len(text) for text in texts) / len(texts) if texts else 0
+                }
             )
         except Exception as track_err:
             logger.warning(f"Error al registrar uso de tokens: {str(track_err)}", 
@@ -251,7 +268,16 @@ async def batch_generate_embeddings(
         for text in texts:
             total_tokens += await estimate_prompt_tokens(text)
         
-        # Registrar uso de tokens con el sistema centralizado
+        # Determinar si es OpenAI o Ollama para metadatos enriquecidos
+        provider = "openai" if "openai" in model_name.lower() else "ollama" if "ollama" in model_name.lower() else "other"
+        
+        # Generar clave de idempotencia específica para batch embeddings
+        # Incluir hash de los primeros 50 caracteres de cada texto para evitar doble conteo
+        content_hash = hashlib.md5("".join([text[:30] for text in texts[:10]]).encode()).hexdigest()[:10]
+        operation_id = f"batch:{len(texts)}:{content_hash}"
+        idempotency_key = f"embed:{tenant_id}:{operation_id}:{int(time.time())}"
+        
+        # Registrar uso de tokens con el sistema centralizado usando constantes estandarizadas
         try:
             await track_token_usage(
                 tenant_id=tenant_id,
@@ -260,9 +286,17 @@ async def batch_generate_embeddings(
                 agent_id=agent_id,
                 conversation_id=conversation_id,
                 collection_id=collection_id,
-                token_type="embedding",
-                operation="batch",
-                metadata={"batch_size": len(texts)}
+                token_type=TOKEN_TYPE_EMBEDDING,  # Usar constante estandarizada
+                operation=OPERATION_BATCH,  # Constante estandarizada para batch
+                idempotency_key=idempotency_key,  # Prevenir doble conteo
+                metadata={
+                    "provider": provider,
+                    "operation_id": operation_id,
+                    "batch_size": len(texts),
+                    "total_items": len(request.items),
+                    "failed_items": len(failed_items),
+                    "total_chars": sum(len(text) for text in texts)
+                }
             )
         except Exception as track_err:
             logger.warning(f"Error al registrar uso de tokens de batch: {str(track_err)}", 
@@ -386,19 +420,41 @@ async def internal_embed(
         for text in texts:
             total_tokens += await estimate_prompt_tokens(text)
         
-        # Registrar uso de tokens con el sistema centralizado
-        try:
-            await track_token_usage(
-                tenant_id=tenant_id,
-                tokens=total_tokens,
-                model=model_name,
-                token_type="embedding",
-                operation="internal",
-                metadata={"num_texts": len(texts), "source": "internal_api"}
-            )
-        except Exception as track_err:
-            logger.warning(f"Error al registrar uso de tokens interno: {str(track_err)}", 
-                         extra={"tenant_id": tenant_id, "error": str(track_err)})
+        # Registrar uso de tokens con sistema unificado y soporte de idempotencia
+        if total_tokens > 0 and hasattr(settings, 'tracking_enabled') and settings.tracking_enabled:
+            # Determinar proveedor para metadatos enriquecidos
+            provider = "openai" if model and "openai" in model.lower() else "ollama" if model and "ollama" in model.lower() else "other"
+            
+            # Generar clave de idempotencia específica para el endpoint interno
+            # No usar textos completos para evitar claves muy largas
+            content_hash = hashlib.md5("".join([text[:20] for text in texts[:5]]).encode()).hexdigest()[:10]
+            operation_id = f"internal:{len(texts)}:{content_hash}"
+            idempotency_key = f"embed:{tenant_id}:{operation_id}:{int(time.time())}"
+            
+            try:
+                await track_token_usage(
+                    tenant_id=tenant_id,
+                    tokens=total_tokens,
+                    model=model,
+                    agent_id=None,  # No hay contexto de agente en endpoint interno
+                    conversation_id=None,  # No hay contexto de conversación
+                    collection_id=collection_id,
+                    token_type=TOKEN_TYPE_EMBEDDING,  # Constante estandarizada
+                    operation=OPERATION_INTERNAL,  # Constante estandarizada para uso interno
+                    idempotency_key=idempotency_key,  # Prevenir doble conteo
+                    metadata={
+                        "provider": provider,
+                        "operation_id": operation_id,
+                        "num_texts": len(texts),
+                        "service": "internal",
+                        "chunk_ids": True if chunk_id else False,
+                        "total_chars": sum(len(text) for text in texts)
+                    }
+                )
+            except Exception as track_err:
+                # Solo log, no queremos fallar la operación principal por tracking
+                logger.warning(f"Error registrando uso de tokens: {str(track_err)}", 
+                             extra={"tenant_id": tenant_id, "error": str(track_err)})
         
         return InternalEmbeddingResponse(
             success=True,
