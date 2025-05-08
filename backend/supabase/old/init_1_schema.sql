@@ -81,3 +81,13 @@ ON ai.tenant_configurations(environment);
 
 CREATE INDEX IF NOT EXISTS idx_tenant_config_scope 
 ON ai.tenant_configurations(tenant_id, scope, scope_id, environment);
+
+-- Crear tenant por defecto si no existe
+INSERT INTO public.tenants (tenant_id, name, slug, subscription_tier)
+VALUES (
+    '00000000-0000-0000-0000-000000000000', 
+    'Default Tenant', 
+    'default',
+    'system'
+)
+ON CONFLICT (tenant_id) DO NOTHING;

@@ -74,7 +74,7 @@ async def _validate_and_get_model(tenant_info: TenantInfo, requested_model: str)
         return validated_model, {"model_downgraded": True, "requested_model": requested_model}
 
 @router.post("/embeddings", response_model=None, response_model_exclude_none=True)
-@with_context(tenant=True, agent=True, conversation=True, collection=True)
+@with_context(tenant=True, collection=True)  # Simplificado a los contextos realmente necesarios
 @handle_errors(error_type="simple", log_traceback=False)
 async def generate_embeddings(
     request: EmbeddingRequest,
@@ -169,7 +169,7 @@ async def generate_embeddings(
         )
 
 @router.post("/embeddings/batch", response_model=None, response_model_exclude_none=True)
-@with_context(tenant=True, agent=True, conversation=True, collection=True)
+@with_context(tenant=True, collection=True)  # Simplificado a los contextos realmente necesarios
 @handle_errors(error_type="simple", log_traceback=False)
 async def batch_generate_embeddings(
     request: BatchEmbeddingRequest,
@@ -312,7 +312,7 @@ async def batch_generate_embeddings(
         )
 
 @router.post("/internal/embed", response_model=InternalEmbeddingResponse, response_model_exclude_none=True, response_model_exclude={"ctx"})
-@with_context(tenant=True, validate_tenant=False)
+@with_context(tenant=True, validate_tenant=False)  # Endpoint interno que acepta tenant_id como parámetro
 @handle_errors(error_type="service", log_traceback=True)
 async def internal_embed(
     texts: List[str] = Body(..., description="Textos para generar embeddings"),

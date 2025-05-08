@@ -53,7 +53,7 @@ class QueryContextItem:
         }
 
 
-@with_context(tenant=True, collection=True, agent=True)
+@with_context(tenant=True, collection=True, agent=True)  # Requerimos contexto para operación
 async def process_query_with_sources(
     query_engine: RetrieverQueryEngine,
     debug_handler: LlamaDebugHandler,

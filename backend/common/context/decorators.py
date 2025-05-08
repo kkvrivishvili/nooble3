@@ -174,6 +174,11 @@ def with_context(
     Propaga valores del contexto actual, permite validación de tenant, y provee
     una estructura consistente para todos los endpoints y servicios.
     
+    Comportamiento de validación de tenant:
+    - Si tenant=True y validate_tenant=True: Se requiere un tenant_id válido (no None, no "default")
+    - Si tenant=True y validate_tenant=False: Se permite tenant_id=None o "default" (para endpoints públicos)
+    - Si tenant=False: No se propaga ni valida tenant_id
+    
     Para endpoints FastAPI, se recomienda usar este decorador DESPUÉS de los decoradores de FastAPI
     y asegurarse de que el decorador de enrutamiento tenga response_model=None para evitar
     que FastAPI intente parsear el objeto Context como parte del modelo de respuesta:

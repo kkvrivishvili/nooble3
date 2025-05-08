@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 @router.get("/models", response_model=None, response_model_exclude_none=True, response_model_exclude={"ctx"})
-@with_context(tenant=True)
+@with_context(tenant=True, validate_tenant=True)  # Requerimos tenant válido para obtener modelos según tier
 @handle_errors(error_type="simple", log_traceback=False)
 async def list_available_models(
     tenant_info: TenantInfo = Depends(verify_tenant),

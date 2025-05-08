@@ -11,7 +11,7 @@
 
 -- Función para establecer configuraciones con validación de tipos
 CREATE OR REPLACE FUNCTION ai.set_config(
-    p_tenant_id TEXT, 
+    p_tenant_id UUID, 
     p_config_key TEXT, 
     p_config_value TEXT, 
     p_config_type TEXT DEFAULT 'string',
@@ -37,7 +37,7 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- Función para obtener configuraciones con tipado adecuado
 CREATE OR REPLACE FUNCTION ai.get_config(
-    p_tenant_id TEXT, 
+    p_tenant_id UUID, 
     p_config_key TEXT,
     p_scope TEXT DEFAULT 'tenant',
     p_scope_id TEXT DEFAULT NULL,
@@ -68,7 +68,7 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- Función para obtener configuraciones efectivas considerando la jerarquía
 CREATE OR REPLACE FUNCTION ai.get_effective_config(
-    p_tenant_id TEXT, 
+    p_tenant_id UUID, 
     p_config_key TEXT,
     p_service_name TEXT DEFAULT NULL,
     p_agent_id TEXT DEFAULT NULL,
@@ -176,7 +176,7 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- Función para invalidar caché de configuraciones
 CREATE OR REPLACE FUNCTION ai.invalidate_config_cache(
-    p_tenant_id TEXT DEFAULT NULL,
+    p_tenant_id UUID DEFAULT NULL,
     p_scope TEXT DEFAULT NULL,
     p_scope_id TEXT DEFAULT NULL
 ) RETURNS BOOLEAN AS $$

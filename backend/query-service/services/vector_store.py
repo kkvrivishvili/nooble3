@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 @handle_errors(error_type="service", log_traceback=True)
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-@with_context(tenant=True, validate_tenant=True)
+@with_context(tenant=True, validate_tenant=True)  # Requerimos tenant válido para acceder a vector store
 @track_operation(operation_name="get_vector_store", operation_type="query")
 async def get_vector_store_for_collection(
     tenant_id: str,
