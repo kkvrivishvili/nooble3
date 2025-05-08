@@ -270,12 +270,14 @@ async def check_llm_service() -> str:
         service_call_counts["llm_service"] += 1
         
         # Determinar el proveedor y modelo a verificar
-        llm_provider = "ollama" if settings.use_ollama else "openai"
-        
-        # Seleccionar el modelo adecuado según el proveedor
-        if llm_provider == "ollama":
+        if settings.use_ollama:
+            llm_provider = "ollama"
             llm_model = settings.default_ollama_llm_model  # qwen3:1.7b
+        elif hasattr(settings, 'use_groq') and settings.use_groq:
+            llm_provider = "groq"
+            llm_model = settings.default_groq_model if hasattr(settings, 'default_groq_model') else "llama3-70b-8192"
         else:
+            llm_provider = "openai"
             llm_model = settings.default_llm_model         # OpenAI model
         
         if not llm_model:
@@ -297,6 +299,24 @@ async def check_llm_service() -> str:
                     if not llm_ok:
                         logger.warning(f"Modelo Ollama {llm_model} no disponible: {response.status_code}")
             
+            elif llm_provider == "groq":
+                # Verificar que tengamos la clave API de Groq configurada
+                llm_ok = bool(getattr(settings, "groq_api_key", None))
+                
+                if llm_ok:
+                    # Verificar conectividad con la API de Groq
+                    try:
+                        import groq
+                        client = groq.Client(api_key=settings.groq_api_key)
+                        # Verificar que el modelo esté disponible en Groq
+                        models = client.models.list()
+                        llm_ok = any(m.id == llm_model for m in models.data)
+                        if not llm_ok:
+                            logger.warning(f"Modelo Groq {llm_model} no disponible")
+                    except Exception as groq_error:
+                        logger.error(f"Error verificando Groq: {str(groq_error)}")
+                        llm_ok = False
+                
             elif llm_provider == "openai":
                 # Solo verificamos que tengamos la clave API configurada
                 llm_ok = bool(settings.openai_api_key)
