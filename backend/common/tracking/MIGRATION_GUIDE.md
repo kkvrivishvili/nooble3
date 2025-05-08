@@ -1,33 +1,34 @@
-# Guía de Migración del Sistema de Tracking de Tokens
+# Guía de Referencia del Sistema Unificado de Tracking de Tokens
 
 ## Introducción
 
-Este documento proporciona instrucciones para la migración al nuevo sistema unificado de tracking de tokens que incluye las siguientes mejoras:
-- Estandarización de tipos para token_type y operation_type
-- Soporte para idempotencia
+Este documento proporciona una referencia del sistema unificado de tracking de tokens que ha sido implementado en todos los servicios. Las mejoras incluyen:
+- Tipos estandarizados para `token_type` y `operation_type`
+- Soporte completo para idempotencia
 - Procedimiento unificado con mejor atribución de tokens y gestión de errores
+- Integración con múltiples proveedores de LLM (OpenAI, Groq, Ollama)
 
-## Cambios Realizados
+## Implementación Completada
 
-1. **Consolidación de SQL**
-   - Definiciones ENUM para `token_type` y `operation_type`
-   - Tablas mejoradas para tracking diario y mensual
-   - Procedimientos unificados para todas las operaciones de tracking
+1. **Sistema Backend**
+   - Tipos estandarizados en `common/tracking/__init__.py` (`TOKEN_TYPE_*` y `OPERATION_*`)
+   - Función central `track_token_usage` con soporte completo para idempotencia
+   - Eliminado código legacy (`increment_token_usage` y funciones relacionadas)
 
-2. **Actualización de la Implementación Centralizada**
-   - Función `track_token_usage` actualizada con soporte de idempotencia
-   - Constantes estandarizadas para tipos de tokens y operaciones
-   - Manejo mejorado de errores con fallback a la implementación anterior
+2. **Integración de Servicios**
+   - **Agent Service**: Desactivado tracking directo para evitar doble conteo
+   - **Query Service**: Implementada generación de claves de idempotencia y metadatos enriquecidos
+   - **Embedding Service**: Soporte para operaciones por lotes con idempotencia
+   - **Ingestion Service**: Tracking durante el proceso de chunking
 
-3. **Migración de Servicios Dependientes**
-   - Todos los servicios que utilizan `track_token_usage` ahora usan automáticamente la nueva implementación
-   - Se mantiene compatibilidad hacia atrás para evitar interrupciones
+3. **Soporte para Proveedores LLM**
+   - **OpenAI**: Integración completa con modelos actuales
+   - **Groq**: Implementado soporte para modelos Llama 3/3.1 y Mixtral
+   - **Ollama**: Mantenida compatibilidad para despliegue local
 
-## Guía de Migración para Servicios
+## Patrones de Implementación Estandarizados
 
-Los servicios que ya utilizan la función `track_token_usage` no necesitan cambios inmediatos, ya que la implementación actualizada mantiene compatibilidad con las llamadas existentes.
-
-Sin embargo, para aprovechar al máximo las nuevas funcionalidades, se recomienda actualizar gradualmente las llamadas siguiendo estas prácticas:
+Todos los servicios core han sido actualizados al nuevo sistema. Esta guía de referencia muestra los patrones implementados que deben seguirse para cualquier nuevo desarrollo:
 
 ### 1. Usar Constantes Estandarizadas para Tipos
 
@@ -90,12 +91,35 @@ await track_token_usage(
 )
 ```
 
-## Cronograma de Migración Recomendado
+## Integración con Groq
 
-1. **Fase Inmediata**: No se requieren cambios - compatibilidad automática
-2. **Corto Plazo (1-2 semanas)**: Actualizar a constantes estandarizadas
-3. **Medio Plazo (2-4 semanas)**: Implementar idempotencia en operaciones críticas
-4. **Largo Plazo (1-2 meses)**: Enriquecer metadatos y mejorar observabilidad
+El sistema de tracking ahora incluye soporte completo para modelos de Groq:
+
+```python
+from common.tracking import track_token_usage, TOKEN_TYPE_LLM, OPERATION_QUERY
+from common.llm import get_groq_llm_model
+
+# Obtener un modelo Groq
+llm = get_groq_llm_model(model="llama3-70b-8192")
+
+# Realizar la operación con el modelo
+response = await llm.chat(messages=[{"role": "user", "content": query}])
+
+# Registrar el uso con el sistema unificado
+await track_token_usage(
+    tenant_id=tenant_id,
+    tokens=response["metadata"]["input_tokens"] + response["metadata"]["output_tokens"],
+    model="llama3-70b-8192",
+    token_type=TOKEN_TYPE_LLM,
+    operation=OPERATION_QUERY,
+    idempotency_key=f"groq:{tenant_id}:{uuid.uuid4()}",
+    metadata={
+        "provider": "groq",
+        "input_tokens": response["metadata"]["input_tokens"],
+        "output_tokens": response["metadata"]["output_tokens"]
+    }
+)
+```
 
 ## Soporte y Resolución de Problemas
 

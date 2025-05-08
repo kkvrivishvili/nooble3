@@ -72,67 +72,58 @@ async def track_token_usage(
 
 **Características:**
 - Obtiene contexto automáticamente si no se proporciona
-- Implementa verificación de límites de rate
-- Enriquece metadatos con información contextual
-- Maneja atribución de tokens a través de TokenAttributionService
-- Registra métricas detalladas
-- Captura excepciones y garantiza observabilidad
 
-### Sistema RPC Supabase
-
-**Función Principal:** `increment_token_usage_raw()`
-
-```python
-async def increment_token_usage_raw(
-    tenant_id: str, 
-    tokens: int,
-    agent_id: Optional[str] = None,
-    # ...más parámetros
-)
-```
-
-**Características:**
-- Llamada directa al procedimiento almacenado
-- Sin lógica de negocio, solo persistencia
-- Diferencia entre tipos de tokens (llm/embedding)
-- Atomicidad garantizada por la base de datos
-- Enfoque puramente transaccional
-
-### Procedimientos Almacenados en Supabase
+### Procedimientos Almacenados Actualizados
 
 ```sql
--- Ejemplo de increment_token_usage en Supabase
-create or replace function increment_token_usage(
+-- Procedimiento principal en Supabase con soporte para idempotencia
+create or replace function ai.track_token_usage(
     p_tenant_id text,
-    p_tokens integer
-) returns void as $$
+    p_tokens integer,
+    p_token_type token_type default 'llm',
+    p_operation operation_type default 'query',
+    p_model text default null,
+    p_metadata jsonb default null,
+    p_idempotency_key text default null
+) returns boolean as $$
+declare
+    v_idempotency_exists boolean;
 begin
-    -- Actualizar contador diario
-    insert into daily_token_usage (tenant_id, date, tokens)
-    values (p_tenant_id, current_date, p_tokens)
-    on conflict (tenant_id, date) 
-    do update set tokens = daily_token_usage.tokens + p_tokens;
+    -- Verificar idempotencia si se proporciona una clave
+    if p_idempotency_key is not null then
+        select exists(select 1 from ai.token_idempotency 
+                     where idempotency_key = p_idempotency_key)
+        into v_idempotency_exists;
+        
+        if v_idempotency_exists then
+            return false; -- Operación ya procesada, no hacer nada
+        end if;
+        
+        -- Registrar clave de idempotencia
+        insert into ai.token_idempotency (idempotency_key, created_at)
+        values (p_idempotency_key, now());
+    end if;
     
-    -- Actualizar contador mensual
-    insert into monthly_token_usage (tenant_id, year_month, tokens)
-    values (p_tenant_id, to_char(current_date, 'YYYY-MM'), p_tokens)
-    on conflict (tenant_id, year_month) 
-    do update set tokens = monthly_token_usage.tokens + p_tokens;
+    -- Lógica de tracking con tablas diarias y mensuales
+    -- [implementación completa en supabase/init_ai.sql]
+    
+    return true;
 end;
 $$ language plpgsql;
 ```
 
-## Análisis de Consistencia
+## Estado Actual de Implementación
 
-| Aspecto | Sistema Centralizado | Sistema RPC | Estado |
-|---------|----------------------|------------|--------|
-| **Contabilización básica** | ✅ Implementada | ✅ Implementada | **Consistente** |
-| **Tipos de tokens** | ✅ LLM, Embedding | ✅ LLM, Embedding | **Consistente** |
-| **Atribución** | ✅ Con lógica avanzada | ⚠️ Solo persistencia | **Complementario** |
-| **Rate Limiting** | ✅ Implementado | ❌ No aplicable | **N/A** |
-| **Metadatos** | ✅ Enriquecidos | ⚠️ Básicos | **Parcial** |
-| **Manejo de errores** | ✅ Robusto | ⚠️ Básico | **Mejora posible** |
-| **Reconciliación** | ✅ Implementada | ❌ No aplicable | **N/A** |
+| Aspecto | Estado | Notas |
+|---------|--------|-------|
+| **Sistema Unificado** | ✅ Completado | Interface única `track_token_usage()` |
+| **Idempotencia** | ✅ Implementada | Soporte completo en todos los servicios |
+| **Tipos Estandarizados** | ✅ Implementados | Uso de constantes `TOKEN_TYPE_*` y `OPERATION_*` |
+| **Integración Servicios** | ✅ Completada | Agent, Query, Embedding, Ingestion |
+| **Soporte Multi-Proveedor** | ✅ Implementado | OpenAI, Groq, Ollama |
+| **Metadatos Enriquecidos** | ✅ Implementados | Estadísticas detalladas por operación |
+| **Reconciliación** | ✅ Implementada | Consolidación periódica de contadores |
+| **Alertas** | ⚠️ Parcial | Sistema básico implementado, mejoras pendientes |
 
 ## Fortalezas y Debilidades
 
@@ -191,13 +182,13 @@ TOKEN_TYPES = {
 CREATE TYPE token_type AS ENUM ('llm', 'embedding', 'fine_tuning');
 ```
 
-### 2. Implementación de Idempotencia
+### 2. Mejoras en Observabilidad
 
-**Problema:**
-El sistema actual podría contabilizar dos veces en casos de reintentos o reconexiones.
+**Estado Actual:**
+Sistema de idempotencia completamente implementado con soporte en todos los servicios.
 
-**Solución:**
-Implementar tokens de idempotencia para garantizar que cada operación se contabilice una sola vez.
+**Próximas Mejoras:**
+Implementar dashboard de monitoreo para visualizar el uso de tokens en tiempo real y configurar alertas automáticas basadas en umbrales.
 
 ```python
 async def track_token_usage(

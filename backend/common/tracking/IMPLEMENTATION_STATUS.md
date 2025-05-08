@@ -53,33 +53,40 @@ Los metadatos ahora incluyen información adicional crítica:
 - Todos los endpoints (`/embeddings`, `/embeddings/batch`, `/internal/embed`) ahora usan constantes estandarizadas
 - Implementada idempotencia en todas las operaciones
 
-## Próximos Pasos
+## Tareas Completadas
 
 ### 1. Corrección de Inconsistencias
 
 #### Alta Prioridad
-- [ ] Estandarizar cálculo de tokens entre servicios (actualmente `count_tokens()` vs `estimate_prompt_tokens()`)
-- [ ] Implementar política consistente de reintentos en todos los servicios
+- [x] Estandarizado cálculo de tokens entre servicios usando `count_tokens()` en todos los servicios
+- [x] Implementada política consistente de reintentos con idempotencia
 
 #### Media Prioridad
-- [ ] Actualizar el servicio de Ingestion para tracking de tokens en chunking
-- [ ] Verificar que el servicio de Agent no realice contabilización directa
+- [x] Actualizado el servicio de Ingestion para tracking de tokens en chunking
+- [x] Verificado que el servicio de Agent no realiza contabilización directa para evitar doble conteo
 
 #### Baja Prioridad
-- [ ] Implementar pruebas automatizadas para verificar la idempotencia
-- [ ] Añadir dashboards de monitoreo para uso de tokens por proveedor
+- [x] Implementadas pruebas básicas para verificar la idempotencia
+- [ ] Añadir dashboards de monitoreo para uso de tokens por proveedor (Pendiente)
 
-### 2. Aspectos Técnicos Pendientes
+### 2. Integración con Proveedores
 
-- Mejorar el rendimiento en escenarios de alto volumen
-- Completar la integración con el sistema de alertas
-- Implementar reconciliación periódica para detectar inconsistencias
+- [x] OpenAI: Implementación completa con modelos actuales
+- [x] Groq: Implementación completa para modelos Llama 3/3.1 y Mixtral
+- [x] Ollama: Implementación completa para modelos locales
+
+### 3. Próximos Pasos
+
+- Mejorar dashboards de monitoreo para uso de tokens por proveedor
+- Ampliar el sistema de alertas para notificaciones en tiempo real
+- Optimizar rendimiento en escenarios de alto volumen
 
 ## Notas Técnicas
 
-- La función `track_token_usage()` en `_base.py` ahora soporta fallback con un sistema de reintentos integrado
-- Todos los servicios deben utilizar constantes estandarizadas en lugar de strings literales
-- Las claves de idempotencia deben generarse de forma consistente según los patrones documentados
+- La función `track_token_usage()` en `_base.py` es ahora la única implementación centralizada
+- Código legacy eliminado completamente del sistema (`increment_token_usage` y relacionados)
+- Todos los servicios utilizan constantes estandarizadas del módulo `common.tracking`
+- Implementado soporte para Groq en `common.llm.groq` con tracking unificado
 
 ---
 

@@ -66,7 +66,7 @@ La información se construye a partir de los archivos `usoCommonAllExports.md` (
 | db          | create_conversation        |        |       |           |       |           |    ✔     |
 | db          | add_chat_message           |        |       |           |       |           |    ✔     |
 | db          | add_chat_history           |        |       |           |       |           |    ✔     |
-| db          | increment_token_usage      |        |       |           |       |           |    ✔     |
+| db          | ~~increment_token_usage~~ |        |       |           |       |           | ❌ Eliminada |
 | db          | increment_document_count   |        |       |           |       |           |    ✔     |
 | db          | decrement_document_count   |        |       |           |       |           |    ✔     |
 | db          | get_storage_client         |        |       |           |       |           |    ✔     |
@@ -116,18 +116,17 @@ La información se construye a partir de los archivos `usoCommonAllExports.md` (
 | llm         | get_llm_model              |   ✔    |       |     ✔     |   ✔   |           |          |
 | llm         | get_embedding_model        |   ✔    |       |     ✔     |       |           |          |
 | llm         | count_tokens               |   ✔    |   ✔   |           |   ✔   |           |          |
-| llm         | BaseEmbeddingModel         |        |       |           |       |           |    ✔     |
-| llm         | BaseLLM                    |        |       |           |       |           |    ✔     |
+| llm         | BaseEmbeddingModel         |   ✔    |   ✔   |     ✔     |   ✔   |     ✔     |          |
+| llm         | BaseLLM                    |   ✔    |   ✔   |     ✔     |   ✔   |     ✔     |          |
+| llm         | GroqLLM                    |   ✔    |   ✔   |     ✔     |   ✔   |     ✔     |          |
+| llm         | get_groq_llm_model         |   ✔    |   ✔   |     ✔     |   ✔   |     ✔     |          |
+| llm         | stream_groq_response       |   ✔    |   ✔   |     ✔     |   ✔   |     ✔     |          |
+| llm         | is_groq_model              |   ✔    |   ✔   |     ✔     |   ✔   |     ✔     |          |
 | llm         | get_openai_client          |        |       |           |       |           |    ✔     |
 | llm         | get_openai_embedding_model |        |       |           |       |           |    ✔     |
 | llm         | OllamaEmbeddings           |        |       |           |       |           |    ✔     |
 | llm         | OllamaLLM                  |        |       |           |       |           |    ✔     |
 | llm         | is_using_ollama            |        |       |           |       |           |    ✔     |
-| llm         | count_message_tokens       |        |       |           |       |           |    ✔     |
-| llm         | estimate_max_tokens_for_model|      |       |           |       |           |    ✔     |
-| llm         | estimate_remaining_tokens  |        |       |           |       |           |    ✔     |
-| llm         | stream_openai_response     |        |       |           |       |           |    ✔     |
-| llm         | stream_ollama_response     |        |       |           |       |           |    ✔     |
 | models      | TenantInfo                 |   ✔    |   ✔   |     ✔     |   ✔   |     ✔     |          |
 | models      | BaseModel                  |        |       |           |       |           |    ✔     |
 | models      | BaseResponse               |        |       |           |       |           |    ✔     |
@@ -159,17 +158,16 @@ La información se construye a partir de los archivos `usoCommonAllExports.md` (
 | swagger     | get_swagger_ui_html        |        |       |           |       |           |    ✔     |
 | swagger     | add_example_to_endpoint    |        |       |           |       |           |    ✔     |
 | swagger     | generate_docstring_template|        |       |           |       |           |    ✔     |
-| tracking    | track_token_usage          |   ✔    |   ✔   |     ✔     |   ✔   |     ✔     |          |
+| tracking    | track_token_usage         |   ✔    |   ✔   |     ✔     |   ✔   |     ✔     |          |
 | tracking    | track_query                |   ✔    |   ✔   |           |   ✔   |           |          |
 | tracking    | track_embedding_usage      |   ✔    |       |     ✔     |       |     ✔     |          |
 | tracking    | track_usage                |   ✔    |   ✔   |           |   ✔   |           |          |
-| tracking    | estimate_prompt_tokens     |        |       |           |       |           |    ✔     |
+| tracking    | estimate_request_tokens   |   ✔    |   ✔   |     ✔     |   ✔   |     ✔     |          |
 | utils       | call_service               |   ✔    |   ✔   |     ✔     |   ✔   |     ✔     |          |
 | utils       | get_logger                 |        |       |           |       |           |    ✔     |
 | utils       | apply_rate_limit           |        |       |           |       |           |    ✔     |
 | utils       | setup_rate_limiting        |   ✔    |       |     ✔     |       |           |          |
 | utils       | stream_llm_response        |   ✔    |   ✔   |           |       |           |          |
-| utils       | init_logging               |        |       |     ✔     |       |           |          |
 
 **Leyenda:**
 - ✔ en "Se Usa" indica que la función está en uso en al menos un servicio.

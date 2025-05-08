@@ -99,6 +99,56 @@ Este formato estándar debe seguirse en todos los endpoints internos, manteniend
 
 3. **Validar el Objeto Context**:
    - Siempre verificar que `ctx` no sea `None` antes de utilizarlo:
+
+## Integración con Proveedores LLM
+
+### 1. Soporte para Groq
+
+El sistema ahora incluye soporte completo para modelos de Groq (Llama 3, Mixtral) a través de los siguientes componentes:
+
+```python
+# Importar funcionalidades de Groq
+from common.llm import (
+    get_groq_llm_model,     # Para obtener un modelo configurado
+    stream_groq_response,   # Para streaming de respuestas
+    is_groq_model,          # Para comprobar si un nombre de modelo pertenece a Groq
+    GROQ_MODELS             # Diccionario con información de modelos disponibles
+)
+
+# Uso básico
+llm = get_groq_llm_model(model="llama3-70b-8192", temperature=0.7)
+response = await llm.chat(messages=[{"role": "user", "content": query}])
+```
+
+### 2. Sistema Unificado de Tracking
+
+Para registrar uso de tokens con cualquier proveedor (OpenAI, Groq, Ollama), usar la función centralizada:
+
+```python
+from common.tracking import (
+    track_token_usage,
+    TOKEN_TYPE_LLM,           # Para LLMs
+    TOKEN_TYPE_EMBEDDING,      # Para embeddings
+    OPERATION_QUERY,           # Para consultas normales
+    OPERATION_BATCH,           # Para operaciones en lote
+    OPERATION_INTERNAL         # Para llamadas internas entre servicios
+)
+
+# Ejemplo de uso con idempotencia
+await track_token_usage(
+    tenant_id=tenant_id,
+    tokens=total_tokens,
+    model=model_name,
+    token_type=TOKEN_TYPE_LLM,
+    operation=OPERATION_QUERY,
+    idempotency_key=f"{operation}:{tenant_id}:{uuid.uuid4()}",
+    metadata={
+        "provider": "groq",  # o "openai", "ollama", etc.
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens
+    }
+)
+```
    ```python
    if ctx:
        ctx.add_metric("model_downgraded", True)
