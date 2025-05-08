@@ -26,6 +26,9 @@ from common.errors import handle_errors, ServiceError, ErrorCode, AgentExecution
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
 from common.config.settings import get_settings
+# IMPORTANTE: El servicio de agent NO debe contabilizar tokens directamente
+# La contabilización debe realizarse en los servicios subyacentes (Query, Embedding)
+# Sin embargo, mantenemos la importación para compatibilidad con código legacy durante la migración
 from common.tracking import track_operation, track_token_usage, track_embedding_usage
 from common.llm.utils import count_tokens
 from common.utils.stream import stream_llm_response
@@ -618,19 +621,28 @@ async def execute_agent(
         output_tokens = count_tokens(answer, model_name=model_name)
         total_tokens = input_tokens + output_tokens
         
-        # Tracking de tokens usando la función estandarizada
-        await track_token_usage(
-            tenant_id=tenant_id,
-            tokens=total_tokens,
-            model=model_name,
-            token_type="llm",
-            agent_id=agent_id,
-            conversation_id=conversation_id,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            service="agent-service",
-            streaming=streaming
-        )
+        # ADVERTENCIA: No debemos trackear tokens directamente en el servicio de agente
+        # para evitar doble conteo, ya que estos tokens ya son contabilizados por los servicios de Query/LLM
+        # Este código está comentado intencionalmente y debe permanecer así
+        #
+        # Si necesitas debugging o análisis temporal, descomenta el código, pero nunca lo dejes
+        # activado en producción
+        
+        # await track_token_usage(
+        #     tenant_id=tenant_id,
+        #     tokens=total_tokens,
+        #     model=model_name,
+        #     token_type="llm",
+        #     agent_id=agent_id,
+        #     conversation_id=conversation_id,
+        #     input_tokens=input_tokens,
+        #     output_tokens=output_tokens,
+        #     service="agent-service",
+        #     streaming=streaming
+        # )
+        
+        # Solo registrar métricas para uso interno sin afectar la contabilización
+        logger.info(f"Agent response generated: {total_tokens} tokens ({input_tokens} in, {output_tokens} out, model: {model_name})")
         
         # Extraer tools usadas
         tools_used = callback_handler.get_tools_used() if hasattr(callback_handler, "get_tools_used") else []
@@ -738,6 +750,7 @@ async def execute_agent(
 
 @with_context(tenant=True, agent=True, conversation=True)
 @handle_errors(error_type="service", log_traceback=True)
+# Función para ejecutar streaming sin realizar tracking directo de tokens
 async def stream_agent_response(
     tenant_id: str,
     agent_id: str,
@@ -828,15 +841,20 @@ async def stream_agent_response(
         if token_handler and hasattr(token_handler, 'get_total_tokens'):
             total_tokens = token_handler.get_total_tokens()
         
-        # Usar track_token_usage en lugar de track_usage para seguir estándares
-        await track_token_usage(
-            tenant_id=tenant_id,
-            tokens=total_tokens,
-            model=model_name,
-            token_type="llm",
-            agent_id=agent_id,
-            conversation_id=conversation_id
-        )
+        # ADVERTENCIA: No debemos trackear tokens directamente en el servicio de agente
+        # Este código está comentado intencionalmente para evitar doble conteo
+        # 
+        # await track_token_usage(
+        #    tenant_id=tenant_id,
+        #    tokens=total_tokens,
+        #    model=model_name,
+        #    token_type="llm",
+        #    agent_id=agent_id,
+        #    conversation_id=conversation_id
+        # )
+        
+        # Solo registrar métricas para uso interno sin afectar la contabilización
+        logger.info(f"Streaming response generated: {total_tokens} tokens (model: {model_name})")
     except ServiceError as service_error:
         # Errores de servicio estandarizados
         error_message = f"Error: {service_error.message}"

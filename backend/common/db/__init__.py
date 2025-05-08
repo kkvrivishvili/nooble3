@@ -23,7 +23,6 @@ from .rpc import (
     create_conversation,
     add_chat_message,
     add_chat_history,
-    increment_token_usage,
     increment_document_count,
     decrement_document_count,
 )
@@ -53,7 +52,6 @@ __all__ = [
     "create_conversation",
     "add_chat_message",
     "add_chat_history",
-    "increment_token_usage",
     "increment_document_count",
     "decrement_document_count",
     # storage

@@ -3,54 +3,53 @@
 ## Objetivo
 Actualizar todos los servicios que utilizan tracking de tokens para aprovechar el nuevo sistema centralizado con idempotencia y tipos estandarizados.
 
-## Cronograma Propuesto
+## Progreso General al 08/05/2025
 
-| Fase | Periodo | Descripción |
-|------|---------|-------------|
-| 1 | Semana 1 | Refactorización de servicios críticos (Agent, Query) |
-| 2 | Semana 2 | Actualización de servicios secundarios (Embedding, Ingestion) |
-| 3 | Semana 3 | Implementación de idempotencia en operaciones de alto valor |
-| 4 | Semana 4 | Mejora de metadatos y observabilidad |
+| Fase | Estado | Descripción | Completado |
+|------|--------|-------------|------------|
+| 1 | **COMPLETADO** | Refactorización de servicios críticos (Agent, Query) | ✅ |
+| 2 | **COMPLETADO** | Actualización de servicios secundarios (Embedding, Ingestion) | ✅ |
+| 3 | En progreso | Implementación de idempotencia en operaciones de alto valor | 50% |
+| 4 | Pendiente | Mejora de metadatos y observabilidad | 30% |
 
 ## Servicios a Actualizar
 
-### 1. Agent Service (Prioridad Alta)
-- **Archivos clave**: 
-  - `agent-service/routes/chat.py`
-  - `agent-service/routes/public.py`
-  - `agent-service/services/agent_executor.py`
-- **Cambios requeridos**:
-  - Usar constantes estandarizadas (TOKEN_TYPE_LLM, OPERATION_CHAT)
-  - Implementar idempotencia en operaciones críticas
-  - Mejorar metadatos con information relevante de la ejecución
+### 1. Agent Service (COMPLETADO ✅)
+- **Archivos actualizados**: 
+  - `agent-service/services/agent_executor.py` - Desactivado tracking directo para evitar doble conteo
+  - `agent-service/routes/chat.py` - Verificado comportamiento
+  - `agent-service/routes/public.py` - Verificado comportamiento
+- **Cambios implementados**:
+  - Desactivado tracking de tokens para evitar doble conteo, ya que este servicio no debe contabilizar tokens directamente
+  - Añadidos comentarios explicativos para prevenir reactivación accidental
+  - Mantenido logging para debugging sin impactar contabilización
 
-### 2. Query Service (Prioridad Alta)
-- **Archivos clave**: 
-  - `query-service/routes/query.py`
-  - `query-service/routes/internal.py`
-  - `query-service/services/query_engine.py`
-- **Cambios requeridos**:
-  - Estandarizar tipos de operaciones (OPERATION_QUERY, OPERATION_VECTOR_SEARCH)
-  - Usar idempotencia en operaciones de búsqueda críticas
-  - Enriquecer metadatos con información de rendimiento y estrategia
+### 2. Query Service (COMPLETADO ✅)
+- **Archivos actualizados**: 
+  - `query-service/services/query_engine.py` - Implementado tracking con constantes estándar, idempotencia y metadatos enriquecidos
+- **Cambios implementados**:
+  - Reemplazados strings literales por constantes estandarizadas (`TOKEN_TYPE_LLM`, `OPERATION_QUERY`)
+  - Implementada generación de claves de idempotencia usando hash de consulta + colección + timestamp
+  - Añadida identificación específica de modelos Groq (Llama 3.2 70b, Llama 3.1 8b) y Ollama (Qwen)
+  - Metadatos enriquecidos con proveedor, familia de modelo, tokens de entrada/salida y hash de operación
 
-### 3. Embedding Service (Prioridad Media)
-- **Archivos clave**: 
-  - `embedding-service/routes/embeddings.py`
-  - `embedding-service/services/embedding_provider.py`
-  - `embedding-service/services/llama_index_utils.py`
-- **Cambios requeridos**:
-  - Usar TOKEN_TYPE_EMBEDDING consistentemente
-  - Implementar idempotencia en procesamiento por lotes
-  - Mejorar reporting de uso de modelos
+### 3. Embedding Service (COMPLETADO ✅)
+- **Archivos actualizados**: 
+  - `embedding-service/routes/embeddings.py` - Implementado tracking con constantes estándar, idempotencia y metadatos enriquecidos
+- **Cambios implementados**:
+  - Reemplazados strings literales por constantes estandarizadas (`TOKEN_TYPE_EMBEDDING`, `OPERATION_QUERY`, `OPERATION_BATCH`, `OPERATION_INTERNAL`)
+  - Implementada generación de claves de idempotencia específicas para embeddings
+  - Añadida identificación específica de modelos OpenAI y Ollama
+  - Mejorada la captura de metadatos con estadísticas de texto (caracteres totales, longitud media)
 
-### 4. Ingestion Service (Prioridad Media)
-- **Archivos clave**: 
-  - `ingestion-service/services/embedding.py`
-  - `ingestion-service/services/chunking.py`
-- **Cambios requeridos**:
-  - Actualizar a constantes estandarizadas
-  - Implementar idempotencia para evitar doble conteo en reintentos
+### 4. Ingestion Service (COMPLETADO ✅)
+- **Archivos actualizados**: 
+  - `ingestion-service/services/chunking.py` - Implementado tracking en el proceso de chunking
+- **Cambios implementados**:
+  - Implementado tracking de tokens durante el proceso de chunking usando constantes estandarizadas
+  - Generación de claves de idempotencia basadas en hash del documento para evitar doble conteo
+  - Enriquecimiento de metadatos con estadísticas detalladas (tamaño de chunks, número de chunks, etc.)
+  - Mejorada la integración con `estimate_prompt_tokens()` actualizada
   - Mejorar metadatos con información relevante de los documentos
 
 ### 5. Common Core (Prioridad Baja)

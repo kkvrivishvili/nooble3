@@ -10,6 +10,9 @@ import random
 import asyncio
 from typing import Dict, Any, List, Optional
 
+# Importar contador de tokens robusto
+from ..llm.token_counters import count_tokens
+
 # Usamos solo las importaciones necesarias sin crear ciclos
 from ..db.supabase import get_supabase_client
 from ..db.tables import get_table_name
@@ -300,17 +303,27 @@ async def track_query(
         logger.error(f"Error track_query Supabase: {e}")
         return False
 
-async def estimate_prompt_tokens(text: str) -> int:
+async def estimate_prompt_tokens(text: str, model: str = "gpt-3.5-turbo") -> int:
     """
-    Estima la cantidad de tokens en un texto.
+    Estima la cantidad de tokens en un texto usando el método más preciso disponible.
+    
+    Utiliza tiktoken para modelos OpenAI cuando está disponible, y para otros modelos
+    usa estimaciones precisas basadas en los factores de conversión establecidos.
     
     Args:
         text: Texto a analizar
+        model: Modelo a usar para la estimación (por defecto gpt-3.5-turbo)
         
     Returns:
         int: Cantidad estimada de tokens
     """
-    return int(len(text.split()) * 1.3)
+    try:
+        # Delegar al contador robusto de token_counters.py
+        return count_tokens(text, model)
+    except Exception as e:
+        # Fallback a estimación simple en caso de error
+        logger.warning(f"Error usando count_tokens, usando estimación simple: {str(e)}")
+        return int(len(text.split()) * 1.3)
 
 async def track_usage(
     tenant_id: str,

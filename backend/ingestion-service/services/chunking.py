@@ -14,6 +14,7 @@ import os
 import tempfile
 import mimetypes
 import hashlib
+import time
 import tiktoken
 from typing import List, Dict, Any, Optional, Union, BinaryIO, Tuple
 from pathlib import Path
@@ -37,7 +38,7 @@ from bs4 import BeautifulSoup
 from common.errors import ServiceError, ErrorCode, DocumentProcessingError, ValidationError, handle_errors
 from common.config.tiers import get_tier_limits
 from common.context import with_context, Context
-from common.tracking import track_token_usage
+from common.tracking import track_token_usage, TOKEN_TYPE_LLM, OPERATION_GENERATION, estimate_prompt_tokens
 from common.cache.manager import CacheManager
 from common.cache import get_with_cache_aside, invalidate_document_update
 
@@ -282,6 +283,33 @@ async def split_text_with_llama_index(
             secondary_chunking_regex="[^,.;:\n]+[,.;:\n]",  # Divide por frases
         )
         
+        # Calcular tokens para tracking antes del chunking (solo si se usara LLM, pero podemos trackear el texto de entrada)
+        # Esto permitirá entender el costo de procesamiento y chunking del documento
+        text_tokens = await estimate_prompt_tokens(text)
+        
+        # Registrar uso de tokens para el proceso de chunking
+        doc_hash = hashlib.md5(text[:200].encode()).hexdigest()[:10] # Usar parte del texto para el hash
+        collection_id = metadata.get("collection_id")
+        idempotency_key = f"chunk:{tenant_id}:{document_id}:{doc_hash}:{int(time.time())}"
+        
+        await track_token_usage(
+            tenant_id=tenant_id,
+            tokens=text_tokens,
+            model="text-chunking-processor",  # Nombre estándar para el procesador de chunking
+            token_type=TOKEN_TYPE_LLM,  # Usar constante estandarizada
+            operation=OPERATION_GENERATION,  # Esta operación es más cercana a generación
+            collection_id=collection_id,
+            idempotency_key=idempotency_key,  # Prevenir doble conteo
+            metadata={
+                "document_id": document_id,
+                "operation": "chunking",
+                "chunk_size": chunk_size,
+                "chunk_overlap": chunk_overlap,
+                "text_length": len(text),
+                "tier": tier
+            }
+        )
+        
         # Dividir documento
         nodes = splitter.get_nodes_from_documents([document])
         
@@ -308,6 +336,18 @@ async def split_text_with_llama_index(
             })
         
         logger.info(f"Documento {document_id} dividido en {len(chunks)} chunks")
+        
+        # Registrar métricas adicionales sobre el resultado del chunking
+        try:
+            # Solo actualizamos los metadatos del tracking ya realizado
+            chunk_count = len(chunks)
+            chunk_sizes = [len(chunk["text"]) for chunk in chunks]
+            avg_chunk_size = sum(chunk_sizes) / chunk_count if chunk_count else 0
+            
+            logger.debug(f"Estadísticas de chunking: {chunk_count} chunks, tamaño promedio: {avg_chunk_size:.2f} caracteres")
+        except Exception as metrics_err:
+            logger.warning(f"Error registrando métricas de chunking: {str(metrics_err)}")
+        
         return chunks
         
     except Exception as e:
