@@ -4,8 +4,8 @@ from ..config import ERROR_TENANT_REQUIRED
 from .vars import get_current_tenant_id, get_full_context
 
 def validate_tenant_id(tenant_id: Optional[str]) -> str:
-    """Valida que el tenant_id no sea None ni 'default'."""
-    if not tenant_id or tenant_id == "default":
+    """Valida que el tenant_id no sea None ni '00000000-0000-0000-0000-000000000000'."""
+    if not tenant_id or tenant_id == "00000000-0000-0000-0000-000000000000":
         context = get_full_context()
         # Importación tardía para evitar ciclo circular
         from common.errors import ServiceError

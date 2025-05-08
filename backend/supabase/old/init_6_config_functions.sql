@@ -144,7 +144,7 @@ BEGIN
     SELECT config_value INTO v_result
     FROM ai.tenant_configurations
     WHERE 
-        tenant_id = 'default' AND 
+        tenant_id = '00000000-0000-0000-0000-000000000000' AND 
         config_key = p_config_key AND 
         scope = 'tenant' AND 
         scope_id IS NULL AND

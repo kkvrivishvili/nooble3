@@ -4,11 +4,10 @@
 -- Este archivo define el esquema inicial y las tablas principales
 -- para el sistema multi-tenant de Linktree AI.
 -- Fecha: 2025-04-03
-
 -- ===========================================
+
 -- PARTE 1: ESQUEMA BASE Y EXTENSIONES
 -- ===========================================
-
 -- Crear el esquema AI si no existe
 CREATE SCHEMA IF NOT EXISTS ai;
 
@@ -19,7 +18,6 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- ===========================================
 -- PARTE 2: TABLAS PRINCIPALES
 -- ===========================================
-
 -- Tabla base de tenants (esquema público)
 CREATE TABLE IF NOT EXISTS public.tenants (
     tenant_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -55,7 +53,6 @@ CREATE TABLE IF NOT EXISTS ai.tenant_stats (
 -- ===========================================
 -- PARTE 3: TABLA DE CONFIGURACIONES MULTI-TENANT
 -- ===========================================
-
 -- Tabla principal de configuraciones por tenant con soporte para jerarquía
 CREATE TABLE IF NOT EXISTS ai.tenant_configurations (
     id UUID DEFAULT uuid_generate_v4(),
@@ -69,7 +66,7 @@ CREATE TABLE IF NOT EXISTS ai.tenant_configurations (
     is_sensitive BOOLEAN DEFAULT FALSE,
     scope TEXT DEFAULT 'tenant',
     scope_id TEXT DEFAULT NULL,
-    PRIMARY KEY (tenant_id, config_key, environment, scope, COALESCE(scope_id, ''))
+    PRIMARY KEY (tenant_id, config_key, environment, scope, scope_id)
 );
 
 -- Índices para optimizar consultas de configuración

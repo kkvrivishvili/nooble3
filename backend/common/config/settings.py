@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     ingestion_service_url: str = Field("http://ingestion-service:8000", env="INGESTION_SERVICE_URL", description="URL del servicio de ingesta")
     
     # =========== Tenant por defecto ===========
-    default_tenant_id: str = Field("default", description="ID del tenant por defecto")
+    default_tenant_id: str = Field("00000000-0000-0000-0000-000000000000", description="ID del tenant por defecto")
     validate_tenant_access: bool = Field(False, description="Validar que el tenant esté activo")
     
     # =========== Logging ===========

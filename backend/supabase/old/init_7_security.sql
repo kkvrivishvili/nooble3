@@ -5,6 +5,10 @@
 -- asegurando el correcto aislamiento entre tenants y acceso público cuando corresponde
 -- Fecha: 2025-04-03
 
+-- Definir un UUID fijo para el tenant por defecto
+-- Este UUID se usará como tenant predeterminado en lugar de la cadena 'default'
+-- Usar el mismo UUID para pruebas y desarrollo (00000000-0000-0000-0000-000000000000)
+
 -- ===========================================
 -- PARTE 1: POLÍTICAS DE SEGURIDAD PARA CONFIGURACIONES
 -- ===========================================
@@ -19,7 +23,7 @@ FOR ALL
 TO authenticated
 USING (
     tenant_id::uuid = auth.uid()::uuid OR
-    tenant_id = 'default' OR
+    tenant_id = '00000000-0000-0000-0000-000000000000'::uuid OR
     (SELECT role FROM auth.users WHERE id = auth.uid()) = 'service_role'
 );
 
