@@ -185,6 +185,7 @@ async def check_embedding_service_status() -> str:
     """
     Verifica el estado detallado del servicio de embeddings.
     Intenta obtener más detalles usando el endpoint /status.
+    Soporta verificación de proveedores Ollama y Groq.
     
     Returns:
         str: Estado del servicio ("available", "degraded" o "unavailable")
@@ -202,10 +203,34 @@ async def check_embedding_service_status() -> str:
                 return "degraded"
                 
             status_data = response.json()
+            components = status_data.get("components", {})
             
-            # Verificar el estado del proveedor de embeddings
-            provider_status = status_data.get("components", {}).get("embedding_provider")
-            if provider_status == "degraded":
+            # Verificar el estado de Groq si está configurado
+            if components.get("groq_provider") == "unavailable":
+                logger.warning("Proveedor Groq no disponible")
+                # Si Groq está configurado como principal y no está disponible, es crítico
+                import os
+                if os.environ.get("USE_GROQ", "False").lower() == "true" and \
+                   os.environ.get("USE_OLLAMA", "False").lower() != "true":
+                    return "unavailable"
+                else:
+                    return "degraded"  # Hay fallback a Ollama
+            
+            # Verificar el estado de Ollama si está configurado
+            if components.get("ollama_provider") == "unavailable":
+                logger.warning("Proveedor Ollama no disponible")
+                # Si Ollama está configurado como principal y no está disponible, es crítico
+                import os
+                if os.environ.get("USE_OLLAMA", "False").lower() == "true" and \
+                   os.environ.get("USE_GROQ", "False").lower() != "true":
+                    return "unavailable"
+                else:
+                    return "degraded"  # Hay fallback a Groq
+            
+            # Si ambos están degradados pero no indisponibles, reportar como degradado
+            if (components.get("groq_provider") == "degraded" or 
+                components.get("ollama_provider") == "degraded"):
+                logger.warning("Al menos un proveedor de embeddings en estado degradado")
                 return "degraded"
                 
             return "available"

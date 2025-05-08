@@ -25,7 +25,16 @@ MAX_QUEUE_SIZE = 1000  # Tamaño máximo de la cola de trabajos
 WORKER_CONCURRENCY = MAX_WORKERS  # Número de workers concurrentes
 
 # Configuración de modelos
-DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"  # Modelo de embedding predeterminado
+# OpenAI
+DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"  # Modelo de embedding predeterminado para OpenAI
+
+# Ollama
+DEFAULT_OLLAMA_EMBEDDING_MODEL = "nomic-embed-text"  # Modelo de embedding predeterminado para Ollama
+
+# Groq
+DEFAULT_GROQ_MODEL = "llama3-70b-8192"  # Modelo predeterminado para Groq
+
+# Dimensiones de embeddings según modelo
 DEFAULT_EMBEDDING_DIMENSION = 1536  # Dimensión de embedding predeterminada
 
 # Tipos de archivo soportados

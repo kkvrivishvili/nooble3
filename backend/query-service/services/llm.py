@@ -13,6 +13,9 @@ from common.llm.ollama import get_llm_model
 from common.context import with_context, Context
 from common.errors import handle_errors, ErrorCode
 
+# Importar módulos de proveedores LLM
+from common.llm.groq import GroqLLM
+
 # Importar configuración centralizada del servicio
 from config.settings import get_settings
 from config.constants import (
@@ -20,8 +23,7 @@ from config.constants import (
     LLM_MAX_TOKENS,
     TIMEOUTS,
     DEFAULT_LLM_MODEL,
-    DEFAULT_EMBEDDING_MODEL,
-    USE_OLLAMA
+    DEFAULT_EMBEDDING_MODEL
 )
 
 logger = logging.getLogger(__name__)
@@ -56,13 +58,27 @@ async def get_llm_for_tenant(tenant_info: TenantInfo, requested_model: Optional[
         "max_tokens": settings.llm_max_tokens if hasattr(settings, 'llm_max_tokens') else LLM_MAX_TOKENS
     }
     
-    # Configurar el LLM según si usamos Ollama u OpenAI
-    if USE_OLLAMA:
-        # get_llm_model devuelve un modelo compatible con LlamaIndex
+    # Detectar y configurar el proveedor LLM correcto (Ollama, Groq u OpenAI)
+    if hasattr(settings, 'use_ollama') and settings.use_ollama:
+        # Usar Ollama (get_llm_model devuelve un modelo compatible con LlamaIndex)
         logger.info(f"Usando modelo Ollama: {model_name}")
         return get_llm_model(model_name, **common_params)
+    elif hasattr(settings, 'use_groq') and settings.use_groq:
+        # Usar Groq
+        logger.info(f"Usando modelo Groq: {model_name}")
+        # Verificar que tenemos la API key configurada
+        if not hasattr(settings, 'groq_api_key') or not settings.groq_api_key:
+            logger.error("API key de Groq no configurada")
+            raise ValueError("Se requiere API key de Groq para usar modelos de Groq")
+            
+        # Crear cliente Groq usando el wrapper compatible con LlamaIndex
+        return GroqLLM(
+            model=model_name,
+            api_key=settings.groq_api_key,
+            **common_params
+        )
     else:
-        # Usar OpenAI
+        # Usar OpenAI (default fallback)
         logger.info(f"Usando modelo OpenAI: {model_name}")
         return OpenAI(
             model=model_name,
