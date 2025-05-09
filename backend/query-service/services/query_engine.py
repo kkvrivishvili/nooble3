@@ -32,7 +32,8 @@ from common.llm.token_counters import count_tokens
 from common.models import TenantInfo
 from common.cache import (
     get_with_cache_aside,
-    generate_resource_id_hash
+    generate_resource_id_hash,
+    standardize_llama_metadata
 )
 
 logger = logging.getLogger(__name__)
@@ -169,6 +170,14 @@ async def process_query_with_sources(
                     # Limpiar metadatos (opcional)
                     if "embedding" in source_meta:
                         del source_meta["embedding"]
+                    
+                    # Estandarizar metadatos para asegurar consistencia entre servicios
+                    source_meta = standardize_llama_metadata(
+                        metadata=source_meta,
+                        tenant_id=tenant_id,
+                        collection_id=collection_id,
+                        ctx=ctx
+                    )
                     
                     # Agregar a fuentes
                     sources.append(

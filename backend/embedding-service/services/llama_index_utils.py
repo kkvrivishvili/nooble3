@@ -36,7 +36,9 @@ from common.cache import (
     get_default_ttl_for_data_type,
     SOURCE_CACHE, 
     SOURCE_SUPABASE, 
-    SOURCE_GENERATION
+    SOURCE_GENERATION,
+    standardize_llama_metadata,
+    track_chunk_cache_metrics
 )
 from common.db.tables import get_table_name
 from common.db.supabase import get_supabase_client
@@ -129,6 +131,9 @@ async def generate_embeddings_with_llama_index(
             }
         )
     
+    # Usar la función de estandarización de metadatos ya importada al inicio del archivo
+    # (No es necesario importarla aquí ya que la importamos a nivel de módulo)
+    
     # Crear hashes para los textos usando método estandarizado
     text_hashes = [generate_resource_id_hash(text) for text in texts]
     
@@ -144,6 +149,15 @@ async def generate_embeddings_with_llama_index(
     else:
         chunk_id = [None] * len(texts)
     
+    # Crear metadatos base estandarizados una sola vez para todo el lote
+    # Esto mejora el rendimiento al evitar estandarizar repetidamente los mismos metadatos base
+    base_metadata = standardize_llama_metadata(
+        metadata={},
+        tenant_id=tenant_id,
+        collection_id=collection_id,
+        ctx=ctx
+    )
+    
     # Procesar cada texto con el patrón Cache-Aside centralizado
     # Obtener resultados de caché
     cache_results = {}
@@ -158,14 +172,20 @@ async def generate_embeddings_with_llama_index(
             # Registrar métrica específica de chunk si hay chunk_id disponible
             if chunk_id and i < len(chunk_id) and chunk_id[i]:
                 try:
-                    from common.cache.helpers import track_chunk_cache_metrics
+                    # Usar track_chunk_cache_metrics ya importada al inicio del archivo
                     from common.core.constants import METRIC_CHUNK_CACHE_HIT
+                    
+                    # Crear metadatos específicos para este chunk
+                    chunk_metadata = dict(base_metadata)
+                    chunk_metadata["chunk_id"] = chunk_id[i]
+                    
                     await track_chunk_cache_metrics(
                         tenant_id=tenant_id,
                         chunk_id=chunk_id[i],
                         metric_type=METRIC_CHUNK_CACHE_HIT,
                         collection_id=collection_id,
-                        model_name=model_name
+                        model_name=model_name,
+                        extra_metadata=chunk_metadata  # Usar metadatos estandarizados
                     )
                 except Exception as e:
                     # No interrumpir el flujo principal si falla el tracking
@@ -235,15 +255,24 @@ async def generate_embeddings_with_llama_index(
                         
                         # Registrar métrica específica de chunk si hay chunk_id disponible
                         if chunk_id and i < len(chunk_id) and chunk_id[i]:
-                            from common.cache.helpers import track_chunk_cache_metrics
                             from common.core.constants import METRIC_CHUNK_CACHE_MISS, METRIC_CHUNK_EMBEDDING_GENERATION
+                            
+                            # Crear metadatos estandarizados específicos para este chunk
+                            chunk_metadata = dict(base_metadata)
+                            chunk_metadata["chunk_id"] = chunk_id[i]
+                            # Añadir métricas específicas de la generación
+                            chunk_metadata["latency_ms"] = latency_ms
+                            chunk_metadata["tokens"] = input_tokens
+                            chunk_metadata["model"] = model_name
+                            
+                            # Registrar métrica de cache miss
                             await track_chunk_cache_metrics(
                                 tenant_id=tenant_id,
                                 chunk_id=chunk_id[i],
                                 metric_type=METRIC_CHUNK_CACHE_MISS,
                                 collection_id=collection_id,
                                 model_name=model_name,
-                                extra_metadata={"latency_ms": latency_ms, "tokens": input_tokens}
+                                extra_metadata=chunk_metadata
                             )
                             
                             # También registrar generación de embedding
@@ -253,7 +282,7 @@ async def generate_embeddings_with_llama_index(
                                 metric_type=METRIC_CHUNK_EMBEDDING_GENERATION,
                                 collection_id=collection_id,
                                 model_name=model_name,
-                                extra_metadata={"latency_ms": latency_ms, "tokens": input_tokens}
+                                extra_metadata=chunk_metadata
                             )
                         
                         await track_token_usage(

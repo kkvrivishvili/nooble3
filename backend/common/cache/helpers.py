@@ -1048,6 +1048,84 @@ def deserialize_chunk_data(serialized_data: Dict[str, Any]) -> Dict[str, Any]:
     
     return deserialized
 
+def standardize_llama_metadata(
+    metadata: Dict[str, Any], 
+    tenant_id: str = None,
+    document_id: str = None,
+    chunk_id: str = None,
+    collection_id: str = None,
+    ctx: Optional[Context] = None
+) -> Dict[str, Any]:
+    """
+    Estandariza los metadatos para documentos y chunks de LlamaIndex.
+    
+    Garantiza consistencia entre servicios y compatibilidad total con get_with_cache_aside.
+    Mantiene todos los campos existentes y añade los obligatorios faltantes.
+    
+    Args:
+        metadata: Metadatos originales a estandarizar
+        tenant_id: ID de tenant explícito (obligatorio)
+        document_id: ID de documento explícito (requerido para chunks)
+        chunk_id: ID de chunk explícito
+        collection_id: ID de colección explícito
+        ctx: Contexto de la operación para valores por defecto
+        
+    Returns:
+        Dict[str, Any]: Metadatos estandarizados
+        
+    Raises:
+        ValueError: Si falta tenant_id o campos obligatorios
+    """
+    # Crear copia para no modificar el original
+    std_metadata = dict(metadata or {})
+    
+    # Priorizar valores explícitos proporcionados
+    if tenant_id:
+        std_metadata["tenant_id"] = tenant_id
+    if document_id:
+        std_metadata["document_id"] = document_id
+    if chunk_id:
+        std_metadata["chunk_id"] = chunk_id
+    if collection_id:
+        std_metadata["collection_id"] = collection_id
+        
+    # Usar valores del contexto como fallback
+    if ctx:
+        if "tenant_id" not in std_metadata and ctx.get_tenant_id():
+            std_metadata["tenant_id"] = ctx.get_tenant_id()
+        if "collection_id" not in std_metadata and hasattr(ctx, 'get_collection_id') and ctx.get_collection_id():
+            std_metadata["collection_id"] = ctx.get_collection_id()
+        if "agent_id" not in std_metadata and hasattr(ctx, 'get_agent_id') and ctx.get_agent_id():
+            std_metadata["agent_id"] = ctx.get_agent_id()
+        if "conversation_id" not in std_metadata and hasattr(ctx, 'get_conversation_id') and ctx.get_conversation_id():
+            std_metadata["conversation_id"] = ctx.get_conversation_id()
+    
+    # Verificar campos obligatorios
+    if "tenant_id" not in std_metadata:
+        raise ValueError("tenant_id es obligatorio en metadatos LlamaIndex")
+    
+    # Si es un chunk, verificar document_id
+    if chunk_id and "document_id" not in std_metadata:
+        logger.warning(f"chunk_id presente pero falta document_id en metadatos: {chunk_id}")
+    
+    # Añadir timestamp si no existe
+    if "created_at" not in std_metadata:
+        std_metadata["created_at"] = int(time.time())
+    
+    # Asegurar compatibilidad con sistema de chunk_id existente
+    # Si tenemos document_id y chunk_id que parece ser un índice numérico
+    if "document_id" in std_metadata and "chunk_id" in std_metadata:
+        # Verificar si ya tiene el formato esperado document_id_index
+        chunk_id_str = str(std_metadata["chunk_id"])
+        document_id_str = str(std_metadata["document_id"])
+        
+        # Si chunk_id no incluye el document_id, y es numérico o corto
+        if not chunk_id_str.startswith(document_id_str) and (chunk_id_str.isdigit() or len(chunk_id_str) < 5):
+            # Crear formato estándar document_id_index
+            std_metadata["chunk_id"] = f"{document_id_str}_{chunk_id_str}"
+    
+    return std_metadata
+
 def serialize_for_cache(value: Any, data_type: str) -> Any:
     """
     Serializa un valor para almacenar en caché según el tipo de datos.

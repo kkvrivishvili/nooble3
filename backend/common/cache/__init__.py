@@ -60,20 +60,21 @@ async def _initialize_cache_settings_async():
 
 from .manager import CacheManager, get_redis_client
 from .helpers import (
-    get_with_cache_aside,
-    serialize_for_cache,
-    deserialize_from_cache,
-    track_cache_metrics,
-    invalidate_coordinated,
-    invalidate_resource_cache,
-    invalidate_document_update,
-    invalidate_chunk_cache,
-    generate_resource_id_hash,
-    get_embeddings_batch_with_cache,
-    estimate_object_size,
-    get_default_ttl_for_data_type,
-    serialize_chunk_data,
     deserialize_chunk_data,
+    deserialize_from_cache,
+    estimate_object_size,
+    generate_resource_id_hash,
+    get_default_ttl_for_data_type,
+    get_embeddings_batch_with_cache,
+    get_with_cache_aside,
+    invalidate_chunk_cache,
+    invalidate_coordinated,
+    invalidate_document_update,
+    invalidate_resource_cache,
+    serialize_chunk_data,
+    serialize_for_cache,
+    standardize_llama_metadata,
+    track_cache_metrics,
     track_chunk_cache_metrics
 )
 

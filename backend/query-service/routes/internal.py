@@ -16,6 +16,7 @@ from common.errors import (
     RetrievalError, GenerationError, InvalidQueryParamsError,
     EmbeddingGenerationError, EmbeddingModelError, TextTooLargeError
 )
+from common.cache import standardize_llama_metadata
 from common.context import with_context, Context
 from common.auth import verify_tenant, validate_model_access
 from common.tracking import track_token_usage
@@ -285,9 +286,17 @@ async def internal_search(
         # Formatear resultados
         formatted_results = []
         for node in results:
+            # Estandarizar metadatos para asegurar consistencia entre servicios
+            standardized_metadata = standardize_llama_metadata(
+                metadata=node.metadata,
+                tenant_id=tenant_id,
+                collection_id=request.collection_id,
+                ctx=ctx
+            )
+            
             formatted_results.append({
                 "text": node.text,
-                "metadata": node.metadata,
+                "metadata": standardized_metadata,
                 "score": node.score if hasattr(node, "score") else 1.0,
                 "id": node.id if hasattr(node, "id") else "unknown"
             })

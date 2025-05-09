@@ -313,6 +313,17 @@ async def split_text_with_llama_index(
         # Dividir documento
         nodes = splitter.get_nodes_from_documents([document])
         
+        # Primero, estandarizar los metadatos base del documento
+        # Importamos del módulo completo para facilitar futuras refactorizaciones
+        from common.cache import standardize_llama_metadata
+        
+        # Obtener tenant_id de los metadatos o contexto
+        tenant_id = metadata.get("tenant_id")
+        if not tenant_id and ctx and hasattr(ctx, "tenant_id"):
+            tenant_id = ctx.tenant_id
+        
+        collection_id = metadata.get("collection_id")
+            
         # Convertir nodos a formato unificado
         chunks = []
         for i, node in enumerate(nodes):
@@ -320,15 +331,23 @@ async def split_text_with_llama_index(
             if not node_text:
                 continue
                 
-            # Obtener metadatos del nodo
-            node_metadata = dict(node.metadata)
-            node_metadata.update({
-                "document_id": document_id,
-                "chunk_index": i,
-                "chunk_id": f"{document_id}_{i}"
-            })
+            # Generar chunk_id consistente
+            chunk_id = f"{document_id}_{i}"
             
-            # Añadir el chunk
+            # Estandarizar metadatos con nuestra nueva función
+            node_metadata = standardize_llama_metadata(
+                metadata=dict(node.metadata),
+                tenant_id=tenant_id,
+                document_id=document_id,
+                chunk_id=chunk_id,
+                collection_id=collection_id,
+                ctx=ctx
+            )
+            
+            # Añadir campos adicionales específicos que no maneja la función estándar
+            node_metadata["chunk_index"] = i
+            
+            # Añadir el chunk con metadatos estandarizados
             chunks.append({
                 "id": node_metadata["chunk_id"],
                 "text": node_text,

@@ -194,7 +194,48 @@ async def invalidate_document_update(
     )
 ```
 
-### 6. Métricas Unificadas
+### 6. Estandarización de Metadatos LlamaIndex
+
+Para garantizar la consistencia en el manejo de metadatos a través de todos los servicios que utilizan LlamaIndex, se ha implementado una función centralizada `standardize_llama_metadata` en `common/cache/helpers.py`:
+
+```python
+def standardize_llama_metadata(
+    metadata: Dict[str, Any], 
+    tenant_id: str = None,
+    document_id: str = None,
+    chunk_id: str = None,
+    collection_id: str = None,
+    ctx: Optional[Context] = None
+) -> Dict[str, Any]:
+    """
+    Estandariza los metadatos para documentos y chunks de LlamaIndex.
+    
+    Garantiza consistencia entre servicios y asegura que todos los metadatos
+    tengan los campos obligatorios requeridos por el sistema.
+    
+    Args:
+        metadata: Metadatos originales 
+        tenant_id: ID de tenant (obligatorio)
+        document_id: ID de documento (requerido para chunks)
+        chunk_id: ID único del chunk
+        collection_id: ID de colección 
+        ctx: Contexto para obtener valores por defecto
+        
+    Returns:
+        Dict[str, Any]: Metadatos estandarizados
+    """
+```
+
+Esta función asegura que todos los metadatos tengan:
+- Un tenant_id válido (obligatorio)
+- Un document_id para chunks (obligatorio para chunks)
+- Un chunk_id con formato estandarizado
+- Timestamp de creación consistente
+- Compatibilidad con el sistema de caché
+
+Para más detalles sobre la implementación y uso, consulte [Estándar de Metadatos para LlamaIndex](./metadata_standard.md).
+
+### 7. Métricas Unificadas
 
 Se ha implementado una función centralizada `track_cache_metrics` que unifica el registro de todas las métricas relacionadas con caché:
 
