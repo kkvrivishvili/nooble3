@@ -286,20 +286,36 @@ class CacheManager:
             # Buscar en Redis
             redis_client = await get_redis_client()
             if not redis_client:
+                logger.warning(f"Redis no disponible, no se puede obtener {data_type}:{resource_id} de caché")
                 return None
                 
             for key in search_keys:
                 try:
                     value = await redis_client.get(key)
                     if value:
-                        # Usar la función de deserialización centralizada en lugar de importarla en cada llamada
+                        # Deserializar valor de caché
+                        deserialize_success = True
                         try:
-                            decoded = json.loads(value)
-                        except json.JSONDecodeError:
-                            # Si no es JSON válido, usar el valor tal cual
+                            if isinstance(value, str) and value.startswith('{') or value.startswith('['):
+                                decoded = json.loads(value)
+                            else:
+                                # Si no parece JSON válido, usar el valor tal cual
+                                decoded = value
+                        except json.JSONDecodeError as json_err:
+                            logger.debug(f"Valor no es JSON válido para {key}, usando raw: {str(json_err)}")
                             decoded = value
+                        except Exception as decode_err:
+                            logger.warning(f"Error deserializando valor para {key}: {str(decode_err)}")
+                            deserialize_success = False
+                            continue
                             
-                        result = self._deserialize_from_cache(decoded, data_type)
+                        # Aplicar deserialización específica del tipo
+                        try:
+                            result = self._deserialize_from_cache(decoded, data_type)
+                        except Exception as deserialize_err:
+                            logger.warning(f"Error en deserialización específica para {data_type}: {str(deserialize_err)}")
+                            # Tratar de utilizar el valor decodificado como fallback
+                            result = decoded
                         
                         # Guardar en memoria para futuras consultas
                         if use_memory:
@@ -308,7 +324,7 @@ class CacheManager:
                             
                         return result
                 except Exception as e:
-                    logger.warning(f"Error al leer de Redis con clave {key}: {e}")
+                    logger.warning(f"Error al leer de Redis con clave {key}: {str(e)}")
                     continue
                     
         finally:
@@ -450,7 +466,7 @@ class CacheManager:
         Método estático compatible que llama al método de instancia set().
         """
         instance = CacheManager.get_instance()
-        return await instance._set_internal(
+        return await instance.set(
             data_type=data_type,
             resource_id=resource_id,
             value=value,
@@ -458,74 +474,10 @@ class CacheManager:
             agent_id=agent_id,
             conversation_id=conversation_id,
             collection_id=collection_id,
-            ttl=ttl
-        )
-    
-    
-    async def _set_internal(
-        self,
-        data_type: str,
-        resource_id: str,
-        value: Any,
-        tenant_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
-        conversation_id: Optional[str] = None,
-        collection_id: Optional[str] = None,
-        ttl: Optional[int] = None,
-        use_memory: bool = True
-    ) -> bool:
-        """
-        Lógica real de almacenamiento en caché (privado).
-        """
-        tenant_id = tenant_id or get_current_tenant_id() or "system"
-        key = self._build_key(
-            data_type, resource_id, tenant_id, agent_id, conversation_id, collection_id
+            ttl=ttl,
+            use_memory=use_memory
         )
 
-        # Determinar TTL
-        if ttl is None:
-            ttl = DEFAULT_TTL_MAPPING.get(data_type, TTL_STANDARD)
-        elif ttl == 0:
-            ttl = 0
-        try:
-            # Usar la función de serialización centralizada en lugar de importarla en cada llamada
-            try:
-                value_to_cache = self._serialize_for_cache(value, data_type)
-            except Exception as e:
-                logger.warning(f"Error de serialización al guardar {data_type} en caché: {e}")
-                await track_cache_metrics(
-                    data_type=data_type,
-                    tenant_id=tenant_id,
-                    metric_type=METRIC_SERIALIZATION_ERROR,
-                    value=1,
-                    metadata={"error": str(e)}
-                )
-                return False
-            
-            # Convertir a JSON si no es un tipo primitivo
-            if not isinstance(value_to_cache, (str, bytes)):
-                serialized = json.dumps(value_to_cache)
-            else:
-                serialized = value_to_cache
-                
-            # Guardar con TTL
-            redis_client = await get_redis_client()
-            if not redis_client:
-                logger.warning("Redis no disponible, no se puede guardar en caché.")
-                return False
-            if ttl > 0:
-                await redis_client.setex(key, ttl, serialized)
-            else:
-                await redis_client.set(key, serialized)
-                
-            # Guardar en memoria para acceso rápido
-            if use_memory:
-                self._add_to_memory_cache(key, value_to_cache, ttl)
-                
-            return True
-        except Exception as e:
-            logger.warning(f"Error al guardar en Redis con clave {key}: {e}")
-            return False
 
     def _add_to_memory_cache(self, key: str, value: Any, ttl: int = TTL_STANDARD):
         """
@@ -576,13 +528,16 @@ class CacheManager:
         # Eliminar de Redis
         redis_client = await get_redis_client()
         if not redis_client:
-            return True  # Ya se eliminó de memoria
+            logger.warning(f"Redis no disponible, no se puede eliminar de caché remota {data_type}:{resource_id}")
+            return True  # Consideramos éxito parcial ya que se eliminó de memoria
             
         try:
-            await redis_client.delete(key)
+            result = await redis_client.delete(key)
+            if result > 0:
+                logger.debug(f"Eliminada correctamente la clave {key} de Redis")
             return True
         except Exception as e:
-            logger.warning(f"Error al eliminar de Redis con clave {key}: {e}")
+            logger.warning(f"Error al eliminar de Redis con clave {key}: {str(e)}")
             return False
             
     @staticmethod
@@ -1073,50 +1028,24 @@ class CacheManager:
         Returns:
             int: Nuevo valor del contador
         """
-        try:
-            # Evitar recursión infinita, acceder directamente a la instancia sin usar increment_counter
-            instance = CacheManager.get_instance()
-            
-            # Preferir counter_type sobre scope si ambos están presentes
-            counter_type_to_use = counter_type or scope
-            
-            # En lugar de llamar recursivamente, replicamos la lógica esencial usando el método de instancia            
-            if counter_type_to_use is None:
-                logger.warning(f"Se debe proporcionar counter_type o scope para increment_counter")
-                counter_type_to_use = "unknown"
-                
-            # Obtenemos cliente redis y construimos la clave
-            redis_client = await instance._get_redis_client()
-            counter_key_parts = [tenant_id or "default", f"counter:{counter_type_to_use}"]
-            
-            # Añadir otros componentes del contexto si están presentes
-            if agent_id:
-                counter_key_parts.append(f"agent:{agent_id}")
-            if conversation_id:
-                counter_key_parts.append(f"conversation:{conversation_id}")
-            if collection_id:
-                counter_key_parts.append(f"collection:{collection_id}")
-            if token_type:
-                counter_key_parts.append(f"token_type:{token_type}")
-                
-            counter_key_parts.append(f"resource:{resource_id}")
-            counter_key = ":".join([part for part in counter_key_parts if part])
-            
-            # Incrementar contador en Redis
-            new_value = await redis_client.incrby(counter_key, amount)
-            if ttl:
-                await redis_client.expire(counter_key, ttl)
-                
-            # Actualizar metadata si está presente
-            if metadata:
-                metadata_key = f"{counter_key}:metadata"
-                await redis_client.hset(metadata_key, mapping=metadata)
-                await redis_client.expire(metadata_key, ttl or instance.ttl_extended)
-                
-            return new_value
-        except Exception as e:
-            logger.warning(f"Error en increment_counter estático: {str(e)}")
-            return amount  # Valor por defecto seguro
+        instance = CacheManager.get_instance()
+        
+        # Preferir counter_type sobre scope si ambos están presentes
+        counter_type_to_use = counter_type or scope
+        
+        # Delegar al método de instancia con los parámetros adecuados
+        return await instance.increment_counter(
+            counter_type=counter_type_to_use,
+            amount=amount,
+            resource_id=resource_id,
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+            collection_id=collection_id,
+            token_type=token_type,
+            metadata=metadata,
+            ttl=ttl
+        )
     
     async def get_counter(
         self,
@@ -1347,33 +1276,31 @@ class CacheManager:
         Método estático compatible que llama al método de instancia lpop().
         """
         instance = CacheManager.get_instance()
-        return await instance._lpop_impl(queue_name)
+        return await instance.lpop(queue_name)
 
-    async def _lpop_impl(self, queue_name: str) -> Optional[Any]:
-        """
-        Implementación real de lpop para Redis, sin recursión.
-        """
-        redis_client = await get_redis_client()
-        if not redis_client:
-            return None
-        try:
-            return await redis_client.lpop(queue_name)
-        except Exception as e:
-            logger.warning(f"Error al hacer lpop en Redis lista {queue_name}: {e}")
-            return None
+
     
     @staticmethod
     async def rpush(
         list_name: str,
         value: Any,
         tenant_id: Optional[str] = None,
-        expiry: int = 0
+        agent_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        collection_id: Optional[str] = None
     ) -> int:
         """
         Método estático compatible que llama al método de instancia rpush().
         """
         instance = CacheManager.get_instance()
-        return await instance.rpush(list_name, value, tenant_id, expiry)
+        return await instance.rpush(
+            list_name=list_name,
+            value=value,
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+            collection_id=collection_id
+        )
     
     @staticmethod
     async def get_counter(
@@ -1555,9 +1482,23 @@ class CacheManager:
         """
         OBSOLETO: Usar generate_resource_id_hash() de helpers.py en su lugar.
         
-        Mantiene compatibilidad con código existente.
+        Esta función está PROGRAMADA PARA ELIMINACIÓN en la próxima versión.
+        Todo el código existente debe migrar a generate_resource_id_hash().
         
-        Nota: Esta función existe por compatibilidad. Se recomienda usar 
-        generate_resource_id_hash en su lugar para nuevas implementaciones.
+        Args:
+            data: Datos para generar un hash
+            
+        Returns:
+            str: Hash generado de los datos
+            
+        Warnings:
+            DeprecationWarning: Este método está obsoleto y será eliminado.
         """
+        import warnings
+        warnings.warn(
+            "CacheManager._generate_hash() está obsoleto y programado para eliminación. "
+            "Use generate_resource_id_hash() en su lugar.",
+            DeprecationWarning, 
+            stacklevel=2
+        )
         return generate_resource_id_hash(data)

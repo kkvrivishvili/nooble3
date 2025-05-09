@@ -879,10 +879,13 @@ async def track_chunk_cache_metrics(
 
 async def track_cache_metrics(
     data_type: str,
-    tenant_id: str,
-    metric_type: str,
-    value: Union[bool, float, int],
+    tenant_id: Optional[str] = None,
+    metric_type: str = METRIC_CACHE_HIT,
+    value: Union[bool, float, int] = 1,
     agent_id: Optional[str] = None,
+    conversation_id: Optional[str] = None,
+    collection_id: Optional[str] = None,
+    token_type: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None
 ):
     """
@@ -893,78 +896,80 @@ async def track_cache_metrics(
     
     Args:
         data_type: Tipo de dato ("embedding", "vector_store", etc.)
-        tenant_id: ID del tenant
+        tenant_id: ID del tenant (opcional, se obtiene del contexto actual si no se proporciona)
         metric_type: Tipo de métrica (METRIC_CACHE_HIT, METRIC_LATENCY, etc.)
         value: Valor de la métrica (booleano para hit/miss, número para latencia/tamaño)
-        agent_id: ID del agente opcional
-        metadata: Metadatos adicionales
+        agent_id: ID del agente
+        conversation_id: ID de la conversación
+        collection_id: ID de la colección
+        token_type: Tipo de token si es aplicable
+        metadata: Metadatos adicionales para almacenar con la métrica
     """
+    # Si no hay tenant_id, no procesar la métrica para evitar datos inconsistentes
+    if not tenant_id:
+        from common.context import get_current_tenant_id
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            logger.debug(f"No se pudo registrar métrica {metric_type} para {data_type}: tenant_id no disponible")
+            return
+    
+    # Preparar metadatos completos
+    full_metadata = metadata or {}
+    if not isinstance(full_metadata, dict):
+        full_metadata = {"value": str(full_metadata)}
+        
+    # Asegurarse de incluir información del origen
+    if "source" not in full_metadata:
+        full_metadata["source"] = "cache_system"
+        
     try:
         # Conversión de valor según tipo de métrica
         if metric_type in [METRIC_CACHE_HIT, METRIC_CACHE_MISS]:
             # Para hit/miss, el valor es un booleano, incrementar contador en 1
             amount = 1
             counter_type = METRIC_CACHE_HIT if value else METRIC_CACHE_MISS
+            full_metadata["hit"] = bool(value)
         elif metric_type == METRIC_LATENCY:
             # Para latencia, el valor es un float (milisegundos)
             amount = int(value)  # Convertir a entero para contador
             counter_type = METRIC_LATENCY
-            if not metadata:
-                metadata = {}
-            metadata["latency_ms"] = value
+            full_metadata["latency_ms"] = float(value)
         elif metric_type == METRIC_CACHE_SIZE:
             # Para tamaño, el valor es un entero (bytes)
             amount = int(value)
             counter_type = METRIC_CACHE_SIZE
+            full_metadata["size_bytes"] = int(value)
         else:
             # Para otros tipos de métricas
             amount = 1 if isinstance(value, bool) else int(value)
             counter_type = metric_type
+            full_metadata["metric_value"] = value
         
         # Usar la función centralizada de incremento de contador
         from common.cache.manager import CacheManager
         await CacheManager.increment_counter(
-            scope=counter_type,
+            counter_type=counter_type,
             amount=amount,
             resource_id=data_type,
             tenant_id=tenant_id,
             agent_id=agent_id,
-            metadata=metadata
+            conversation_id=conversation_id,
+            collection_id=collection_id,
+            token_type=token_type,
+            metadata=full_metadata
         )
     except Exception as e:
-        logger.debug(f"Error al registrar métrica de caché {metric_type}: {str(e)}")
+        logger.warning(f"Error al registrar métrica de caché {metric_type} para {data_type}: {str(e)}")
 
 # Mantener funciones antiguas para compatibilidad pero delegando a la función centralizada
 
-async def track_cache_hit(data_type: str, tenant_id: str, hit: bool):
-    """Registra un acierto o fallo de caché."""
-    from common.cache.manager import CacheManager
-    await track_cache_metrics(
-        data_type=data_type,
-        tenant_id=tenant_id,
-        metric_type="cache_hit" if hit else "cache_miss",
-        value=hit
-    )
-    
-async def track_cache_metric(data_type: str, tenant_id: str, source: str, latency_ms: float):
-    """Registra la latencia de recuperación de datos."""
-    from common.cache.manager import CacheManager
-    await track_cache_metrics(
-        data_type=data_type,
-        tenant_id=tenant_id,
-        metric_type=f"latency_{source}",
-        value=latency_ms
-    )
-    
-async def track_cache_size(data_type: str, tenant_id: str, size_bytes: int):
-    """Registra el tamaño de los datos almacenados en caché."""
-    from common.cache.manager import CacheManager
-    await track_cache_metrics(
-        data_type=data_type,
-        tenant_id=tenant_id,
-        metric_type="cache_size",
-        value=size_bytes
-    )
+# Nota: Las siguientes funciones han sido eliminadas como parte de la refactorización
+# del módulo de caché para reducir redundancia:
+# - track_cache_hit
+# - track_cache_metric
+# - track_cache_size
+#
+# Usar track_cache_metrics directamente con los parámetros apropiados en su lugar.
 
 # Funciones de serialización/deserialización
 
@@ -1149,70 +1154,107 @@ def serialize_for_cache(value: Any, data_type: str) -> Any:
     """
     if value is None:
         return None
-        
-    # Para chunks, usar la función especializada
-    if data_type == "chunk" and isinstance(value, dict):
+    
+    # Usar un enfoque basado en diccionario para mayor eficiencia
+    serializer_map = {
+        "chunk": _serialize_chunk,
+        "embedding": _serialize_embedding,
+        "vector_store": _serialize_vector_store,
+        "query_result": _serialize_query_result
+    }
+    
+    # Usar el serializador especializado si existe, sino usar el genérico
+    serializer = serializer_map.get(data_type, _serialize_generic)
+    return serializer(value)
+
+
+def _serialize_chunk(value: Any) -> Any:
+    """Serializador específico para chunks."""
+    if isinstance(value, dict):
         return serialize_chunk_data(value)
+    return value
+
+
+def _serialize_embedding(value: Any) -> Any:
+    """Serializador optimizado para embeddings."""
+    # Caso más común primero: arrays numpy
+    if hasattr(value, '__module__') and value.__module__.startswith('numpy'):
+        return value.tolist() if hasattr(value, 'tolist') else value
     
-    # Detectar arrays numpy o tensores y convertirlos a listas planas
-    if data_type == "embedding":
-        # Para numpy arrays
-        if 'numpy' in str(type(value)) and hasattr(value, 'tolist'):
-            return value.tolist()
-        
-        # Para tensores PyTorch o TensorFlow
-        if 'torch' in str(type(value)) and hasattr(value, 'detach') and hasattr(value, 'cpu') and hasattr(value, 'numpy'):
+    # PyTorch tensors
+    if hasattr(value, '__module__') and value.__module__.startswith('torch'):
+        if hasattr(value, 'detach') and hasattr(value, 'cpu') and hasattr(value, 'numpy'):
             return value.detach().cpu().numpy().tolist()
-        
-        # Para tensores TensorFlow
-        if 'tensorflow' in str(type(value)) and hasattr(value, 'numpy'):
-            return value.numpy().tolist()
-            
-        # Para cualquier otro tipo array-like con método tolist
-        if hasattr(value, 'tolist'):
-            return value.tolist()
-        
-        # Si ya es una lista, asegurarse de que los valores son nativos de Python
-        if isinstance(value, list):
-            # Verificar si hay floats32 o tipos similares de numpy
-            if value and hasattr(value[0], 'item') and callable(value[0].item):
-                return [float(v.item()) if hasattr(v, 'item') else float(v) for v in value]
-            return value
-    
-    # Para vector_store, se necesita manejar la serialización de objetos específicos
-    elif data_type == "vector_store":
-        # Muchos vector_stores no son serializables directamente
-        # Se recomienda que los servicios específicos definan sus propios serializadores
         return value
     
-    # Para resultados de consulta
-    elif data_type == "query_result":
-        # Asegurar que solo se guarden tipos serializables a JSON
-        try:
-            # Intentar serializar a JSON para verificar
-            json.dumps(value)
-            return value
-        except (TypeError, ValueError):
-            # Intentar convertir a dict serializable
-            if hasattr(value, "__dict__"):
-                return value.__dict__
-            # Para casos complejos, convertir a string
-            return str(value)
+    # TensorFlow tensors
+    if hasattr(value, '__module__') and value.__module__.startswith('tensorflow'):
+        if hasattr(value, 'numpy'):
+            return value.numpy().tolist()
+        return value
     
-    # Para otros tipos de datos, intentar serializar directamente
+    # Cualquier otro array-like con método tolist
+    if hasattr(value, 'tolist'):
+        return value.tolist()
+    
+    # Si ya es una lista, normalizar valores
+    if isinstance(value, list):
+        # Optimización: solo convertir si hay elementos y no son tipos nativos
+        if value and not isinstance(value[0], (int, float, bool, str)):
+            # Verificar si hay tipos especiales como np.float32
+            if hasattr(value[0], 'item') and callable(value[0].item):
+                return [float(v.item()) if hasattr(v, 'item') else v for v in value]
+        return value
+    
+    # Fallback para cualquier otro tipo
+    return value
+
+
+def _serialize_vector_store(value: Any) -> Any:
+    """Serializador específico para vector stores."""
+    # Vector stores normalmente requieren serializadores específicos
+    # Este es un paso genérico, los servicios pueden extenderlo
+    if hasattr(value, 'to_dict'):
+        return value.to_dict()
+    return value
+
+
+def _serialize_query_result(value: Any) -> Any:
+    """Serializador específico para resultados de consultas."""
+    # Primera prueba: verificar si ya es serializable
     try:
-        # Probar si es serializable a JSON como está
         json.dumps(value)
         return value
     except (TypeError, ValueError):
-        # Si falla, intentar conversiones comunes
-        if hasattr(value, "to_dict"):
-            return value.to_dict()
-        elif hasattr(value, "__dict__"):
-            return value.__dict__
-        else:
-            # Último recurso: convertir a string
-            return str(value)
+        pass
+    
+    # Convertir a diccionario si es posible
+    if hasattr(value, '__dict__'):
+        return value.__dict__
+    if hasattr(value, 'to_dict'):
+        return value.to_dict()
+    
+    # Último recurso: representación string
+    return str(value)
+
+
+def _serialize_generic(value: Any) -> Any:
+    """Serializador genérico para cualquier tipo no especificado."""
+    # Comprobar serializabilidad JSON
+    try:
+        json.dumps(value)
+        return value
+    except (TypeError, ValueError):
+        pass
+    
+    # Intentar convertir a dict
+    if hasattr(value, 'to_dict'):
+        return value.to_dict()
+    elif hasattr(value, '__dict__'):
+        return value.__dict__
+    
+    # Último recurso: string
+    return str(value)
     
 
 def deserialize_from_cache(value: Any, data_type: str) -> Any:
@@ -1232,27 +1274,68 @@ def deserialize_from_cache(value: Any, data_type: str) -> Any:
     if value is None:
         return None
     
-    # La mayoría de los valores se pueden usar directamente
-    if data_type == "chunk":
+    # Usar un enfoque basado en diccionario para mayor eficiencia
+    deserializer_map = {
+        "chunk": _deserialize_chunk,
+        "embedding": _deserialize_embedding,
+        "vector_store": _deserialize_vector_store,
+        "query_result": _deserialize_query_result
+    }
+    
+    # Usar el deserializador especializado si existe, sino usar el genérico
+    deserializer = deserializer_map.get(data_type, _deserialize_generic)
+    return deserializer(value)
+
+
+def _deserialize_chunk(value: Any) -> Any:
+    """Deserializador específico para chunks."""
+    if isinstance(value, dict):
         return deserialize_chunk_data(value)
+    return value
+
+
+def _deserialize_embedding(value: Any) -> Any:
+    """Deserializador específico para embeddings.
     
-    elif data_type == "embedding":
-        # Los embeddings siempre se almacenan como listas planas
-        # Aquí dejamos que el servicio decida si necesita convertirlos a otro formato
-        return value
+    Los embeddings normalmente se almacenan como listas planas Python.
+    Los servicios pueden convertirlos al formato que necesiten (numpy, tensor, etc.)
+    después de obtenerlos de la caché.
+    """
+    # Si es una lista, asegurarse de que sea una lista de Python nativa
+    if isinstance(value, list) and value:
+        # Si los elementos son diccionarios o tipos complejos, mantenerlos tal cual
+        if isinstance(value[0], dict):
+            return value
+        # Asegurarse de que sean floats nativos si son números
+        if isinstance(value[0], (int, float, str)):
+            # Convertir enteros a float para consistencia con embeddings
+            return [float(v) if isinstance(v, int) else v for v in value]
+    return value
+
+
+def _deserialize_vector_store(value: Any) -> Any:
+    """Deserializador específico para vector stores.
     
-    elif data_type == "vector_store":
-        # Para vector_stores, verificar si necesita procesamiento específico
-        # Por ahora, devolver tal cual, pero los servicios pueden proporcionar 
-        # sus propios deserializadores si es necesario
-        return value
+    Para vector_stores, normalmente se necesita procesamiento específico
+    por parte del servicio que los utiliza.
+    """
+    # Este es un paso genérico, los servicios implementarán sus propios deserializadores
+    return value
+
+
+def _deserialize_query_result(value: Any) -> Any:
+    """Deserializador específico para resultados de consultas.
     
-    elif data_type == "query_result":
-        # Para resultados de consulta, asegurarse de que las estructuras estén correctas
-        # Si es un diccionario serializado desde un objeto, mantenerlo como dict
-        return value
-    
-    # Para otros tipos, retornar tal cual
+    Para resultados de consulta, se verifica la estructura.
+    """
+    # Si es un dict que representa un objeto serializado, mantenerlo como dict
+    # Los servicios pueden convertirlo a objetos específicos si es necesario
+    return value
+
+
+def _deserialize_generic(value: Any) -> Any:
+    """Deserializador genérico para cualquier tipo no especificado."""
+    # La mayoría de los valores se pueden usar directamente
     return value
 
 # Funciones utilitarias
