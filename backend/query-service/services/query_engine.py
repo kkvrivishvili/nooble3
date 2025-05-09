@@ -171,13 +171,37 @@ async def process_query_with_sources(
                     if "embedding" in source_meta:
                         del source_meta["embedding"]
                     
-                    # Estandarizar metadatos para asegurar consistencia entre servicios
-                    source_meta = standardize_llama_metadata(
-                        metadata=source_meta,
-                        tenant_id=tenant_id,
-                        collection_id=collection_id,
-                        ctx=ctx
-                    )
+                    # CRÍTICO: Estandarizar metadatos para asegurar consistencia con otros servicios
+                    # La estandarización garantiza que los metadatos en las fuentes devueltas sean
+                    # compatibles con el patrón de caché y mantengan trazabilidad entre servicios
+                    try:
+                        source_meta = standardize_llama_metadata(
+                            metadata=source_meta,
+                            tenant_id=tenant_id,  # Obligatorio para multitenancy
+                            collection_id=collection_id,  # Para agrupación por colección
+                            # Preservar document_id y chunk_id si existen en los metadatos originales
+                            document_id=source_meta.get("document_id"),
+                            chunk_id=source_meta.get("chunk_id"),
+                            ctx=ctx  # Contexto para valores por defecto
+                        )
+                    except ValueError as ve:
+                        # Errores de validación específicos (campos faltantes o formato incorrecto)
+                        logger.warning(f"Error en estandarización de metadatos: {str(ve)}",
+                                    extra={"collection_id": collection_id})
+                        # Garantizar metadatos mínimos para evitar fallos completos
+                        source_meta = standardize_llama_metadata(
+                            metadata={},  # Metadatos mínimos
+                            tenant_id=tenant_id
+                        )
+                        # Preservar score y contenido original para no perder información valiosa
+                        source_meta["standardization_error"] = str(ve)
+                    except Exception as e:
+                        # Otros errores inesperados, registrar pero continuar
+                        logger.error(f"Error inesperado en estandarización: {str(e)}")
+                        # Asegurar que al menos tengamos tenant_id
+                        if "tenant_id" not in source_meta:
+                            source_meta["tenant_id"] = tenant_id
+                        source_meta["error"] = "Metadata standardization failed"
                     
                     # Agregar a fuentes
                     sources.append(

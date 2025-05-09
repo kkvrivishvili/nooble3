@@ -331,20 +331,40 @@ async def split_text_with_llama_index(
             if not node_text:
                 continue
                 
-            # Generar chunk_id consistente
+            # Generar chunk_id consistente (formato estandarizado: document_id_índice)
             chunk_id = f"{document_id}_{i}"
             
-            # Estandarizar metadatos con nuestra nueva función
-            node_metadata = standardize_llama_metadata(
-                metadata=dict(node.metadata),
-                tenant_id=tenant_id,
-                document_id=document_id,
-                chunk_id=chunk_id,
-                collection_id=collection_id,
-                ctx=ctx
-            )
-            
+            # CRÍTICO: Estandarizar metadatos para garantizar consistencia en caché y tracking
+            # Esta estandarización asegura campos obligatorios como tenant_id y document_id
+            # y mantiene el formato consistente en todos los servicios (embedding, query, etc.)
+            try:
+                node_metadata = standardize_llama_metadata(
+                    metadata=dict(node.metadata),
+                    tenant_id=tenant_id,  # Campo crítico para multitenancy
+                    document_id=document_id,  # Obligatorio para chunks, permite trazabilidad
+                    chunk_id=chunk_id,  # Identificador único para este fragmento
+                    collection_id=collection_id,  # Necesario para caché jerárquica
+                    ctx=ctx  # Contexto para valores por defecto si faltan campos
+                )
+            except ValueError as ve:
+                # Errores específicos de metadatos (campos faltantes o formato incorrecto)
+                logger.error(f"Error en estandarización de metadatos: {str(ve)}",
+                           extra={"document_id": document_id, "chunk_id": chunk_id})
+                # Reintentar con metadatos básicos para evitar fallo total
+                node_metadata = standardize_llama_metadata(
+                    metadata={},  # Metadatos mínimos
+                    tenant_id=tenant_id,
+                    document_id=document_id,
+                    chunk_id=chunk_id
+                )
+            except Exception as e:
+                # Otros errores inesperados
+                logger.error(f"Error inesperado en estandarización: {str(e)}",
+                           extra={"document_id": document_id})
+                raise DocumentProcessingError(f"Error en metadatos: {str(e)}")
+                
             # Añadir campos adicionales específicos que no maneja la función estándar
+            # Estos campos son específicos de la ingestion y no forman parte del estándar común
             node_metadata["chunk_index"] = i
             
             # Añadir el chunk con metadatos estandarizados

@@ -149,54 +149,65 @@ async def generate_embeddings_with_llama_index(
     else:
         chunk_id = [None] * len(texts)
     
-    # Crear metadatos base estandarizados una sola vez para todo el lote
-    # Esto mejora el rendimiento al evitar estandarizar repetidamente los mismos metadatos base
-    base_metadata = standardize_llama_metadata(
-        metadata={},
-        tenant_id=tenant_id,
-        collection_id=collection_id,
-        ctx=ctx
-    )
+    # CRÍTICO: Estandarizar metadatos base para todo el lote
+    # La estandarización garantiza compatibilidad total con el sistema de caché centralizado
+    # y mantiene consistencia con los otros servicios (ingestion, query) para facilitar
+    # la trazabilidad de chunks/documentos y optimizar cache hits
+    try:
+        base_metadata = standardize_llama_metadata(
+            metadata={},
+            tenant_id=tenant_id,  # Campo obligatorio para multitenancy
+            collection_id=collection_id,  # Para búsqueda jerárquica en caché
+            ctx=ctx  # Contexto para valores por defecto
+        )
+    except ValueError as e:
+        # Errores específicos de validación de metadatos
+        logger.error(f"Error en estandarización de metadatos base: {str(e)}",
+                  extra={"tenant_id": tenant_id, "collection_id": collection_id})
+        # Crear metadatos mínimos para no fallar completamente
+        base_metadata = {
+            "tenant_id": tenant_id,
+            "created_at": int(time.time())
+        }
+        if collection_id:
+            base_metadata["collection_id"] = collection_id
+    except Exception as e:
+        # Errores inesperados
+        logger.error(f"Error inesperado en estandarización: {str(e)}")
+        raise ServiceError(
+            message=f"Error preparando metadatos: {str(e)}",
+            error_code=ErrorCode.PROCESSING_ERROR,
+            details={"tenant_id": tenant_id, "collection_id": collection_id}
+        )
     
-    # Procesar cada texto con el patrón Cache-Aside centralizado
-    # Obtener resultados de caché
-    cache_results = {}
-    cache_hits = 0
+    # Inicializar colecciones para resultados y métricas
+    result = [None] * len(texts)  # Lista para guardar embeddings resultantes
+    all_metrics = []  # Lista para almacenar métricas de cada texto
     
+    # Procesar cada texto utilizando el patrón Cache-Aside centralizado
     for i, text in enumerate(texts):
-        # Si ya tenemos embedding en caché, guardar el índice
-        if i in cache_entries and cache_entries[i] is not None:
-            cache_results[i] = cache_entries[i]
-            cache_hits += 1
-            
-            # Registrar métrica específica de chunk si hay chunk_id disponible
-            if chunk_id and i < len(chunk_id) and chunk_id[i]:
-                try:
-                    # Usar track_chunk_cache_metrics ya importada al inicio del archivo
-                    from common.core.constants import METRIC_CHUNK_CACHE_HIT
-                    
-                    # Crear metadatos específicos para este chunk
-                    chunk_metadata = dict(base_metadata)
-                    chunk_metadata["chunk_id"] = chunk_id[i]
-                    
-                    await track_chunk_cache_metrics(
-                        tenant_id=tenant_id,
-                        chunk_id=chunk_id[i],
-                        metric_type=METRIC_CHUNK_CACHE_HIT,
-                        collection_id=collection_id,
-                        model_name=model_name,
-                        extra_metadata=chunk_metadata  # Usar metadatos estandarizados
-                    )
-                except Exception as e:
-                    # No interrumpir el flujo principal si falla el tracking
-                    logger.debug(f"Error registrando métrica de chunk cache hit: {str(e)}")
-                    
         # Generar identificador consistente para este texto
         # Si tenemos un chunk_id, lo usamos para formar una clave de caché más específica
         if chunk_id and i < len(chunk_id) and chunk_id[i]:
             resource_id = f"{model_name}:{chunk_id[i]}:{text_hashes[i]}"
+            
+            # IMPORTANTE: Crear metadatos específicos para este chunk
+            # Estos metadatos garantizan que se puedan identificar correctamente los chunks
+            # en el sistema de caché y para métricas
+            try:
+                # Copiar metadatos base y enriquecer con información específica de chunk
+                chunk_specific_metadata = dict(base_metadata)
+                chunk_specific_metadata["chunk_id"] = chunk_id[i]
+                # Añadir document_id si está disponible en los metadatos originales
+                if isinstance(metadata, dict) and "document_id" in metadata:
+                    chunk_specific_metadata["document_id"] = metadata["document_id"]
+            except Exception as e:
+                # Si falla, usar un diccionario mínimo pero funcional
+                logger.warning(f"Error personalizando metadatos para chunk {chunk_id[i]}: {str(e)}")
+                chunk_specific_metadata = {"tenant_id": tenant_id, "chunk_id": chunk_id[i]}
         else:
             resource_id = f"{model_name}:{text_hashes[i]}"
+            chunk_specific_metadata = dict(base_metadata)
         
         # Definir función para buscar en base de datos
         async def fetch_embedding_from_db(resource_id, tenant_id, ctx):
@@ -308,7 +319,9 @@ async def generate_embeddings_with_llama_index(
             fetch_from_db_func=fetch_embedding_from_db,
             generate_func=generate_embedding,
             agent_id=ctx.get_agent_id() if ctx else None,
-            ctx=ctx,
+            conversation_id=ctx.get_conversation_id() if ctx else None,
+            collection_id=collection_id,
+            ctx=ctx
             # TTL se determina automáticamente por tipo de dato
         )
         
@@ -320,6 +333,25 @@ async def generate_embeddings_with_llama_index(
             # Actualizar métricas globales
             if text_metrics.get("source") == SOURCE_CACHE:
                 metrics["cached"] += 1
+                
+                # Registrar métrica específica de chunk si hay chunk_id disponible
+                if chunk_id and i < len(chunk_id) and chunk_id[i]:
+                    try:
+                        # Usar constante correcta de common.cache
+                        from common.core.constants import METRIC_CHUNK_CACHE_HIT
+                        
+                        await track_chunk_cache_metrics(
+                            tenant_id=tenant_id,
+                            chunk_id=chunk_id[i],
+                            metric_type=METRIC_CHUNK_CACHE_HIT,
+                            collection_id=collection_id,
+                            model_name=model_name,
+                            extra_metadata=chunk_specific_metadata  # Usar metadatos estandarizados
+                        )
+                    except Exception as e:
+                        # No interrumpir el flujo principal si falla el tracking
+                        logger.debug(f"Error registrando métrica de chunk cache hit: {str(e)}")
+                        
             elif text_metrics.get("source") == SOURCE_SUPABASE:
                 metrics["db_retrieved"] += 1
             elif text_metrics.get("source") == SOURCE_GENERATION:

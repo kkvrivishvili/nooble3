@@ -286,13 +286,44 @@ async def internal_search(
         # Formatear resultados
         formatted_results = []
         for node in results:
-            # Estandarizar metadatos para asegurar consistencia entre servicios
-            standardized_metadata = standardize_llama_metadata(
-                metadata=node.metadata,
-                tenant_id=tenant_id,
-                collection_id=request.collection_id,
-                ctx=ctx
-            )
+            # CRÍTICO: Estandarización de metadatos para consistencia en servicio de búsqueda interna
+            # Esta estandarización asegura que las respuestas de búsqueda tengan metadatos en el formato
+            # esperado por otros servicios, permitiendo trazabilidad entre sistemas y optimización de caché
+            try:
+                # Extraer valores existentes para preservarlos si es posible
+                document_id = node.metadata.get("document_id")
+                chunk_id = node.metadata.get("chunk_id")
+                
+                standardized_metadata = standardize_llama_metadata(
+                    metadata=node.metadata,
+                    tenant_id=tenant_id,  # Obligatorio para multitenancy
+                    collection_id=request.collection_id,  # Agrupación jerárquica
+                    document_id=document_id,  # Preservar relación con documento original
+                    chunk_id=chunk_id,  # Mantener identificador único del chunk
+                    ctx=ctx  # Contexto para valores por defecto
+                )
+            except ValueError as ve:
+                # Manejar errores de validación específicos
+                logger.warning(
+                    f"Error en estandarización de metadatos para búsqueda: {str(ve)}",
+                    extra={"collection_id": request.collection_id, "query": request.query[:50]}
+                )
+                # Garantizar metadatos mínimos para continuar el servicio
+                standardized_metadata = standardize_llama_metadata(
+                    metadata={},  # Metadatos mínimos
+                    tenant_id=tenant_id
+                )
+                standardized_metadata["standardization_error"] = str(ve)
+            except Exception as e:
+                # Errores inesperados no deben interrumpir el flujo
+                logger.error(f"Error inesperado en estandarización: {str(e)}")
+                standardized_metadata = {
+                    "tenant_id": tenant_id,
+                    "error": "Metadata standardization failed",
+                    "created_at": int(time.time())
+                }
+                if request.collection_id:
+                    standardized_metadata["collection_id"] = request.collection_id
             
             formatted_results.append({
                 "text": node.text,

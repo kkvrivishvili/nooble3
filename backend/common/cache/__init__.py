@@ -96,6 +96,7 @@ __all__ = [
     "serialize_chunk_data",
     "deserialize_chunk_data",
     "track_chunk_cache_metrics",
+    "standardize_llama_metadata",
     
     # Funciones de métricas y utilidades
     "track_cache_metrics",
