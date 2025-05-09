@@ -3,6 +3,19 @@
 -- =============================================
 -- Este archivo define las tablas para agentes, colecciones y sus relaciones
 -- Fecha: 2025-04-03
+-- IMPORTANTE: Este script requiere que la extensión pgvector esté instalada a nivel de sistema
+-- Si recibes un error sobre 'vector', necesitas instalar pgvector antes de ejecutar este script.
+
+-- Verificar que pgvector esté disponible
+DO $
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pgvector') THEN
+        RAISE NOTICE 'La extensión pgvector está instalada. Continuando con la creación de tablas.';
+    ELSE
+        RAISE EXCEPTION 'La extensión pgvector no está instalada. Por favor, instálala primero.';
+    END IF;
+END
+$;
 
 -- ===========================================
 -- PARTE 1: TABLAS PARA AGENTES
@@ -92,7 +105,7 @@ CREATE TABLE IF NOT EXISTS ai.document_chunks (
     document_id TEXT NOT NULL,
     chunk_index INTEGER NOT NULL,
     content TEXT NOT NULL,
-    embedding VECTOR(1536),
+    embedding vector(1536),  -- Usa el tipo vector proporcionado por pgvector
     metadata JSONB DEFAULT '{}'::jsonb,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT now(),

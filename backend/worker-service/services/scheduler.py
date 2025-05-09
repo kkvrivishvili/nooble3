@@ -9,8 +9,9 @@ import logging
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.executors.pool import ThreadPoolExecutor, ProcessPoolExecutor
 
-from common.config import get_settings
-from common.tracking import register_reconciliation_tasks
+from common.config.settings import get_service_settings
+# Importación directa del módulo de tareas para evitar dependencias innecesarias
+from common.tracking.scheduled_tasks import register_reconciliation_tasks
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,7 @@ def create_scheduler():
     Returns:
         AsyncIOScheduler: Instancia del scheduler de APScheduler
     """
-    settings = get_settings()
+    settings = get_service_settings("worker")
     
     # Configurar los executors para el scheduler
     executors = {

@@ -13,6 +13,23 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
+-- Intentar agregar extensión pgvector para manejo de vectores (embeddings)
+-- NOTA: Si esta extensión no está disponible, es necesario instalarla en el sistema
+-- antes de ejecutar la parte de agentes y colecciones. Ver instrucciones de instalación.
+DO $
+BEGIN
+    BEGIN
+        CREATE EXTENSION IF NOT EXISTS "pgvector";
+        RAISE NOTICE 'Extensión pgvector instalada correctamente';
+    EXCEPTION
+        WHEN OTHERS THEN
+            RAISE WARNING 'No se pudo instalar la extensión pgvector. Error: %', SQLERRM;
+            RAISE WARNING 'La extensión pgvector es necesaria para la funcionalidad de embeddings vectoriales.';
+            RAISE WARNING 'Instale pgvector en el sistema antes de continuar con los scripts que requieran esta funcionalidad.';
+    END;
+END
+$;
+
 -- Crear esquemas si no existen
 CREATE SCHEMA IF NOT EXISTS ai;
 CREATE SCHEMA IF NOT EXISTS vectors;

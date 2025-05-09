@@ -16,14 +16,15 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 
-from common.config import get_settings
+# Importaciones simplificadas para evitar dependencias innecesarias
+from common.config.settings import get_service_settings
 from common.utils.logging import init_logging
 from services.scheduler import initialize_scheduler
 from routes import register_routes
 from routes.health import set_scheduler
 
 # Configuración
-settings = get_settings()
+settings = get_service_settings("worker")
 logger = logging.getLogger("worker_service")
 init_logging(settings.log_level, service_name="worker-service")
 
