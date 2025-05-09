@@ -16,7 +16,7 @@ from ..llm.token_counters import count_tokens
 # Usamos solo las importaciones necesarias sin crear ciclos
 from ..db.supabase import get_supabase_client
 from ..db.tables import get_table_name
-from ..db.rpc import increment_token_usage as rpc_increment_token_usage
+# La función increment_token_usage ha sido eliminada y reemplazada por la implementación en este mismo archivo
 from ..config import get_settings
 from ..config.tiers import get_tier_rate_limit
 from ..context.vars import get_current_tenant_id, get_current_agent_id, get_current_conversation_id
@@ -193,25 +193,29 @@ async def track_token_usage(
             return True
         else:
             logger.warning(f"Resultado inesperado del RPC track_token_usage: {result.data}")
+            # Error al usar RPC directo, intentar con operación a nivel de tabla
+            # Esto es más robusto pero menos eficiente que el RPC
+            logger.info(f"Utilizando tracking directo a tabla para tokens")
             
-            # NOTA IMPORTANTE: Este es un mecanismo de fallback para mantener
-            # compatibilidad durante la migración. La dependencia circular
-            # (track_token_usage -> rpc_increment_token_usage -> track_token_usage)
-            # es intencional y temporal hasta que todos los servicios migren.
-            
-            # Usar la implementación anterior como fallback
-            logger.info(f"Utilizando mecanismo de fallback para tracking de tokens")
-            await rpc_increment_token_usage(
-                tenant_id=tenant_id,
-                agent_id=agent_id,
-                conversation_id=conversation_id,
-                token_type=token_type,
-                operation=operation,
-                tokens=tokens,
-                model=model,
-                metadata=full_metadata
-            )
-            return True
+            try:
+                # Insertar directamente en la tabla de token_usage
+                table_name = get_table_name("token_usage")
+                await supabase.table(table_name).insert({
+                    "tenant_id": tenant_id,
+                    "agent_id": agent_id,
+                    "conversation_id": conversation_id,
+                    "collection_id": collection_id,
+                    "token_type": token_type,
+                    "operation": operation,
+                    "tokens": tokens,
+                    "model": model,
+                    "metadata": full_metadata,
+                    "idempotency_key": idempotency_key
+                }).execute()
+                return True
+            except Exception as insert_err:
+                logger.error(f"Error en tracking directo: {str(insert_err)}")
+                return False
             
     except Exception as db_err:
         logger.error(f"Error registrando uso de tokens: {str(db_err)}", exc_info=True)
@@ -237,21 +241,24 @@ async def track_token_usage(
             except Exception as retry_err:
                 logger.warning(f"Error en reintento {retry+1}: {str(retry_err)}")
         
-        # Intentar con la implementación anterior como último recurso
-        # Este mecanismo de fallback es temporal hasta completar la migración
-        logger.warning(f"Usando fallback después de {max_retries} reintentos fallidos")
+        # Último recurso - inserción directa a la tabla
+        logger.warning(f"Usando inserción directa a tabla después de {max_retries} reintentos fallidos")
         try:
-            await rpc_increment_token_usage(
-                tenant_id=tenant_id,
-                agent_id=agent_id,
-                conversation_id=conversation_id,
-                token_type=token_type,
-                operation=operation,
-                tokens=tokens,
-                model=model,
-                metadata=full_metadata
-            )
-            logger.info(f"Fallback a rpc_increment_token_usage exitoso")
+            # Insertar directamente en la tabla de token_usage
+            table_name = get_table_name("token_usage")
+            await supabase.table(table_name).insert({
+                "tenant_id": tenant_id,
+                "agent_id": agent_id,
+                "conversation_id": conversation_id,
+                "collection_id": collection_id,
+                "token_type": token_type,
+                "operation": operation,
+                "tokens": tokens,
+                "model": model,
+                "metadata": full_metadata,
+                "idempotency_key": idempotency_key
+            }).execute()
+            logger.info(f"Inserción directa a tabla exitosa")
             return True
         except Exception as fallback_err:
             logger.error(f"Error en fallback de tracking: {str(fallback_err)}", exc_info=True)

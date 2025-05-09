@@ -74,6 +74,12 @@ class Settings(BaseSettings):
     default_ollama_llm_model: str = Field("qwen3:1.7b", env="DEFAULT_OLLAMA_LLM_MODEL", description="Modelo LLM predeterminado para Ollama")
     default_ollama_embedding_model: str = Field("nomic-embed-text", env="DEFAULT_OLLAMA_EMBEDDING_MODEL", description="Modelo de embedding para Ollama")
     
+    # =========== Configuración de Groq ===========
+    use_groq: bool = Field(False, env="USE_GROQ", description="Usar Groq para LLM")
+    groq_api_key: str = Field("", env="GROQ_API_KEY", description="Clave API de Groq")
+    default_groq_model: str = Field("llama3-70b-8192", env="DEFAULT_GROQ_MODEL", description="Modelo predeterminado para Groq")
+    default_groq_llm_model: str = Field("llama3-70b-8192", env="DEFAULT_GROQ_LLM_MODEL", description="Modelo LLM predeterminado para Groq")
+    
     # =========== API AI =========== 
     api_key_hash_salt: str = Field("default-salt", env="API_KEY_HASH_SALT", description="Salt para hash de claves de API")
     api_key_hash_iterations: int = Field(100000, description="Iteraciones de hash para claves de API")

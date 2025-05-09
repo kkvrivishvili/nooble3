@@ -11,7 +11,10 @@ import logging
 from typing import List, Dict, Any, Optional
 
 from ..cache import CacheManager
-from ..db.rpc import increment_token_usage_raw
+# La función increment_token_usage_raw ha sido eliminada y reemplazada por la implementación interna
+# Ver comentario en common/db/rpc.py
+from ..db.supabase import get_supabase_client
+from ..db.tables import get_table_name
 from ..context.vars import get_current_tenant_id
 
 logger = logging.getLogger(__name__)
@@ -45,14 +48,28 @@ async def reconcile_pending_tokens() -> int:
             try:
                 record = json.loads(record_json)
                 
-                # Intentar persistir nuevamente
-                success = await increment_token_usage_raw(
-                    tenant_id=record["tenant_id"],
-                    tokens=record["tokens"],
-                    agent_id=record.get("agent_id"),
-                    conversation_id=record.get("conversation_id"),
-                    token_type=record.get("token_type", "llm")
-                )
+                # Intentar persistir directamente en la tabla
+                try:
+                    # Obtener cliente y tabla
+                    supabase = await get_supabase_client()
+                    table_name = get_table_name("token_usage")
+                    
+                    # Insertar directamente en la tabla token_usage
+                    result = await supabase.table(table_name).insert({
+                        "tenant_id": record["tenant_id"],
+                        "tokens": record["tokens"],
+                        "agent_id": record.get("agent_id"),
+                        "conversation_id": record.get("conversation_id"),
+                        "token_type": record.get("token_type", "llm"),
+                        "operation": record.get("operation", "query"),
+                        "model": record.get("model"),
+                        "metadata": record.get("metadata", {})
+                    }).execute()
+                    
+                    success = result.data is not None
+                except Exception as e:
+                    logger.error(f"Error insertando token en reconciliación: {str(e)}")
+                    success = False
                 
                 if success:
                     # Eliminar de la lista de pendientes
@@ -158,13 +175,26 @@ async def consolidate_counters(
                             conversation_id = parts[i+1]
                     
                     # Persistir en base de datos
-                    success = await increment_token_usage_raw(
-                        tenant_id=current_tenant_id,
-                        tokens=token_count,
-                        token_type=current_token_type,
-                        agent_id=agent_id,
-                        conversation_id=conversation_id
-                    )
+                    try:
+                        # Obtener cliente y tabla
+                        supabase = await get_supabase_client()
+                        table_name = get_table_name("token_usage")
+                        
+                        # Insertar directamente en la tabla token_usage
+                        result = await supabase.table(table_name).insert({
+                            "tenant_id": current_tenant_id,
+                            "tokens": token_count,
+                            "token_type": current_token_type,
+                            "agent_id": agent_id,
+                            "conversation_id": conversation_id,
+                            "operation": "consolidated",
+                            "metadata": {"source": "consolidation"}
+                        }).execute()
+                        
+                        success = result.data is not None
+                    except Exception as e:
+                        logger.error(f"Error insertando token consolidado: {str(e)}")
+                        success = False
                     
                     if success:
                         consolidated_count += 1
@@ -236,11 +266,24 @@ async def audit_token_counters(
                     
                     # Si hay más tokens en Redis que en BD, reconciliar
                     if diff > 0:
-                        success = await increment_token_usage_raw(
-                            tenant_id=tenant,
-                            tokens=diff,
-                            token_type=token_type
-                        )
+                        try:
+                            # Obtener cliente y tabla
+                            supabase = await get_supabase_client()
+                            table_name = get_table_name("token_usage")
+                            
+                            # Insertar directamente en la tabla token_usage
+                            result = await supabase.table(table_name).insert({
+                                "tenant_id": tenant,
+                                "tokens": diff,
+                                "token_type": token_type,
+                                "operation": "audit_reconciliation",
+                                "metadata": {"source": "audit", "redis_count": count, "db_count": db_count}
+                            }).execute()
+                            
+                            success = result.data is not None
+                        except Exception as e:
+                            logger.error(f"Error en reconciliación de auditoría: {str(e)}")
+                            success = False
                         if success:
                             results["reconciled"] += 1
         

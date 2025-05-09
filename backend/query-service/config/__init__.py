@@ -29,11 +29,11 @@ from config.constants import (
     # Modelos predeterminados
     DEFAULT_LLM_MODEL,
     DEFAULT_EMBEDDING_MODEL,
-    DEFAULT_OLLAMA_MODEL,
     DEFAULT_OLLAMA_LLM_MODEL,
     DEFAULT_OLLAMA_EMBEDDING_MODEL,
-    # Configuración de proveedores
-    USE_OLLAMA,
+    DEFAULT_GROQ_MODEL,
+    DEFAULT_GROQ_LLM_MODEL,
+    # Nota: La configuración de proveedores (USE_OLLAMA, USE_GROQ) se obtiene de variables de entorno,
     # Límites de recursos
     MAX_DOC_SIZE_MB,
     # Rate Limiting
@@ -68,11 +68,10 @@ __all__ = [
     # Modelos predeterminados
     "DEFAULT_LLM_MODEL",
     "DEFAULT_EMBEDDING_MODEL",
-    "DEFAULT_OLLAMA_MODEL",
     "DEFAULT_OLLAMA_LLM_MODEL",
     "DEFAULT_OLLAMA_EMBEDDING_MODEL",
-    # Configuración de proveedores
-    "USE_OLLAMA",
+    "DEFAULT_GROQ_MODEL",
+    "DEFAULT_GROQ_LLM_MODEL",
     # Límites de recursos
     "MAX_DOC_SIZE_MB",
     # Rate Limiting
