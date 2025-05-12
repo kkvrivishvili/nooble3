@@ -280,7 +280,7 @@ async def download_file_from_storage(
     """
     Descarga un archivo desde Supabase Storage y lo guarda temporalmente.
     
-    Implementa el patrón Cache-Aside para evitar descargas innecesarias
+    Implementa el patrón Cache-Aside centralizado para evitar descargas innecesarias
     de archivos previamente procesados.
     
     Args:
@@ -294,123 +294,119 @@ async def download_file_from_storage(
     Raises:
         ServiceError: Si hay problemas al descargar el archivo
     """
-    # Asegurar que tenemos un tenant_id válido
+    # Validar que tenemos un tenant_id válido
     if ctx and ctx.has_tenant_id():
         tenant_id = ctx.get_tenant_id()
-        
-    if not tenant_id:
+    
+    if not tenant_id or tenant_id == "default":
         raise ServiceError(
             message="Se requiere un tenant_id válido para descargar archivos",
-            error_code="TENANT_REQUIRED",
+            error_code=ErrorCode.TENANT_REQUIRED,
             status_code=400
         )
     
-    # Generar un identificador único para este archivo que usaremos como clave de caché
-    # Esto sigue el estándar de caché del sistema
+    # Generar un identificador único para este archivo
     cache_key = generate_resource_id_hash(file_key)
     
-    # PASO 1: Verificar si ya tenemos en caché la ubicación de este archivo
-    # Implementación del patrón Cache-Aside
-    cached_path = await CacheManager.get(
-        data_type="file",
-        resource_id=cache_key,
-        tenant_id=tenant_id
-    )
+    # Función para descargar el archivo si no está en caché
+    async def fetch_file_from_storage(resource_id, tenant_id, ctx):
+        # Crear directorio temporal con nombre único basado en tenant
+        temp_dir = tempfile.mkdtemp(prefix=f"ingestion_{tenant_id}_")
+        
+        # Extraer nombre de archivo desde file_key y sanitizarlo
+        filename = os.path.basename(file_key)
+        if not filename or '..' in filename:  # Prevención de path traversal
+            filename = f"file_{uuid.uuid4().hex}"
+        
+        # Construir ruta completa al archivo temporal
+        temp_file_path = os.path.join(temp_dir, filename)
+        
+        try:
+            # Obtener cliente de Supabase
+            supabase = await get_supabase_client(tenant_id)
+            
+            # Separar bucket y path dentro del bucket desde file_key
+            # Formato esperado: bucket_name/path/to/file.ext
+            parts = file_key.split('/', 1)
+            if len(parts) < 2:
+                raise ServiceError(
+                    message=f"Formato de file_key inválido: {file_key}",
+                    error_code=ErrorCode.INVALID_PARAMS,
+                    status_code=400
+                )
+                
+            bucket_name, object_path = parts
+            
+            # Descargar archivo
+            start_time = time.time()
+            logger.info(f"Descargando archivo {object_path} desde bucket {bucket_name}")
+            
+            with open(temp_file_path, 'wb+') as f:
+                res = supabase.storage.from_(bucket_name).download(object_path)
+                f.write(res)
+            
+            download_time = time.time() - start_time
+            
+            # Verificar que el archivo se descargó correctamente
+            if not os.path.exists(temp_file_path) or os.path.getsize(temp_file_path) == 0:
+                raise ServiceError(
+                    message="Archivo descargado vacío o no existente",
+                    error_code=ErrorCode.STORAGE_ERROR,
+                    status_code=500
+                )
+                
+            logger.info(f"Archivo descargado exitosamente en {temp_file_path} en {download_time:.2f}s")
+            return temp_file_path
+            
+        except StorageException as e:
+            # Limpiar directorio temporal en caso de error
+            if os.path.exists(temp_dir):
+                import shutil
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                
+            logger.error(f"Error al descargar archivo desde Storage: {str(e)}")
+            return None
+        except Exception as e:
+            # Limpiar directorio temporal en caso de error genérico
+            if os.path.exists(temp_dir):
+                import shutil
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                
+            logger.error(f"Error inesperado al descargar archivo: {str(e)}")
+            return None
     
-    # Si encontramos el archivo en caché y existe en el sistema de archivos, retornarlo
-    if cached_path and os.path.exists(cached_path):
-        logger.info(f"Archivo encontrado en caché: {cached_path}")
+    # Función para validar que el archivo descargado existe físicamente
+    async def validate_cached_path(cached_path):
+        if not cached_path or not os.path.exists(cached_path):
+            return None
         return cached_path
     
-    # PASO 2: No está en caché o el archivo fue eliminado, descargar de nuevo
-    # Crear directorio temporal con nombre único basado en tenant y timestamp
-    temp_dir = tempfile.mkdtemp(prefix=f"ingestion_{tenant_id}_")
+    # Usar la implementación centralizada del patrón Cache-Aside
+    file_path, metrics = await get_with_cache_aside(
+        data_type="file",
+        resource_id=cache_key,
+        tenant_id=tenant_id,
+        fetch_from_db_func=fetch_file_from_storage,
+        validation_func=validate_cached_path,
+        ttl=CacheManager.ttl_extended,  # 24 horas para archivos
+        ctx=ctx
+    )
     
-    # Extraer nombre de archivo desde file_key
-    filename = os.path.basename(file_key)
-    if not filename:
-        filename = f"file_{uuid.uuid4().hex}"  # Generar un nombre si no se puede extraer
-    
-    # Construir ruta completa al archivo temporal
-    temp_file_path = os.path.join(temp_dir, filename)
-    
-    try:
-        # Obtener cliente de Supabase
-        supabase = get_supabase_client()
-        
-        # Separar bucket y path dentro del bucket desde file_key
-        # Formato esperado: bucket_name/path/to/file.ext
-        parts = file_key.split('/', 1)
-        if len(parts) < 2:
-            raise ServiceError(
-                message=f"Formato de file_key inválido: {file_key}",
-                error_code="INVALID_FILE_KEY",
-                status_code=400
-            )
-            
-        bucket_name, object_path = parts
-        
-        # Descargar archivo
-        start_time = time.time()
-        logger.info(f"Descargando archivo {object_path} desde bucket {bucket_name}")
-        
-        with open(temp_file_path, 'wb+') as f:
-            res = supabase.storage.from_(bucket_name).download(object_path)
-            f.write(res)
-        
-        download_time = time.time() - start_time
-        
-        # Verificar que el archivo se descargó correctamente
-        if not os.path.exists(temp_file_path) or os.path.getsize(temp_file_path) == 0:
-            raise ServiceError(
-                message="Archivo descargado vacío o no existente",
-                error_code="DOWNLOAD_ERROR",
-                status_code=500
-            )
-        
-        # PASO 3: Guardar en caché la ubicación del archivo con TTL adecuado
-        # Usar el TTL estándar según el tipo de dato (archivo)
-        await CacheManager.set(
-            data_type="file",
-            resource_id=cache_key,
-            value=temp_file_path,
-            tenant_id=tenant_id,
-            ttl=CacheManager.ttl_extended  # 24 horas para archivos
-        )
-            
-        logger.info(f"Archivo descargado exitosamente en {temp_file_path} en {download_time:.2f}s")
-        return temp_file_path
-        
-    except StorageException as e:
-        # Limpiar directorio temporal en caso de error
-        if os.path.exists(temp_dir):
-            import shutil
-            shutil.rmtree(temp_dir, ignore_errors=True)
-            
-        # Propagar error con contexto enriquecido
+    # Si no se pudo obtener el archivo, lanzar error
+    if not file_path:
         raise ServiceError(
-            message=f"Error al descargar archivo desde Storage: {str(e)}",
-            error_code="STORAGE_ERROR",
+            message=f"No se pudo descargar el archivo: {file_key}",
+            error_code=ErrorCode.STORAGE_ERROR,
             status_code=500,
             details={
                 "tenant_id": tenant_id,
                 "file_key": file_key,
-                "original_error": str(e)
+                "cache_metrics": metrics
             }
-        ) from e
-    except Exception as e:
-        # Limpiar directorio temporal en caso de error
-        if os.path.exists(temp_dir):
-            import shutil
-            shutil.rmtree(temp_dir, ignore_errors=True)
-            
-        # Propagar cualquier otro error
-        raise ServiceError(
-            message=f"Error inesperado al descargar archivo: {str(e)}",
-            error_code="DOWNLOAD_ERROR",
-            status_code=500,
-            details={
-                "tenant_id": tenant_id,
-                "file_key": file_key
-            }
-        ) from e
+        )
+    
+    # Si tenemos contexto, añadir métricas para análisis
+    if ctx:
+        ctx.add_metric("file_cache_metrics", metrics)
+    
+    return file_path

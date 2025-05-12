@@ -36,7 +36,7 @@ from llama_index.core import Document
 
 logger = logging.getLogger(__name__)
 
-@with_context(tenant=True)
+@with_context(tenant=True, validate_tenant=True)
 @handle_errors(error_type="service", log_traceback=True)
 async def generate_embeddings_for_chunks(
     chunks: List[Dict[str, Any]],
@@ -161,7 +161,7 @@ async def generate_embeddings_for_chunks(
             }
         )
 
-@with_context(tenant=True)
+@with_context(tenant=True, validate_tenant=True)
 @handle_errors(error_type="service", log_traceback=True)
 async def process_and_store_chunks(
     chunks: List[Dict[str, Any]],
@@ -248,7 +248,7 @@ async def create_supabase_vector_store(
             }
         )
 
-@with_context(tenant=True)
+@with_context(tenant=True, validate_tenant=True)
 @handle_errors(error_type="service", log_traceback=True)
 async def store_chunks_in_vector_store(
     chunks: List[Dict[str, Any]],

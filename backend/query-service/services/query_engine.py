@@ -188,19 +188,36 @@ async def process_query_with_sources(
                         # Errores de validación específicos (campos faltantes o formato incorrecto)
                         logger.warning(f"Error en estandarización de metadatos: {str(ve)}",
                                     extra={"collection_id": collection_id})
+                        # Preservar los IDs originales en un diccionario base para evitar pérdida de trazabilidad
+                        base_metadata = {
+                            # Preservar IDs esenciales para mantener trazabilidad
+                            "document_id": source_meta.get("document_id", ""),
+                            "chunk_id": source_meta.get("chunk_id", ""),
+                            "collection_id": collection_id
+                        }
+                        
                         # Garantizar metadatos mínimos para evitar fallos completos
                         source_meta = standardize_llama_metadata(
-                            metadata={},  # Metadatos mínimos
+                            metadata=base_metadata,  # Usar base con IDs preservados
                             tenant_id=tenant_id
                         )
-                        # Preservar score y contenido original para no perder información valiosa
+                        # Registrar el error para diagnóstico
                         source_meta["standardization_error"] = str(ve)
                     except Exception as e:
                         # Otros errores inesperados, registrar pero continuar
                         logger.error(f"Error inesperado en estandarización: {str(e)}")
-                        # Asegurar que al menos tengamos tenant_id
-                        if "tenant_id" not in source_meta:
-                            source_meta["tenant_id"] = tenant_id
+                        # Preservar los IDs originales en un diccionario base
+                        base_metadata = {
+                            "document_id": source_meta.get("document_id", ""),
+                            "chunk_id": source_meta.get("chunk_id", ""),
+                            "collection_id": collection_id,
+                            "tenant_id": tenant_id
+                        }
+                        
+                        # Crear metadatos mínimos con los IDs preservados
+                        source_meta = base_metadata
+                        # Registrar el error para diagnóstico
+                        source_meta["standardization_error"] = f"Error inesperado: {str(e)}"
                         source_meta["error"] = "Metadata standardization failed"
                     
                     # Agregar a fuentes
