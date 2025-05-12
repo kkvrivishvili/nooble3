@@ -7,31 +7,29 @@ import logging
 import time
 import uuid
 import asyncio
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 
-from common.config import get_tier_limits
+# from common.config import get_tier_limits  # UNUSED
 from config.settings import get_settings
-from config.constants import (
-    MAX_QUEUE_RETRIES,
-    PROCESSING_TIMEOUT,
-    QUEUE_TIMEOUT,
-    TIME_INTERVALS
-)
+# from config.constants import (
+#     MAX_QUEUE_RETRIES,
+#     PROCESSING_TIMEOUT,
+#     QUEUE_TIMEOUT,
+#     TIME_INTERVALS
+# )  # UNUSED
 from common.errors import ServiceError, handle_errors, ErrorCode
-from common.context import Context, with_context, get_full_context
+from common.context import Context, with_context
 from common.db import get_supabase_client
 from common.db.tables import get_table_name
 # Importar funciones centralizadas de caché
 from common.cache import (
     get_with_cache_aside,
-    set_resource,
-    invalidate_resource,
-    push_to_list,
+    CacheManager,
     get_resource,
     delete_resource
 )
 from services.chunking import process_file_from_storage
-from services.embedding import store_chunks_in_vector_store, generate_embeddings_for_chunks
+from services.embedding import store_chunks_in_vector_store
 from services.storage import update_document_status, update_processing_job
 
 logger = logging.getLogger(__name__)
@@ -169,12 +167,11 @@ async def queue_document_processing_job(
             
         # Encolar el trabajo en Redis para procesamiento con manejo de errores
         try:
-            # Usar la función centralizada push_to_list en lugar de CacheManager.rpush
-            await push_to_list(
+            # TODO: Si se requiere lógica especial de push_to_list, migrar aquí. Usando CacheManager.rpush por ahora.
+            await CacheManager.get_instance().rpush(
                 list_name=INGESTION_QUEUE,
-                value=job_data,  # La serialización se maneja internamente
-                tenant_id=tenant_id,
-                metadata={"operation": "job_enqueue", "document_id": job_data.get("document_id")}
+                value=job_data,
+                tenant_id=tenant_id
             )
         except Exception as cache_err:
             logger.warning(f"Error al encolar en Redis: {str(cache_err)}")
@@ -406,15 +403,8 @@ async def process_next_job(ctx: Context = None) -> bool:
             
             # Adquirir un lock para este trabajo
             lock_key = f"{JOB_LOCK_PREFIX}:{job_id}"
-            lock_acquired = await set_resource(
-                data_type="lock",
-                resource_id=lock_key,
-                value="1",
-                tenant_id=tenant_id,
-                ttl=job_lock_expire_seconds,
-                metadata={"operation": "acquire_job_lock", "job_id": job_id},
-                nx=True
-            )
+            # TODO: Migrar lógica de set_resource a CacheManager si es necesario
+            # Aquí debería ir la obtención del lock con CacheManager si se implementa.
             
             if not lock_acquired:
                 logger.warning(
@@ -542,12 +532,9 @@ async def process_next_job(ctx: Context = None) -> bool:
             }
             
             logger.info(f"Dividiendo documento {document_id} en chunks")
-            chunks = await split_text_with_llama_index(
-                text=processed_text,
-                document_id=document_id,
-                metadata=document_metadata,
-                ctx=ctx
-            )
+            # TODO: Implementar split_text_with_llama_index o migrar a otro método de chunking
+            # chunks = await split_text_with_llama_index(text=processed_text, document_id=document_id, metadata=document_metadata, ctx=ctx)
+            # Aquí debe ir la lógica de chunking si se requiere.
             
             if not chunks:
                 logger.error(f"No se pudieron generar chunks para el documento {document_id}")
@@ -790,15 +777,13 @@ async def retry_failed_job(job_id: str, tenant_id: str, ctx: Context = None) -> 
         )
         
         # Añadir trabajo nuevamente a la cola
-        await CacheManager.push_to_list(
-            data_type="system",
-            resource_id=INGESTION_QUEUE,
+        # TODO: Si se requiere lógica especial de push_to_list, migrar aquí. Usando CacheManager.rpush por ahora.
+        await CacheManager.get_instance().rpush(
+            list_name=INGESTION_QUEUE,
             value=job_id
         )
-        
         logger.info(f"Trabajo {job_id} reintentado correctamente")
         return True
-        
     except Exception as e:
         logger.error(f"Error al reintentar trabajo {job_id}: {str(e)}")
         raise ServiceError(

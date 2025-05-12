@@ -12,8 +12,8 @@ from common.cache import (
     get_with_cache_aside,
     generate_resource_id_hash,
     invalidate_document_update,
-    invalidate_resource,
-    set_resource
+
+
 )
 from common.context import with_context, Context
 
