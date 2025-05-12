@@ -30,7 +30,8 @@ from common.models import HealthResponse, ServiceStatusResponse
 from common.errors import handle_errors
 from common.context import with_context, Context
 from common.helpers.health import basic_health_check, detailed_status_check, get_service_health
-from common.cache.manager import CacheManager, get_redis_client
+from common.cache import get_with_cache_aside, get_redis_client
+from common.cache.helpers import track_cache_metrics
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
 
@@ -60,6 +61,13 @@ embedding_cache_hits: int = 0              # Contador de hits en cache
 embedding_cache_misses: int = 0            # Contador de misses en cache
 MAX_LATENCY_SAMPLES = METRICS_CONFIG['max_latency_samples']  # Máximo número de muestras para cálculo de latencia
 LAST_API_RATE_CHECK = time.time() - TIME_INTERVALS["rate_limit_expiry"]   # Última vez que se verificó el rate limit
+
+# Umbrales para health checks
+CACHE_EFFICIENCY_THRESHOLDS = {
+    "min_requests": 10,  # Mínimo número de requests para considerar métricas válidas
+    "good_hit_ratio": 0.7,  # 70% o más de hit ratio es bueno
+    "degraded_hit_ratio": 0.4,  # Entre 40% y 70% es degradado
+}
 
 @router.get("/health", response_model=None, 
            summary="Estado básico del servicio",
@@ -567,14 +575,6 @@ async def get_cache_metrics() -> Dict[str, Any]:
     
     # Recopilar métricas de tamaño/utilización (simuladas)
     cache_size = 0
-    cache_ttl = 0
-    
-    if cache_available:
-        try:
-            # Implementar lectura real de métricas de Redis
-            pass
-        except Exception:
-            pass
             
     return {
         "enabled": settings.embedding_cache_enabled,
@@ -727,13 +727,43 @@ def record_embedding_latency(latency_ms: float) -> None:
 def record_cache_hit() -> None:
     """
     Registra un hit en la caché para estadísticas.
+    Utiliza track_cache_metrics para registrar según el patrón centralizado.
     """
     global embedding_cache_hits
     embedding_cache_hits += 1
+    
+    # Usar el sistema centralizado para registrar la métrica
+    # Este código se ejecuta de forma asíncrona para no bloquear
+    try:
+        asyncio.create_task(
+            track_cache_metrics(
+                data_type="embedding",
+                tenant_id="system",  # Usamos system para métricas globales del servicio
+                metric_type="cache_hit",
+                value=1
+            )
+        )
+    except Exception as e:
+        logger.debug(f"Error registrando hit de caché: {str(e)}")
 
 def record_cache_miss() -> None:
     """
     Registra un miss en la caché para estadísticas.
+    Utiliza track_cache_metrics para registrar según el patrón centralizado.
     """
     global embedding_cache_misses
     embedding_cache_misses += 1
+    
+    # Usar el sistema centralizado para registrar la métrica
+    # Este código se ejecuta de forma asíncrona para no bloquear
+    try:
+        asyncio.create_task(
+            track_cache_metrics(
+                data_type="embedding",
+                tenant_id="system",  # Usamos system para métricas globales del servicio
+                metric_type="cache_miss",
+                value=1
+            )
+        )
+    except Exception as e:
+        logger.debug(f"Error registrando miss de caché: {str(e)}")

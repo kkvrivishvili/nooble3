@@ -9,12 +9,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 # Utilidades comunes para todos los servicios
-from common.errors import setup_error_handling
+from common.errors import setup_error_handling, handle_errors
 from common.utils.logging import init_logging
-from common.context import Context
+from common.context import Context, with_context
 from common.db.supabase import init_supabase
+from common.cache import get_with_cache_aside
 from common.swagger import configure_swagger_ui
-from common.cache.manager import CacheManager
 from common.utils.rate_limiting import setup_rate_limiting
 from common.config.tiers import is_development_environment, should_use_mock_config
 
@@ -37,9 +37,18 @@ async def lifespan(app: FastAPI):
         # Inicializar Supabase
         await init_supabase()
         
-        # Verificar conexión al sistema de caché unificado
+        # Verificar conexión al sistema de caché unificado usando el patrón centralizado
         try:
-            await CacheManager.get(data_type="system", resource_id="health_check")
+            # Usamos una función simple que siempre retorna None como fetch_from_db_func para test
+            async def noop_fetch(resource_id, tenant_id, ctx=None):
+                return None
+                
+            result, metrics = await get_with_cache_aside(
+                data_type="system", 
+                resource_id="health_check",
+                tenant_id=settings.default_tenant_id,
+                fetch_from_db_func=noop_fetch
+            )
             logger.info("Conexión a Cache establecida correctamente")
         except Exception as e:
             logger.warning(f"Cache no disponible: {e}")

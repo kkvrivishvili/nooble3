@@ -21,7 +21,7 @@ from common.errors import (
 )
 from common.config.tiers import get_available_embedding_models
 from common.tracking import track_token_usage, estimate_prompt_tokens, TOKEN_TYPE_EMBEDDING, OPERATION_QUERY, OPERATION_BATCH, OPERATION_INTERNAL
-from common.cache import generate_resource_id_hash
+from common.cache import generate_resource_id_hash, invalidate_document_update
 
 # Importar configuración centralizada
 from config.constants import (
@@ -37,6 +37,8 @@ from services.embedding_provider import CachedEmbeddingProvider
 router = APIRouter()
 settings = get_settings()
 logger = logging.getLogger(__name__)
+
+_invalidation_count = 0
 
 async def _validate_and_get_model(tenant_info: TenantInfo, requested_model: str) -> Tuple[str, Dict]:
     """
@@ -513,3 +515,65 @@ async def internal_embed(
                 "timestamp": time.time()
             }
         )
+
+
+@router.post("/internal/invalidate", response_model=Dict[str, Any],
+            summary="Invalidar caché de documento",
+            description="Invalida la caché de un documento actualizado de forma coordinada")
+@with_context(tenant=True, validate_tenant=True)
+@handle_errors(error_type="service", log_traceback=True)
+async def internal_invalidate_document(
+    document_id: str = Body(..., description="ID del documento a invalidar"),
+    tenant_id: str = Body(..., description="ID del tenant"),
+    collection_id: Optional[str] = Body(None, description="ID de la colección (opcional)"),
+    ctx: Context = None
+) -> Dict[str, Any]:
+    """
+    Endpoint interno para invalidar la caché de forma coordinada cuando un documento es actualizado.
+    
+    Este endpoint utiliza el patrón centralizado de invalidate_document_update para garantizar
+    que todas las cachés relacionadas (embeddings, vector store, consultas) se invaliden
+    correctamente cuando un documento es actualizado.
+    
+    Args:
+        document_id: ID del documento actualizado
+        tenant_id: ID del tenant propietario del documento
+        collection_id: ID de la colección a la que pertenece el documento (opcional)
+        
+    Returns:
+        Dict[str, Any]: Resumen de la invalidación con conteo por tipo
+    """
+    # Usar el tenant_id del contexto si está disponible
+    if ctx and ctx.has_tenant_id():
+        tenant_id = ctx.get_tenant_id()
+    
+    # Registrar la operación
+    global _invalidation_count
+    _invalidation_count += 1
+    
+    logger.info(
+        f"Invalidando cachés para documento {document_id} del tenant {tenant_id} "
+        f"colección {collection_id or 'N/A'}"
+    )
+    
+    # Utilizar la función centralizada para invalidación coordinada
+    invalidation_results = await invalidate_document_update(
+        tenant_id=tenant_id,
+        document_id=document_id,
+        collection_id=collection_id
+    )
+    
+    # Registrar información detallada en nivel debug
+    logger.debug(f"Resultado de invalidación: {invalidation_results}")
+    
+    # Devolver resultado estandarizado
+    return {
+        "success": True,
+        "message": f"Caché invalidada para documento {document_id}",
+        "data": invalidation_results,
+        "metadata": {
+            "total_items": sum(invalidation_results.values()) if invalidation_results else 0,
+            "timestamp": time.time(),
+            "service": "embedding-service"
+        }
+    }
