@@ -20,7 +20,7 @@ from common.errors import (
 from common.context import with_context, Context
 from common.utils.http import call_service
 from common.cache import invalidate_document_update
-from common.tracking import track_token_usage
+from common.tracking import track_token_usage, TOKEN_TYPE_EMBEDDING, OPERATION_EMBEDDING
 
 # Importar configuración centralizada del servicio
 from config.settings import get_settings
@@ -108,12 +108,24 @@ async def generate_embeddings_for_chunks(
         
         # Registrar uso de tokens si está disponible
         if "token_usage" in metadata and ctx:
+            tokens = metadata["token_usage"]
+            used_model = model or metadata.get("model", "unknown")
+            
+            # Generar clave de idempotencia basada en los datos de la operación
+            idempotency_key = f"{tenant_id}:{used_model}:{collection_id}:{','.join(chunk_id_list)}"
+            
             await track_token_usage(
                 tenant_id=tenant_id,
-                token_usage=metadata["token_usage"],
-                operation="embedding",
-                model=model or metadata.get("model", "unknown"),
-                ctx=ctx
+                tokens=tokens,
+                model=used_model,
+                collection_id=collection_id,
+                token_type=TOKEN_TYPE_EMBEDDING,
+                operation=OPERATION_EMBEDDING,
+                metadata={
+                    "chunk_count": len(chunks),
+                    "service": "ingestion"
+                },
+                idempotency_key=idempotency_key
             )
         
         execution_time = time.time() - start_time

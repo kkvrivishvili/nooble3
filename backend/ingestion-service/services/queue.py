@@ -24,11 +24,9 @@ from common.db.tables import get_table_name
 # Importar funciones centralizadas de caché
 from common.cache import (
     get_with_cache_aside,
-    CacheManager,
-    get_resource,
-    delete_resource
+    CacheManager
 )
-from services.chunking import process_file_from_storage
+from services.chunking import process_file_from_storage, split_text_with_llama_index
 from services.embedding import store_chunks_in_vector_store
 from services.storage import update_document_status, update_processing_job
 
@@ -42,33 +40,85 @@ JOB_STATUS_PREFIX = "job_status:"
 JOB_LOCK_PREFIX = "job_lock"  # Prefijo para los bloqueos de trabajos
 JOB_LOCK_EXPIRY = 600  # 10 minutos en segundos (tiempo máximo para procesar un trabajo)
 
+async def acquire_job_lock(job_id: str, tenant_id: str, expiry_seconds: int = 600) -> bool:
+    """
+    Adquiere un lock para un trabajo usando CacheManager.
+    
+    Implementa el patrón Cache-Aside consistente para locks distribuidos.
+    
+    Args:
+        job_id: ID del trabajo
+        tenant_id: ID del tenant
+        expiry_seconds: Tiempo de expiración del lock en segundos
+        
+    Returns:
+        bool: True si se adquirió el lock, False en caso contrario
+    """
+    lock_key = f"{JOB_LOCK_PREFIX}:{job_id}"
+    
+    # Usar el método correcto de CacheManager para set con NX (set if not exists)
+    lock_acquired = await CacheManager.set_if_not_exists(
+        data_type="lock",
+        resource_id=lock_key,
+        value=str(time.time()),
+        ttl=expiry_seconds,
+        tenant_id=tenant_id
+    )
+    
+    return lock_acquired
+
+async def release_job_lock(job_id: str, tenant_id: str) -> bool:
+    """
+    Libera un lock adquirido previamente.
+    
+    Args:
+        job_id: ID del trabajo
+        tenant_id: ID del tenant
+        
+    Returns:
+        bool: True si se liberó correctamente
+    """
+    lock_key = f"{JOB_LOCK_PREFIX}:{job_id}"
+    
+    # Usar el método apropiado de CacheManager
+    await CacheManager.delete(
+        data_type="lock",
+        resource_id=lock_key,
+        tenant_id=tenant_id
+    )
+    
+    return True
+
 async def initialize_queue():
     """Inicializa el sistema de colas."""
-    # Comprobar la disponibilidad del servicio de caché usando Redis directamente
+    # Comprobar la disponibilidad del servicio de caché utilizando CacheManager
     try:
-        # Importar Redis directamente y verificar conexión
-        import redis.asyncio as redis
-        if settings.redis_url:
-            try:
-                redis_client = redis.from_url(settings.redis_url)
-                # Realizar una operación simple para verificar conexión
-                await redis_client.set("ingestion-service:queue_test", "ok", ex=10)
-                test_value = await redis_client.get("ingestion-service:queue_test")
-            except Exception as cache_err:
-                logger.warning(f"Error conectando a Redis: {str(cache_err)}")
-                test_value = None
-        
-            if test_value is not None:
-                logger.info("Sistema de colas inicializado correctamente")
-                return True
-            else:
-                logger.warning("Redis no disponible - procesamiento asíncrono deshabilitado")
-                return False
+        # Utilizar CacheManager para verificar la disponibilidad de la caché
+        # siguiendo el patrón estandarizado
+        try:
+            # Realizar una operación simple para verificar conexión
+            await CacheManager.set(
+                data_type="system",
+                resource_id="queue_test",
+                value="ok",
+                ttl=10  # Expiración de 10 segundos
+            )
+            test_value = await CacheManager.get(
+                data_type="system",
+                resource_id="queue_test"
+            )
+        except Exception as cache_err:
+            logger.warning(f"Error conectando al sistema de caché: {str(cache_err)}")
+            test_value = None
+    
+        if test_value is not None:
+            logger.info("Sistema de colas inicializado correctamente")
+            return True
         else:
-            logger.warning("REDIS_URL no configurado - procesamiento asíncrono deshabilitado")
+            logger.warning("Sistema de caché no disponible - procesamiento asíncrono deshabilitado")
             return False
     except Exception as e:
-        logger.warning(f"Redis no disponible - procesamiento asíncrono deshabilitado: {str(e)}")
+        logger.warning(f"Sistema de caché no disponible - procesamiento asíncrono deshabilitado: {str(e)}")
         return False
 
 async def shutdown_queue():
@@ -167,8 +217,9 @@ async def queue_document_processing_job(
             
         # Encolar el trabajo en Redis para procesamiento con manejo de errores
         try:
-            # TODO: Si se requiere lógica especial de push_to_list, migrar aquí. Usando CacheManager.rpush por ahora.
-            await CacheManager.get_instance().rpush(
+            # Utilizamos el método estático de CacheManager para encolar trabajos
+            # siguiendo el patrón estandarizado de cache unificada
+            await CacheManager.rpush(
                 list_name=INGESTION_QUEUE,
                 value=job_data,
                 tenant_id=tenant_id
@@ -302,11 +353,11 @@ async def check_stuck_jobs():
                                 
                                 # Forzar liberación del bloqueo
                                 try:
-                                    await delete_resource(
+                                    # Usar CacheManager en lugar de delete_resource
+                                    await CacheManager.delete(
                                         data_type="lock",
                                         resource_id=lock_key,
-                                        tenant_id=tenant_id,
-                                        metadata={"operation": "force_release_lock", "reason": "excessive_time"}
+                                        tenant_id=tenant_id
                                     )
                                 except Exception as err:
                                     logger.debug(f"Error liberando lock Redis forzado para job {job_id}: {err}")
@@ -359,9 +410,10 @@ async def process_next_job(ctx: Context = None) -> bool:
     # Usar la constante JOB_LOCK_EXPIRY en lugar de un atributo que no existe en settings
     job_lock_expire_seconds = JOB_LOCK_EXPIRY
     
-    # Tomar el siguiente trabajo de la cola
-    from common.cache import pop_from_list
-    job_data = await pop_from_list(list_name=INGESTION_QUEUE)
+    # Tomar el siguiente trabajo de la cola usando CacheManager.lpop
+    job_data = await CacheManager.lpop(
+        list_name=INGESTION_QUEUE
+    )
     
     if not job_data:
         return False  # No hay trabajos en la cola
@@ -403,8 +455,7 @@ async def process_next_job(ctx: Context = None) -> bool:
             
             # Adquirir un lock para este trabajo
             lock_key = f"{JOB_LOCK_PREFIX}:{job_id}"
-            # TODO: Migrar lógica de set_resource a CacheManager si es necesario
-            # Aquí debería ir la obtención del lock con CacheManager si se implementa.
+            lock_acquired = await acquire_job_lock(job_id, tenant_id, JOB_LOCK_EXPIRY)
             
             if not lock_acquired:
                 logger.warning(
@@ -532,9 +583,13 @@ async def process_next_job(ctx: Context = None) -> bool:
             }
             
             logger.info(f"Dividiendo documento {document_id} en chunks")
-            # TODO: Implementar split_text_with_llama_index o migrar a otro método de chunking
-            # chunks = await split_text_with_llama_index(text=processed_text, document_id=document_id, metadata=document_metadata, ctx=ctx)
-            # Aquí debe ir la lógica de chunking si se requiere.
+            # Utilizar la función centralizada de chunking que ya está implementada
+            chunks = await split_text_with_llama_index(
+                text=processed_text, 
+                document_id=document_id, 
+                metadata=document_metadata, 
+                ctx=ctx
+            )
             
             if not chunks:
                 logger.error(f"No se pudieron generar chunks para el documento {document_id}")
@@ -629,14 +684,13 @@ async def process_next_job(ctx: Context = None) -> bool:
         # Garantizar que el lock se libere en cualquier circunstancia
         if lock_acquired and lock_key:
             try:
-                await CacheManager.delete(
-                    data_type="lock",
-                    resource_id=lock_key,
-                    tenant_id=tenant_id
-                )
+                # Usar la función centralizada para liberar locks
+                await release_job_lock(job_id, tenant_id)
                 logger.debug(f"Lock liberado para job_id={job_id}", extra={"job_id": job_id})
             except Exception as unlock_error:
                 logger.error(f"Error liberando lock para job_id={job_id}: {str(unlock_error)}")
+        else:
+            logger.debug(f"No se requiere liberar lock para job_id={job_id} (no adquirido)")
 
 @with_context(tenant=True, validate_tenant=True)
 @handle_errors(error_type="service", log_traceback=True)

@@ -42,7 +42,9 @@ from common.tracking import track_token_usage, TOKEN_TYPE_LLM, OPERATION_GENERAT
 from common.cache import (
     get_with_cache_aside,
     invalidate_document_update,
-    generate_resource_id_hash
+    generate_resource_id_hash,
+    CacheManager,
+    standardize_llama_metadata
 )
 
 # Importar configuración centralizada del servicio

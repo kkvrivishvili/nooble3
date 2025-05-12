@@ -1,19 +1,29 @@
 """
-Funciones para almacenamiento y gestión de vectores en Supabase.
+Funciones para almacenamiento y gestión de documentos en Supabase.
+
+Este módulo proporciona funciones centralizadas para:
+- Actualización de estados de documentos
+- Gestión de trabajos de procesamiento
+- Invalidación coordinada de cachés
+- Acceso a documentos con caché optimizada
+- Descarga de archivos desde Storage
 """
 
 import logging
+import os
+import tempfile
+import uuid
 from typing import Dict, Any, Optional, List, Tuple
+from supabase.storage import StorageException
 
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
-from common.errors import ServiceError, DocumentProcessingError, handle_errors
+from common.errors import ServiceError, DocumentProcessingError, handle_errors, ErrorCode
 from common.cache import (
     get_with_cache_aside,
     generate_resource_id_hash,
     invalidate_document_update,
-
-
+    CacheManager
 )
 from common.context import with_context, Context
 
@@ -36,6 +46,7 @@ async def update_document_status(
         tenant_id: ID del tenant
         status: Nuevo estado (pending, processing, completed, failed)
         metadata: Metadatos adicionales a actualizar
+        ctx: Contexto de la operación
         
     Returns:
         bool: True si se actualizó correctamente
@@ -63,18 +74,17 @@ async def update_document_status(
             logger.error(f"Error actualizando estado del documento: {result.error}")
             return False
         
-        # Actualizar caché si se actualizó correctamente
+        # Invalidar caché si se actualizó correctamente
         try:
-            # Utilizar función centralizada para invalidar recursos
-            await invalidate_resource(
+            # Utilizar CacheManager directamente para invalidar el recurso
+            await CacheManager.invalidate(
                 data_type="document",
                 resource_id=document_id,
-                tenant_id=tenant_id,
-                metadata={"update_type": "status_change"}
+                tenant_id=tenant_id
             )
         except Exception as cache_error:
             # No fallar si hay error de caché, solo registrar
-            logger.warning(f"Error actualizando caché para documento {document_id}: {str(cache_error)}")
+            logger.warning(f"Error invalidando caché para documento {document_id}: {str(cache_error)}")
             
         return True
         
@@ -103,6 +113,7 @@ async def update_processing_job(
         progress: Porcentaje de progreso (0-100)
         error: Mensaje de error si falló
         processing_stats: Estadísticas de procesamiento
+        ctx: Contexto de la operación
         
     Returns:
         bool: True si se actualizó correctamente
@@ -139,8 +150,8 @@ async def update_processing_job(
         
         # Actualizar caché para futura referencia rápida
         try:
-            # Usar función centralizada para almacenar recursos en caché
-            await set_resource(
+            # Usar CacheManager directamente
+            await CacheManager.set(
                 data_type="job_status",
                 resource_id=str(job_id),
                 value={
@@ -150,7 +161,6 @@ async def update_processing_job(
                     "stats": processing_stats
                 },
                 tenant_id=tenant_id,
-                metadata={"operation": "job_update"},
                 ttl=24*60*60  # 24 horas (en segundos)
             )
             
@@ -259,3 +269,148 @@ async def get_document_with_cache(document_id: str, tenant_id: str, ctx: Context
         ctx.add_metric("document_cache_metrics", metrics)
     
     return result
+
+@with_context(tenant=True)
+@handle_errors(error_type="service", log_traceback=True)
+async def download_file_from_storage(
+    tenant_id: str,
+    file_key: str,
+    ctx: Context = None
+) -> str:
+    """
+    Descarga un archivo desde Supabase Storage y lo guarda temporalmente.
+    
+    Implementa el patrón Cache-Aside para evitar descargas innecesarias
+    de archivos previamente procesados.
+    
+    Args:
+        tenant_id: ID del tenant propietario del archivo
+        file_key: Clave del archivo en Storage (ruta completa)
+        ctx: Contexto de la operación proporcionado por with_context
+        
+    Returns:
+        str: Ruta al archivo temporal descargado
+        
+    Raises:
+        ServiceError: Si hay problemas al descargar el archivo
+    """
+    # Asegurar que tenemos un tenant_id válido
+    if ctx and ctx.has_tenant_id():
+        tenant_id = ctx.get_tenant_id()
+        
+    if not tenant_id:
+        raise ServiceError(
+            message="Se requiere un tenant_id válido para descargar archivos",
+            error_code="TENANT_REQUIRED",
+            status_code=400
+        )
+    
+    # Generar un identificador único para este archivo que usaremos como clave de caché
+    # Esto sigue el estándar de caché del sistema
+    cache_key = generate_resource_id_hash(file_key)
+    
+    # PASO 1: Verificar si ya tenemos en caché la ubicación de este archivo
+    # Implementación del patrón Cache-Aside
+    cached_path = await CacheManager.get(
+        data_type="file",
+        resource_id=cache_key,
+        tenant_id=tenant_id
+    )
+    
+    # Si encontramos el archivo en caché y existe en el sistema de archivos, retornarlo
+    if cached_path and os.path.exists(cached_path):
+        logger.info(f"Archivo encontrado en caché: {cached_path}")
+        return cached_path
+    
+    # PASO 2: No está en caché o el archivo fue eliminado, descargar de nuevo
+    # Crear directorio temporal con nombre único basado en tenant y timestamp
+    temp_dir = tempfile.mkdtemp(prefix=f"ingestion_{tenant_id}_")
+    
+    # Extraer nombre de archivo desde file_key
+    filename = os.path.basename(file_key)
+    if not filename:
+        filename = f"file_{uuid.uuid4().hex}"  # Generar un nombre si no se puede extraer
+    
+    # Construir ruta completa al archivo temporal
+    temp_file_path = os.path.join(temp_dir, filename)
+    
+    try:
+        # Obtener cliente de Supabase
+        supabase = get_supabase_client()
+        
+        # Separar bucket y path dentro del bucket desde file_key
+        # Formato esperado: bucket_name/path/to/file.ext
+        parts = file_key.split('/', 1)
+        if len(parts) < 2:
+            raise ServiceError(
+                message=f"Formato de file_key inválido: {file_key}",
+                error_code="INVALID_FILE_KEY",
+                status_code=400
+            )
+            
+        bucket_name, object_path = parts
+        
+        # Descargar archivo
+        start_time = time.time()
+        logger.info(f"Descargando archivo {object_path} desde bucket {bucket_name}")
+        
+        with open(temp_file_path, 'wb+') as f:
+            res = supabase.storage.from_(bucket_name).download(object_path)
+            f.write(res)
+        
+        download_time = time.time() - start_time
+        
+        # Verificar que el archivo se descargó correctamente
+        if not os.path.exists(temp_file_path) or os.path.getsize(temp_file_path) == 0:
+            raise ServiceError(
+                message="Archivo descargado vacío o no existente",
+                error_code="DOWNLOAD_ERROR",
+                status_code=500
+            )
+        
+        # PASO 3: Guardar en caché la ubicación del archivo con TTL adecuado
+        # Usar el TTL estándar según el tipo de dato (archivo)
+        await CacheManager.set(
+            data_type="file",
+            resource_id=cache_key,
+            value=temp_file_path,
+            tenant_id=tenant_id,
+            ttl=CacheManager.ttl_extended  # 24 horas para archivos
+        )
+            
+        logger.info(f"Archivo descargado exitosamente en {temp_file_path} en {download_time:.2f}s")
+        return temp_file_path
+        
+    except StorageException as e:
+        # Limpiar directorio temporal en caso de error
+        if os.path.exists(temp_dir):
+            import shutil
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            
+        # Propagar error con contexto enriquecido
+        raise ServiceError(
+            message=f"Error al descargar archivo desde Storage: {str(e)}",
+            error_code="STORAGE_ERROR",
+            status_code=500,
+            details={
+                "tenant_id": tenant_id,
+                "file_key": file_key,
+                "original_error": str(e)
+            }
+        ) from e
+    except Exception as e:
+        # Limpiar directorio temporal en caso de error
+        if os.path.exists(temp_dir):
+            import shutil
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            
+        # Propagar cualquier otro error
+        raise ServiceError(
+            message=f"Error inesperado al descargar archivo: {str(e)}",
+            error_code="DOWNLOAD_ERROR",
+            status_code=500,
+            details={
+                "tenant_id": tenant_id,
+                "file_key": file_key
+            }
+        ) from e
