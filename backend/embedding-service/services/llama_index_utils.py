@@ -13,6 +13,7 @@ asegurando compatibilidad con el servicio de ingestión y otros servicios.
 
 import logging
 import time
+import aiohttp
 from typing import List, Dict, Any, Optional, Tuple
 
 # Importación de configuración centralizada
@@ -38,10 +39,18 @@ from common.cache import (
     SOURCE_SUPABASE, 
     SOURCE_GENERATION,
     standardize_llama_metadata,
-    track_chunk_cache_metrics
+    track_chunk_cache_metrics,
+    track_cache_metrics,
+    METRIC_LATENCY,
+    serialize_for_cache
 )
 from common.db.tables import get_table_name
 from common.db.supabase import get_supabase_client
+from common.core.constants import (
+    METRIC_CHUNK_CACHE_HIT,
+    METRIC_CHUNK_CACHE_MISS,
+    METRIC_CHUNK_EMBEDDING_GENERATION
+)
 
 # Importaciones de LlamaIndex
 from llama_index.embeddings.openai import OpenAIEmbedding
@@ -134,8 +143,8 @@ async def generate_embeddings_with_llama_index(
     # Usar la función de estandarización de metadatos ya importada al inicio del archivo
     # (No es necesario importarla aquí ya que la importamos a nivel de módulo)
     
-    # Crear hashes para los textos usando método estandarizado
-    text_hashes = [generate_resource_id_hash(text) for text in texts]
+    # Nota: Ya no necesitamos crear lista completa de hashes por adelantado
+    # Los hashes se generarán de forma individual durante el procesamiento
     
     # Normalizar chunk_ids si se proporcionan
     if chunk_id and len(chunk_id) > 0:
@@ -187,126 +196,170 @@ async def generate_embeddings_with_llama_index(
     # Procesar cada texto utilizando el patrón Cache-Aside centralizado
     for i, text in enumerate(texts):
         # Generar identificador consistente para este texto
-        # Si tenemos un chunk_id, lo usamos para formar una clave de caché más específica
-        if chunk_id and i < len(chunk_id) and chunk_id[i]:
-            resource_id = f"{model_name}:{chunk_id[i]}:{text_hashes[i]}"
-            
-            # IMPORTANTE: Crear metadatos específicos para este chunk
-            # Estos metadatos garantizan que se puedan identificar correctamente los chunks
-            # en el sistema de caché y para métricas
-            try:
-                # Copiar metadatos base y enriquecer con información específica de chunk
-                chunk_specific_metadata = dict(base_metadata)
-                chunk_specific_metadata["chunk_id"] = chunk_id[i]
-                # Añadir document_id si está disponible en los metadatos originales
-                if isinstance(metadata, dict) and "document_id" in metadata:
-                    chunk_specific_metadata["document_id"] = metadata["document_id"]
-            except Exception as e:
-                # Si falla, usar un diccionario mínimo pero funcional
-                logger.warning(f"Error personalizando metadatos para chunk {chunk_id[i]}: {str(e)}")
-                chunk_specific_metadata = {"tenant_id": tenant_id, "chunk_id": chunk_id[i]}
+        # Evitamos crear la lista completa de hashes por adelantado y los generamos a demanda
+        text_hash = generate_resource_id_hash(text)
+        
+        # Crear resource_id basado en el context (con o sin chunk_id)
+        current_chunk_id = chunk_id[i] if i < len(chunk_id) and chunk_id[i] else None
+        
+        # Construir resource_id optimizado para la búsqueda jerárquica
+        if collection_id and current_chunk_id:
+            # Formato: collection:chunk:hash - Mayor especificidad para caché
+            resource_id = f"{collection_id}:{current_chunk_id}:{text_hash}"
+        elif collection_id:
+            # Formato: collection:hash - Para búsquedas por colección
+            resource_id = f"{collection_id}:{text_hash}"
+        elif current_chunk_id:
+            # Formato: chunk:hash - Para búsquedas por chunk
+            resource_id = f"{current_chunk_id}:{text_hash}"
         else:
-            resource_id = f"{model_name}:{text_hashes[i]}"
-            chunk_specific_metadata = dict(base_metadata)
+            # Solo hash para textos sin contexto adicional
+            resource_id = text_hash
+        
+        # Crear metadatos específicos para este texto/chunk
+        chunk_specific_metadata = dict(base_metadata)
+        if current_chunk_id:
+            chunk_specific_metadata["chunk_id"] = current_chunk_id
         
         # Definir función para buscar en base de datos
         async def fetch_embedding_from_db(resource_id, tenant_id, ctx):
-            """Busca el embedding en Supabase"""
+            """Busca el embedding en Supabase si existe"""
             try:
-                # Extraer el hash del texto del resource_id
-                content_hash = resource_id.split(":", 1)[1] if ":" in resource_id else resource_id
+                # Si no hay collection_id, no podemos buscar en la base de datos
+                if not collection_id:
+                    return None
                 
-                # Obtener cliente y tabla
-                supabase = get_supabase_client()
-                table_name = get_table_name("document_chunks")
+                # Extraer el hash del texto del resource_id (último componente)
+                content_hash = resource_id.split(":")[-1] if ":" in resource_id else resource_id
                 
-                # Buscar embedding por hash de contenido
-                query_result = (supabase.table(table_name)
-                             .select("embedding")
-                             .eq("tenant_id", tenant_id)
-                             .eq("content_hash", content_hash)
-                             .limit(1)
-                             .execute())
-                             
-                if query_result.data and len(query_result.data) > 0:
-                    embedding = query_result.data[0].get("embedding")
-                    if embedding:
-                        return embedding
+                # Obtener cliente Supabase con timeout optimizado
+                supabase = await get_supabase_client(tenant_id)
+                if not supabase:
+                    logger.warning(f"No se pudo obtener cliente Supabase para tenant {tenant_id}")
+                    return None
+                
+                # Buscar embedding en la tabla correspondiente con timeout optimizado
+                table_name = get_table_name("embeddings", tenant_id)
+                timeout_seconds = TIMEOUTS.get("supabase_query", 10)
+                
+                # Consulta optimizada con filtros específicos
+                result = await supabase.table(table_name).select("embedding") \
+                    .filter("text_hash", "eq", content_hash) \
+                    .filter("collection_id", "eq", collection_id) \
+                    .limit(1) \
+                    .execute(timeout=timeout_seconds)
+                
+                # Verificar si hay resultados válidos
+                if result.data and len(result.data) > 0 and result.data[0].get("embedding"):
+                    embedding = result.data[0].get("embedding")
+                    metrics["db_retrieved"] += 1
+                    return embedding
             except Exception as e:
-                logger.warning(f"Error buscando embedding en Supabase: {str(e)}")
+                logger.warning(f"Error buscando embedding en Supabase: {str(e)}", 
+                            extra={"tenant_id": tenant_id, "resource_id": resource_id})
             return None
         
         # Definir función para generar embedding si no existe
         async def generate_embedding(resource_id, tenant_id, ctx):
-            """Genera un nuevo embedding usando la API"""
+            """Genera un nuevo embedding usando la API y lo serializa correctamente"""
             try:
-                # Acceder al embedding_endpoint según tenant y configuración
+                # Obtener configuración de la API
                 api_key, endpoint = await _get_embedding_config(tenant_id, model_name)
                 
-                # Si no hay configuración, usar endpoint por defecto
+                # Usar valores por defecto si no hay configuración específica
                 if not endpoint or not api_key:
                     if not settings.default_embedding_endpoint:
                         raise ValueError(f"No hay endpoint de embeddings configurado para {tenant_id}")
                     endpoint = settings.default_embedding_endpoint
                     api_key = settings.default_embedding_api_key
                 
-                # Realizar solicitud a la API
+                # Preparar request
                 headers = {"Authorization": f"Bearer {api_key}"}
                 data = {"text": text, "model": model_name}
+                request_timeout = TIMEOUTS.get("embedding_api", 30)  # Timeout optimizado
                 
+                # Realizar solicitud a la API con timeout y manejo de errores mejorado
                 async with aiohttp.ClientSession() as session:
                     start_time = time.time()
-                    async with session.post(endpoint, json=data, headers=headers) as response:
-                        response.raise_for_status()
-                        result = await response.json()
-                        latency_ms = (time.time() - start_time) * 1000
-                        
-                        # Registrar uso de tokens
-                        input_tokens = result.get("tokens", {}).get("input", 0)
-                        
-                        # Registrar métrica específica de chunk si hay chunk_id disponible
-                        if chunk_id and i < len(chunk_id) and chunk_id[i]:
-                            from common.core.constants import METRIC_CHUNK_CACHE_MISS, METRIC_CHUNK_EMBEDDING_GENERATION
+                    try:
+                        async with session.post(
+                            endpoint, 
+                            json=data, 
+                            headers=headers,
+                            timeout=aiohttp.ClientTimeout(total=request_timeout)
+                        ) as response:
+                            response.raise_for_status()
+                            result = await response.json()
+                            latency_ms = (time.time() - start_time) * 1000
                             
-                            # Crear metadatos estandarizados específicos para este chunk
-                            chunk_metadata = dict(base_metadata)
-                            chunk_metadata["chunk_id"] = chunk_id[i]
-                            # Añadir métricas específicas de la generación
-                            chunk_metadata["latency_ms"] = latency_ms
-                            chunk_metadata["tokens"] = input_tokens
-                            chunk_metadata["model"] = model_name
+                            # Obtener el embedding del resultado
+                            raw_embedding = result.get("embedding")
+                            if not raw_embedding:
+                                raise ValueError("La API no devolvió un embedding válido")
                             
-                            # Registrar métrica de cache miss
-                            await track_chunk_cache_metrics(
+                            # Serializar para caché si es necesario
+                            try:
+                                embedding = serialize_for_cache(raw_embedding, "embedding")
+                            except Exception as e:
+                                logger.warning(f"Error serializando embedding: {str(e)}")
+                                # Usar el embedding tal cual si falla la serialización
+                                embedding = raw_embedding
+                            
+                            # Registrar uso de tokens y métricas
+                            input_tokens = result.get("tokens", {}).get("input", 0)
+                            
+                            # Crear metadatos para métricas
+                            embedding_metadata = {
+                                "source": SOURCE_GENERATION,
+                                "model": model_name,
+                                "latency_ms": latency_ms,
+                                "tokens": input_tokens,
+                                "dimensions": len(embedding) if isinstance(embedding, list) else "unknown"
+                            }
+                            
+                            # Registrar métricas de chunk si corresponde
+                            current_chunk_id = chunk_id[i] if i < len(chunk_id) and chunk_id[i] else None
+                            if current_chunk_id:
+                                # Registrar métricas específicas de chunk
+                                await track_chunk_cache_metrics(
+                                    tenant_id=tenant_id,
+                                    chunk_id=current_chunk_id,
+                                    metric_type=METRIC_CHUNK_CACHE_MISS,
+                                    collection_id=collection_id,
+                                    model_name=model_name,
+                                    extra_metadata={**chunk_specific_metadata, **embedding_metadata}
+                                )
+                                
+                                await track_chunk_cache_metrics(
+                                    tenant_id=tenant_id,
+                                    chunk_id=current_chunk_id,
+                                    metric_type=METRIC_CHUNK_EMBEDDING_GENERATION,
+                                    collection_id=collection_id,
+                                    model_name=model_name,
+                                    extra_metadata={**chunk_specific_metadata, **embedding_metadata}
+                                )
+                            
+                            # Registrar uso de tokens con el sistema centralizado
+                            await track_token_usage(
                                 tenant_id=tenant_id,
-                                chunk_id=chunk_id[i],
-                                metric_type=METRIC_CHUNK_CACHE_MISS,
-                                collection_id=collection_id,
-                                model_name=model_name,
-                                extra_metadata=chunk_metadata
+                                tokens=input_tokens,
+                                model=model_name,
+                                token_type="embedding",
+                                operation="generate",
+                                metadata=embedding_metadata
                             )
                             
-                            # También registrar generación de embedding
-                            await track_chunk_cache_metrics(
-                                tenant_id=tenant_id,
-                                chunk_id=chunk_id[i],
-                                metric_type=METRIC_CHUNK_EMBEDDING_GENERATION,
-                                collection_id=collection_id,
-                                model_name=model_name,
-                                extra_metadata=chunk_metadata
-                            )
-                        
-                        await track_token_usage(
-                            tenant_id=tenant_id,
-                            tokens=input_tokens,
-                            model=model_name,
-                            token_type="embedding",
-                            operation="generate",
-                            metadata={"source": "llama_index_utils", "endpoint": endpoint}
+                            # Actualizar métricas globales
+                            metrics["generated"] += 1
+                            
+                            return embedding
+                    except aiohttp.ClientError as e:
+                        # Manejo específico para errores de red
+                        logger.error(f"Error de red al generar embedding: {str(e)}")
+                        raise ServiceError(
+                            message=f"Error de conexión con el servicio de embeddings: {str(e)}",
+                            error_code=ErrorCode.EXTERNAL_SERVICE_ERROR
                         )
-                        
-                        # Devolver el embedding generado
-                        return result.get("embedding")
             except Exception as e:
                 logger.error(f"Error generando embedding: {str(e)}")
                 return None
@@ -334,34 +387,49 @@ async def generate_embeddings_with_llama_index(
             if text_metrics.get("source") == SOURCE_CACHE:
                 metrics["cached"] += 1
                 
-                # Registrar métrica específica de chunk si hay chunk_id disponible
-                if chunk_id and i < len(chunk_id) and chunk_id[i]:
+                # Registrar métrica de hit para chunks cuando sea apropiado
+                current_chunk_id = chunk_id[i] if i < len(chunk_id) and chunk_id[i] else None
+                if current_chunk_id:
                     try:
-                        # Usar constante correcta de common.cache
-                        from common.core.constants import METRIC_CHUNK_CACHE_HIT
-                        
                         await track_chunk_cache_metrics(
                             tenant_id=tenant_id,
-                            chunk_id=chunk_id[i],
+                            chunk_id=current_chunk_id,
                             metric_type=METRIC_CHUNK_CACHE_HIT,
                             collection_id=collection_id,
                             model_name=model_name,
-                            extra_metadata=chunk_specific_metadata  # Usar metadatos estandarizados
+                            extra_metadata=chunk_specific_metadata
                         )
                     except Exception as e:
-                        # No interrumpir el flujo principal si falla el tracking
+                        # Solo log, no interrumpe flujo principal
                         logger.debug(f"Error registrando métrica de chunk cache hit: {str(e)}")
-                        
-            elif text_metrics.get("source") == SOURCE_SUPABASE:
-                metrics["db_retrieved"] += 1
-            elif text_metrics.get("source") == SOURCE_GENERATION:
-                metrics["generated"] += 1
     
     # Calcular tiempo total de procesamiento
-    metrics["total_time_ms"] = (time.time() - start_time) * 1000
+    total_time_ms = (time.time() - start_time) * 1000
+    metrics["total_time_ms"] = total_time_ms
     
+    # Registrar latencia total para monitoreo
+    try:
+        await track_cache_metrics(
+            data_type="embedding_batch",
+            tenant_id=tenant_id,
+            metric_type=METRIC_LATENCY,
+            value=total_time_ms,
+            collection_id=collection_id,
+            metadata={
+                "model": model_name,
+                "batch_size": len(texts),
+                "cached_ratio": metrics["cached"] / len(texts) if texts else 0,
+                "generated_ratio": metrics["generated"] / len(texts) if texts else 0
+            }
+        )
+    except Exception as e:
+        # No interrumpir el flujo principal por errores de métricas
+        logger.debug(f"Error registrando métricas de latencia: {str(e)}")
+    
+    # Devolver resultados con metadatos optimizados
     return result, {
         "model": model_name,
         "metrics": metrics,
-        "detail_metrics": all_metrics if len(all_metrics) <= 5 else f"{len(all_metrics)} texts processed"
+        # Limitar detalle de métricas para evitar sobrecarga de memoria
+        "detail_metrics": all_metrics[:10] if len(all_metrics) <= 10 else f"{len(all_metrics)} texts processed"
     }
