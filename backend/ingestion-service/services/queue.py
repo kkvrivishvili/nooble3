@@ -21,20 +21,17 @@ from common.errors import ServiceError, handle_errors, ErrorCode
 from common.context import Context, with_context, get_full_context
 from common.db import get_supabase_client
 from common.db.tables import get_table_name
-# Importar CacheManager y get_with_cache_aside separadamente para evitar ciclos de importación
-from common.cache.manager import CacheManager
-from common.cache.helpers import get_with_cache_aside
-from services.chunking import (
-    split_text_with_llama_index,
-    extract_text_from_file,
-    validate_file,
-    process_file_from_storage
+# Importar funciones centralizadas de caché
+from common.cache import (
+    get_with_cache_aside,
+    set_resource,
+    invalidate_resource,
+    push_to_list,
+    get_resource,
+    delete_resource
 )
-from services.embedding import (
-    generate_embeddings_with_llama_index,
-    store_chunks_in_vector_store,
-    generate_embeddings_for_chunks
-)
+from services.chunking import process_file_from_storage
+from services.embedding import store_chunks_in_vector_store, generate_embeddings_for_chunks
 from services.storage import update_document_status, update_processing_job
 
 logger = logging.getLogger(__name__)
@@ -172,10 +169,12 @@ async def queue_document_processing_job(
             
         # Encolar el trabajo en Redis para procesamiento con manejo de errores
         try:
-            await CacheManager.rpush(
-                INGESTION_QUEUE,
-                json.dumps(job_data),
-                tenant_id=tenant_id
+            # Usar la función centralizada push_to_list en lugar de CacheManager.rpush
+            await push_to_list(
+                list_name=INGESTION_QUEUE,
+                value=job_data,  # La serialización se maneja internamente
+                tenant_id=tenant_id,
+                metadata={"operation": "job_enqueue", "document_id": job_data.get("document_id")}
             )
         except Exception as cache_err:
             logger.warning(f"Error al encolar en Redis: {str(cache_err)}")
@@ -217,8 +216,8 @@ async def check_stuck_jobs():
             
             # NUEVO: Verificar si existe un bloqueo para este trabajo
             lock_key = f"{JOB_LOCK_PREFIX}:{job_id}"
-            # Verificar bloqueo usando CacheManager.get en lugar de exists
-            val = await CacheManager.get(
+            # Verificar bloqueo usando get_resource en lugar de CacheManager.get
+            val = await get_resource(
                 data_type="lock",
                 resource_id=lock_key,
                 tenant_id=tenant_id
@@ -243,10 +242,11 @@ async def check_stuck_jobs():
                                 
                                 # Liberar explícitamente cualquier bloqueo antiguo que pudiera existir
                                 try:
-                                    await CacheManager.delete(
+                                    await delete_resource(
                                         data_type="lock",
                                         resource_id=lock_key,
-                                        tenant_id=tenant_id
+                                        tenant_id=tenant_id,
+                                        metadata={"operation": "release_lock", "reason": "stalled_job"}
                                     )
                                 except Exception as err:
                                     logger.debug(f"Error liberando lock Redis para job {job_id}: {err}")
@@ -266,20 +266,23 @@ async def check_stuck_jobs():
                                 )
                                 
                                 # Limpiar recursos asociados
-                                await CacheManager.delete(
+                                await delete_resource(
                                     data_type="job",
                                     resource_id=f"{job_id}:file",
-                                    tenant_id=tenant_id
+                                    tenant_id=tenant_id,
+                                    metadata={"operation": "cleanup", "job_status": "failed"}
                                 )
-                                await CacheManager.delete(
+                                await delete_resource(
                                     data_type="job",
                                     resource_id=f"{job_id}:text",
-                                    tenant_id=tenant_id
+                                    tenant_id=tenant_id,
+                                    metadata={"operation": "cleanup", "job_status": "failed"}
                                 )
-                                await CacheManager.delete(
+                                await delete_resource(
                                     data_type="job",
                                     resource_id=f"{job_id}:data",
-                                    tenant_id=tenant_id
+                                    tenant_id=tenant_id,
+                                    metadata={"operation": "cleanup", "job_status": "failed"}
                                 )
                         except Exception as parse_err:
                             logger.error(f"Error procesando timestamp: {str(parse_err)}")
@@ -302,10 +305,11 @@ async def check_stuck_jobs():
                                 
                                 # Forzar liberación del bloqueo
                                 try:
-                                    await CacheManager.delete(
+                                    await delete_resource(
                                         data_type="lock",
                                         resource_id=lock_key,
-                                        tenant_id=tenant_id
+                                        tenant_id=tenant_id,
+                                        metadata={"operation": "force_release_lock", "reason": "excessive_time"}
                                     )
                                 except Exception as err:
                                     logger.debug(f"Error liberando lock Redis forzado para job {job_id}: {err}")
@@ -359,7 +363,8 @@ async def process_next_job(ctx: Context = None) -> bool:
     job_lock_expire_seconds = JOB_LOCK_EXPIRY
     
     # Tomar el siguiente trabajo de la cola
-    job_data = await CacheManager.lpop(queue_name=INGESTION_QUEUE)
+    from common.cache import pop_from_list
+    job_data = await pop_from_list(list_name=INGESTION_QUEUE)
     
     if not job_data:
         return False  # No hay trabajos en la cola
@@ -401,12 +406,13 @@ async def process_next_job(ctx: Context = None) -> bool:
             
             # Adquirir un lock para este trabajo
             lock_key = f"{JOB_LOCK_PREFIX}:{job_id}"
-            lock_acquired = await CacheManager.set(
+            lock_acquired = await set_resource(
                 data_type="lock",
                 resource_id=lock_key,
                 value="1",
                 tenant_id=tenant_id,
                 ttl=job_lock_expire_seconds,
+                metadata={"operation": "acquire_job_lock", "job_id": job_id},
                 nx=True
             )
             

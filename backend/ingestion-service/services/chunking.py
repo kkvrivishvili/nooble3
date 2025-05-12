@@ -39,8 +39,14 @@ from common.errors import ServiceError, ErrorCode, DocumentProcessingError, Vali
 from common.config.tiers import get_tier_limits
 from common.context import with_context, Context
 from common.tracking import track_token_usage, TOKEN_TYPE_LLM, OPERATION_GENERATION, estimate_prompt_tokens
-from common.cache.manager import CacheManager
-from common.cache import get_with_cache_aside, invalidate_document_update
+from common.cache import (
+    get_with_cache_aside,
+    invalidate_document_update,
+    generate_resource_id_hash,
+    set_resource,
+    get_resource,
+    delete_resource
+)
 
 # Importar configuración centralizada del servicio
 from config.settings import get_settings
@@ -570,15 +576,20 @@ async def process_file_from_storage(
     Returns:
         str: Texto procesado del documento
     """
-    # Identificadores para caché
-    file_hash = hashlib.md5(file_key.encode()).hexdigest()
-    cache_key = f"extracted_text:{tenant_id}:{file_hash}"
+    # Calcular hash del archivo una sola vez y reutilizarlo
+    file_hash = generate_resource_id_hash(file_key)
     
-    # Función para procesar el archivo si no está en caché
+    # Función para obtener el texto desde la base de datos (inexistente en este caso)
+    async def fetch_from_db(resource_id, tenant_id, ctx=None):
+        # En este caso no hay base de datos para textos extraídos
+        return None
+        
+    # Función para generar el texto del archivo si no está en caché
     async def process_and_extract():
         # Crear directorio temporal
         with tempfile.TemporaryDirectory() as temp_dir:
             try:
+                start_time = time.time()
                 # Descargar archivo desde Storage
                 file_path, file_metadata = await download_file_from_storage(
                     tenant_id=tenant_id,
@@ -594,14 +605,15 @@ async def process_file_from_storage(
                         error_code=ErrorCode.STORAGE_ERROR
                     )
                 
-                # Preparar metadatos
+                # Preparar metadatos - usar directamente el hash calculado previamente
                 document_id = file_metadata.get("document_id") or file_hash[:10]
                 metadata = {
                     "tenant_id": tenant_id,
                     "collection_id": collection_id,
                     "document_id": document_id,
                     "file_name": file_metadata.get("filename", ""),
-                    "file_key": file_key
+                    "file_key": file_key,
+                    "file_hash": file_hash  # Incluir el hash para evitar recalcularlo
                 }
                 
                 # Extraer texto usando LlamaIndex
@@ -613,9 +625,11 @@ async def process_file_from_storage(
                     ctx=ctx
                 )
                 
+                # Registrar tiempo de procesamiento
+                processing_time = time.time() - start_time
                 logger.info(
                     f"Texto extraído de {file_metadata.get('filename', 'documento')}: "
-                    f"{len(extracted_text)} caracteres"
+                    f"{len(extracted_text)} caracteres en {processing_time:.2f}s"
                 )
                 
                 return extracted_text
@@ -631,17 +645,22 @@ async def process_file_from_storage(
                     details={"file_key": file_key, "error": str(e)}
                 )
     
-    # Usar cache-aside pattern
-    cache_manager = CacheManager()
+    # Usar el patrón Cache-Aside centralizado
     
-    # Tiempo de expiración: 30 días (textos extraídos son estables)
-    expires_in = 60 * 60 * 24 * 30  # 30 días en segundos
-    
-    # Obtener texto extraído con caché
-    return await get_with_cache_aside(
-        cache_key=cache_key,
-        getter_func=process_and_extract,
-        cache_manager=cache_manager,
-        expires_in=expires_in,
+    # Obtener texto extraído con caché usando la implementación centralizada
+    extracted_text, metrics = await get_with_cache_aside(
+        data_type="extracted_text",
+        resource_id=file_hash,
+        tenant_id=tenant_id,
+        fetch_from_db_func=fetch_from_db,
+        generate_func=process_and_extract,
+        collection_id=collection_id,  # Mejorar especificidad de caché
         ctx=ctx
+        # TTL se determina automáticamente según el tipo de dato
     )
+    
+    # Registrar métricas si hay contexto
+    if ctx:
+        ctx.add_metric("text_extraction_cache", metrics)
+        
+    return extracted_text

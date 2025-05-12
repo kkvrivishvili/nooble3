@@ -81,15 +81,43 @@ async def generate_embeddings_for_chunks(
                 chunks[i]["id"] = chunk_id
             chunk_id_list.append(chunk_id)
         
-        # Usar el módulo central de LlamaIndex para generar embeddings
-        embeddings, metadata = await generate_embeddings_with_llama_index(
-            texts=texts,
-            tenant_id=tenant_id,
-            model_name=model,
-            collection_id=collection_id,  # Pasar collection_id para especificidad en caché
-            chunk_id=chunk_id_list,  # Pasar IDs de los chunks para seguimiento y caché
+        # Llamar directamente al servicio de embeddings centralizado
+        start_time = time.time()
+        response = await call_service(
+            url=f"{get_settings().embedding_service_url}/internal/embed",
+            method="POST",
+            headers={"x-tenant-id": tenant_id},
+            json={
+                "texts": texts,
+                "model": model,
+                "collection_id": collection_id,  # Incluir collection_id para especificidad en caché
+                "chunk_id": chunk_id_list  # Enviar los IDs de chunks para mejor caché y seguimiento
+            },
             ctx=ctx
         )
+        
+        if not response.get("embeddings"):
+            raise EmbeddingGenerationError(
+                message="El servicio de embeddings no devolvió datos válidos",
+                details={"response": response}
+            )
+        
+        # Extraer embeddings y metadatos
+        embeddings = response.get("embeddings", [])
+        metadata = response.get("metadata", {})
+        
+        # Registrar uso de tokens si está disponible
+        if "token_usage" in metadata and ctx:
+            await track_token_usage(
+                tenant_id=tenant_id,
+                token_usage=metadata["token_usage"],
+                operation="embedding",
+                model=model or metadata.get("model", "unknown"),
+                ctx=ctx
+            )
+        
+        execution_time = time.time() - start_time
+        logger.info(f"Embeddings generados para {len(texts)} textos en {execution_time:.2f}s")
         
         # Verificar resultados
         if len(embeddings) != len(chunks):
@@ -155,98 +183,10 @@ async def process_and_store_chunks(
         ctx=ctx
     )
 
-@with_context(tenant=True)
-@handle_errors(error_type="service", log_traceback=True)
-async def generate_embeddings_with_llama_index(
-    texts: List[str],
-    tenant_id: str,
-    model_name: str = None,
-    collection_id: str = None,
-    chunk_id: List[str] = None,
-    ctx: Context = None
-) -> Tuple[List[List[float]], Dict[str, Any]]:
-    """
-    Genera embeddings para textos usando LlamaIndex.
-    
-    Implementa el patrón Cache-Aside optimizado utilizando la implementación
-    centralizada para asegurar consistencia entre servicios.
-    
-    Args:
-        texts: Lista de textos para generar embeddings
-        tenant_id: ID del tenant
-        model_name: Modelo de embeddings a utilizar (opcional)
-        collection_id: ID de la colección a la que pertenecen los textos (para caché)
-        chunk_id: Lista de IDs únicos para cada chunk/texto (para caché y seguimiento)
-        ctx: Contexto de la solicitud (para logging y tracking)
-        
-    Returns:
-        Tuple[List[List[float]], Dict[str, Any]]: 
-            - Lista de embeddings generados
-            - Metadatos del proceso de generación
-    """
-    start_time = time.time()
-    
-    # Validar y preparar textos
-    if not texts:
-        return [], {"token_usage": 0, "processed_texts": 0}
-    
-    # Eliminar textos vacíos
-    texts = [text for text in texts if text and text.strip()]
-    if not texts:
-        return [], {"token_usage": 0, "processed_texts": 0}
-    
-    try:
-        # Llamar al servicio de embeddings centralizado
-        response = await call_service(
-            url=f"{settings.embedding_service_url}/internal/embed",
-            method="POST",
-            headers={"x-tenant-id": tenant_id},
-            json={
-                "texts": texts,
-                "model": model_name,
-                "collection_id": collection_id,  # Incluir collection_id para especificidad en caché
-                "chunk_id": chunk_id  # Enviar los IDs de chunks para mejor caché y seguimiento
-            },
-            ctx=ctx
-        )
-        
-        if not response.get("embeddings"):
-            raise EmbeddingGenerationError(
-                message="El servicio de embeddings no devolvió datos válidos",
-                details={"response": response}
-            )
-        
-        # Extraer embeddings y metadatos
-        embeddings = response.get("embeddings", [])
-        metadata = response.get("metadata", {})
-        
-        # Registrar uso de tokens si está disponible
-        if "token_usage" in metadata and ctx:
-            await track_token_usage(
-                tenant_id=tenant_id,
-                token_usage=metadata["token_usage"],
-                operation="embedding",
-                model=model_name or metadata.get("model", "unknown"),
-                ctx=ctx
-            )
-        
-        execution_time = time.time() - start_time
-        logger.info(f"Embeddings generados para {len(texts)} textos en {execution_time:.2f}s")
-        
-        return embeddings, metadata
-    
-    except Exception as e:
-        logger.error(f"Error en generate_embeddings_with_llama_index: {str(e)}")
-        if isinstance(e, ServiceError):
-            raise
-        
-        raise EmbeddingGenerationError(
-            message=f"Error generando embeddings: {str(e)}",
-            details={
-                "model": model_name,
-                "texts_count": len(texts) if texts else 0
-            }
-        )
+# Implementación eliminada: generate_embeddings_with_llama_index
+# Esta función era redundante ya que simplemente llamaba al servicio centralizado.
+# Cualquier uso de esta función debe reemplazarse por una llamada directa a
+# call_service con el endpoint /internal/embed del servicio de embedding.
 
 # Implementación para crear vector stores en Supabase
 async def create_supabase_vector_store(
@@ -387,11 +327,17 @@ async def store_chunks_in_vector_store(
         storage_context = StorageContext.from_defaults(vector_store=vector_store)
         index = VectorStoreIndex(llama_docs, storage_context=storage_context)
         
-        # Invalidar caché si es necesario
+        # Invalidación estratégica de caché utilizando las funciones centralizadas
+        # Esta invalidación asegura que cualquier consulta que dependa de este documento
+        # obtenga resultados actualizados tras esta modificación
         await invalidate_document_update(
             tenant_id=tenant_id,
             collection_id=collection_id,
             document_id=document_id,
+            metadata={
+                "updated_chunks": len(llama_docs),
+                "timestamp": int(time.time())
+            },
             ctx=ctx
         )
         

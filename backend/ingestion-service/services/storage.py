@@ -11,7 +11,9 @@ from common.errors import ServiceError, DocumentProcessingError, handle_errors
 from common.cache import (
     get_with_cache_aside,
     generate_resource_id_hash,
-    invalidate_document_update
+    invalidate_document_update,
+    invalidate_resource,
+    set_resource
 )
 from common.context import with_context, Context
 
@@ -63,11 +65,12 @@ async def update_document_status(
         
         # Actualizar caché si se actualizó correctamente
         try:
-            # Intentar actualizar en caché para futuras consultas
-            await CacheManager.delete(
+            # Utilizar función centralizada para invalidar recursos
+            await invalidate_resource(
                 data_type="document",
                 resource_id=document_id,
-                tenant_id=tenant_id
+                tenant_id=tenant_id,
+                metadata={"update_type": "status_change"}
             )
         except Exception as cache_error:
             # No fallar si hay error de caché, solo registrar
@@ -136,8 +139,8 @@ async def update_processing_job(
         
         # Actualizar caché para futura referencia rápida
         try:
-            # Guardar/actualizar el estado en caché para consultas rápidas
-            await CacheManager.set(
+            # Usar función centralizada para almacenar recursos en caché
+            await set_resource(
                 data_type="job_status",
                 resource_id=str(job_id),
                 value={
@@ -147,7 +150,8 @@ async def update_processing_job(
                     "stats": processing_stats
                 },
                 tenant_id=tenant_id,
-                ttl=CacheManager.ttl_extended  # 24 horas (usando constante estándar)
+                metadata={"operation": "job_update"},
+                ttl=24*60*60  # 24 horas (en segundos)
             )
             
         except Exception as cache_error:
