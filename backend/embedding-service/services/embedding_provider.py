@@ -22,7 +22,7 @@ from common.errors import (
     EmbeddingGenerationError, EmbeddingModelError,
     TextTooLargeError, BatchTooLargeError, InvalidEmbeddingParamsError
 )
-from common.context import with_context, Context
+from common.context import with_context, Context, validate_tenant_context
 from common.tracking import track_token_usage, estimate_prompt_tokens
 from common.auth.models import validate_model_access
 from common.cache import generate_resource_id_hash
@@ -74,11 +74,11 @@ class CachedEmbeddingProvider:
         self.max_tokens_per_batch = settings.max_tokens_per_batch
         self.max_token_length_per_text = settings.max_token_length_per_text
     
-    @handle_errors(error_type="simple", log_traceback=False, error_map={
-        EmbeddingGenerationError: ("EMBEDDING_GENERATION_ERROR", 500),
-        EmbeddingModelError: ("EMBEDDING_MODEL_ERROR", 500),
-        TextTooLargeError: ("TEXT_TOO_LARGE", 413),
-        BatchTooLargeError: ("BATCH_TOO_LARGE", 413)
+    @handle_errors(error_type="service", log_traceback=True, error_map={
+        EmbeddingGenerationError: (ErrorCode.EMBEDDING_ERROR, 500),
+        EmbeddingModelError: (ErrorCode.MODEL_ERROR, 500),
+        TextTooLargeError: (ErrorCode.TEXT_TOO_LARGE, 413),
+        BatchTooLargeError: (ErrorCode.BATCH_TOO_LARGE, 413)
     })
     @with_context(tenant=True, validate_tenant=True)
     async def get_embedding(self, text: str, tenant_id: Optional[str] = None, collection_id: Optional[str] = None, ctx: Context = None) -> List[float]:
@@ -170,11 +170,11 @@ class CachedEmbeddingProvider:
                 details=error_context
             )
     
-    @handle_errors(error_type="simple", log_traceback=False, error_map={
-        EmbeddingGenerationError: ("EMBEDDING_GENERATION_ERROR", 500),
-        EmbeddingModelError: ("EMBEDDING_MODEL_ERROR", 500),
-        TextTooLargeError: ("TEXT_TOO_LARGE", 413),
-        BatchTooLargeError: ("BATCH_TOO_LARGE", 413)
+    @handle_errors(error_type="service", log_traceback=True, error_map={
+        EmbeddingGenerationError: (ErrorCode.EMBEDDING_ERROR, 500),
+        EmbeddingModelError: (ErrorCode.MODEL_ERROR, 500),
+        TextTooLargeError: (ErrorCode.TEXT_TOO_LARGE, 413),
+        BatchTooLargeError: (ErrorCode.BATCH_TOO_LARGE, 413)
     })
     @with_context(tenant=True, validate_tenant=True)
     async def get_batch_embeddings(self, texts: List[str], collection_id: Optional[str] = None, chunk_id: Optional[List[str]] = None, ctx: Context = None) -> List[List[float]]:
@@ -199,141 +199,109 @@ class CachedEmbeddingProvider:
         # Resolver tenant_id y collection_id usando método centralizado
         tenant_id, coll_id = self._resolve_context_params(tenant_id=ctx.get_tenant_id() if ctx else None, collection_id=collection_id, ctx=ctx)
         
+        # Verificaciones básicas
         if not texts:
             return []
-        
-        # Verificar el tamaño del lote
+            
+        # Validar que no exceda el tamaño máximo de lote
         if len(texts) > self.max_batch_size:
             error_context = {
                 "tenant_id": tenant_id,
-                "batch_size": len(texts),
+                "texts_count": len(texts),
                 "max_batch_size": self.max_batch_size
             }
-            logger.warning(f"Tamaño de lote excede el máximo permitido: {len(texts)} > {self.max_batch_size}", 
-                         extra=error_context)
             
-            # Procesar en sublotes si es posible
-            return await self._process_large_batch(texts, tenant_id, ctx)
-        
-        # Optimizar validación de longitud de textos individuales y estimar tokens totales
-        total_tokens = 0
-        invalid_texts = []
-        processed_texts = []
-        
-        # Procesar textos en paralelo para estimar tokens más rápido
-        token_estimation_tasks = []
-        
-        for i, text in enumerate(texts):
-            if not text.strip():
-                # Para textos vacíos, usaremos vector de ceros
-                processed_texts.append("")
-                continue
-                
-            # Crear tarea para estimación de tokens
-            task = estimate_prompt_tokens(text)
-            token_estimation_tasks.append((i, text, task))
-        
-        # Esperar todas las estimaciones y procesar resultados
-        for i, text, task in token_estimation_tasks:
-            estimated_tokens = await task
-            if estimated_tokens > self.max_token_length_per_text:
-                invalid_texts.append((i, estimated_tokens))
-            total_tokens += estimated_tokens
-            processed_texts.append(text)
-        
-        # Reportar textos inválidos si hay alguno
-        if invalid_texts:
-            error_context = {
-                "tenant_id": tenant_id,
-                "model": self.model_name,
-                "invalid_count": len(invalid_texts),
-                "max_tokens": self.max_token_length_per_text,
-                "service": "embedding-service"
-            }
-            error_indices = [idx for idx, _ in invalid_texts]
-            error_tokens = [tokens for _, tokens in invalid_texts]
+            logger.warning(f"Lote demasiado grande. Se procesará en sublotes: {len(texts)} > {self.max_batch_size}", 
+                        extra=error_context)
             
-            # Mejorar mensaje de error con más contexto
-            error_msg = f"{len(invalid_texts)} textos exceden el límite máximo de tokens para embedding ({self.max_token_length_per_text})"
-            logger.error(f"{error_msg} en posiciones: {error_indices}", extra=error_context)
-            
-            # Construir detalles para mejor depuración
-            details = {
-                "indices": error_indices,
-                "token_counts": error_tokens,
-                "max_tokens": self.max_token_length_per_text,
-                "model": self.model_name,
-                "collection_id": coll_id or "no_collection"
-            }
-            
-            raise TextTooLargeError(
-                message=error_msg,
-                details=details
+            # Procesar lotes grandes dividiéndolos en sublotes
+            return await self._process_large_batch(
+                texts=texts,
+                tenant_id=tenant_id,
+                ctx=ctx,
+                collection_id=coll_id,
+                chunk_id=chunk_id
             )
         
-        # Verificar tokens totales del lote
-        if total_tokens > self.max_tokens_per_batch:
+        # Estimar tokens totales para controlar uso
+        estimated_tokens = 0
+        for text in texts:
+            # Saltar textos vacíos
+            if not text or not text.strip():
+                continue
+                
+            try:
+                # Estimar tokens para este texto
+                text_tokens = await estimate_prompt_tokens(text)
+                
+                # Verificar si excede límite individual
+                if text_tokens > self.max_token_length_per_text:
+                    error_context = {
+                        "tenant_id": tenant_id,
+                        "estimated_tokens": text_tokens,
+                        "max_tokens": self.max_token_length_per_text
+                    }
+                    
+                    logger.warning(f"Texto individual excede límite: {text_tokens} > {self.max_token_length_per_text}", 
+                                extra=error_context)
+                    
+                    raise TextTooLargeError(
+                        message=f"Texto excede el límite máximo de tokens: {text_tokens} > {self.max_token_length_per_text}",
+                        details=error_context
+                    )
+                
+                # Acumular tokens estimados
+                estimated_tokens += text_tokens
+                
+            except Exception as e:
+                if not isinstance(e, TextTooLargeError):
+                    logger.warning(f"Error estimando tokens: {str(e)}")
+        
+        # Verificar si el lote completo excede límite de tokens
+        if estimated_tokens > self.max_tokens_per_batch:
             error_context = {
                 "tenant_id": tenant_id,
-                "total_tokens": total_tokens,
+                "texts_count": len(texts),
+                "estimated_tokens": estimated_tokens,
                 "max_tokens": self.max_tokens_per_batch
             }
-            logger.warning(f"Tokens totales exceden el máximo por lote: {total_tokens} > {self.max_tokens_per_batch}", 
-                         extra=error_context)
             
-            # Procesar en sublotes divididos por tokens
-            return await self._process_large_batch(texts, tenant_id, ctx, total_tokens)
-        
-        # Optimizar procesamiento de textos vacíos y no vacíos
-        # Simplificar la lógica separando textos vacíos y no vacíos desde el principio
-        textos_no_vacios = [text for text in texts if text.strip()]
-        indices_vacios = [i for i, text in enumerate(texts) if not text.strip()]
-        
-        # Vector de ceros predefinido para textos vacíos
-        vector_ceros = [0.0] * self.dimensions
-        
-        # Inicializar arreglo de resultados con tamaño adecuado
-        result = [None] * len(texts)
-        
-        # Primero, asignar vectores de ceros a los textos vacíos
-        for idx in indices_vacios:
-            result[idx] = vector_ceros
-        
-        # Solo procesar embeddings para textos no vacíos
-        if textos_no_vacios:
-            try:
-                # Usar la función centralizada de LlamaIndex
-                embeddings, metadata = await generate_embeddings_with_llama_index(
-                    texts=textos_no_vacios, 
-                    tenant_id=tenant_id,
-                    model_name=self.model_name,
-                    collection_id=coll_id,
-                    chunk_id=chunk_id,
-                    ctx=ctx
-                )
-                
-                # Asignar embeddings a posiciones correspondientes en el arreglo de resultados
-                embed_idx = 0
-                for i, text in enumerate(texts):
-                    if text.strip():
-                        result[i] = embeddings[embed_idx]
-                        embed_idx += 1
-            except Exception as e:
-                # Mejorar manejo de errores con más contexto
-                logger.error(f"Error al generar embeddings: {str(e)}", 
-                             extra={"tenant_id": tenant_id, "model": self.model_name, 
-                                    "texts_count": len(textos_no_vacios)})
-                
-                # Propagar el error con contexto enriquecido
-                if isinstance(e, ServiceError):
-                    raise e
-                else:
-                    raise EmbeddingGenerationError(
-                        message=f"Error al generar embeddings con el modelo {self.model_name}",
-                        details={"original_error": str(e), "model": self.model_name}
-                    ) from e
+            logger.warning(f"Lote excede límite de tokens. Se procesará en sublotes: {estimated_tokens} > {self.max_tokens_per_batch}", 
+                        extra=error_context)
             
-        return result
+            # Procesar lote grande dividiendo por tokens
+            return await self._process_large_batch(
+                texts=texts,
+                tenant_id=tenant_id,
+                ctx=ctx,
+                estimated_tokens=estimated_tokens,
+                collection_id=coll_id,
+                chunk_id=chunk_id
+            )
+        
+        try:
+            # Utilizar la implementación centralizada para generar embeddings
+            embeddings, metadata = await generate_embeddings_with_llama_index(
+                texts=texts,
+                tenant_id=tenant_id,
+                model_name=self.model_name,
+                collection_id=coll_id,
+                chunk_id=chunk_id,
+                ctx=ctx
+            )
+            
+            return embeddings
+        except Exception as e:
+            logger.error(f"Error al generar embeddings en lote: {str(e)}", 
+                       extra={"tenant_id": tenant_id, "batch_size": len(texts)})
+            
+            if isinstance(e, ServiceError):
+                raise e
+            else:
+                raise EmbeddingGenerationError(
+                    message=f"Error al generar embeddings para {len(texts)} textos",
+                    details={"original_error": str(e), "batch_size": len(texts)}
+                ) from e
     
     def _resolve_context_params(self, tenant_id: Optional[str] = None, collection_id: Optional[str] = None, ctx: Optional[Context] = None) -> Tuple[str, Optional[str]]:
         """
@@ -351,21 +319,35 @@ class CachedEmbeddingProvider:
         Raises:
             ServiceError: Si no se puede resolver un tenant_id válido
         """
-        # Resolver tenant_id: parámetro > contexto > instancia
-        resolved_tenant_id = tenant_id or (ctx.get_tenant_id() if ctx else None) or self.tenant_id
+        # Resolver tenant_id
+        resolved_tenant_id = tenant_id
         
-        # Validar que exista un tenant_id válido
+        # Si no se proporcionó explícitamente, intentar obtener del contexto
+        if not resolved_tenant_id and ctx and ctx.has_tenant_id():
+            resolved_tenant_id = ctx.get_tenant_id()
+            
+        # Si aún no tenemos, usar el de la instancia
         if not resolved_tenant_id:
+            resolved_tenant_id = self.tenant_id
+            
+        # Validar que tenemos un tenant_id válido
+        if not resolved_tenant_id or resolved_tenant_id == "default":
             raise ServiceError(
-                message="Se requiere tenant_id para generar embeddings",
+                message="Se requiere un tenant_id válido para generar embeddings",
                 error_code=ErrorCode.TENANT_REQUIRED,
-                details={"source": "embedding_provider"}
+                status_code=400
             )
             
-        # Resolver collection_id: parámetro > instancia > contexto
-        resolved_collection_id = collection_id or self.collection_id
-        if resolved_collection_id is None and ctx and hasattr(ctx, 'collection_id'):
-            resolved_collection_id = ctx.collection_id
+        # Resolver collection_id
+        resolved_collection_id = collection_id
+        
+        # Si no se proporcionó explícitamente, intentar obtener del contexto
+        if not resolved_collection_id and ctx and hasattr(ctx, 'get_collection_id'):
+            resolved_collection_id = ctx.get_collection_id()
+            
+        # Si aún no tenemos, usar el de la instancia
+        if not resolved_collection_id:
+            resolved_collection_id = self.collection_id
             
         return resolved_tenant_id, resolved_collection_id
     
@@ -384,54 +366,85 @@ class CachedEmbeddingProvider:
         Returns:
             List[List[float]]: Lista de vectores de embedding
         """
-        # Validar parámetros
-        if not tenant_id:
-            tenant_id, collection_id = self._resolve_context_params(tenant_id=tenant_id, collection_id=collection_id, ctx=ctx)
-            
-        logger.info(f"Procesando lote grande de {len(texts)} textos en sublotes")
-        max_textos_por_solicitud = self.max_batch_size
+        # Estimar tamaño de sublote basado en tokens o número máximo
+        batch_size = self.embed_batch_size
         
-        # Si tenemos tokens estimados y son demasiados, dividir por tokens
-        if estimated_tokens and estimated_tokens > self.max_tokens_per_batch:
-            # Calcular número aproximado de sublotes necesarios
-            num_batches = (estimated_tokens // self.max_tokens_per_batch) + 1
-            max_textos_por_solicitud = max(1, len(texts) // num_batches)
+        # Ajustar batch_size si tenemos estimación de tokens
+        if estimated_tokens and len(texts) > 0:
+            # Calcular ratio de tokens por texto
+            tokens_per_text = estimated_tokens / len(texts)
             
-        # Procesar el lote en sublotes
-        batch_size = max(1, max_textos_por_solicitud)
-        results = []
+            # Calcular tamaño de lote que no exceda el límite de tokens
+            adjusted_batch_size = max(1, int(self.max_tokens_per_batch / tokens_per_text))
+            
+            # Usar el menor de los dos límites
+            batch_size = min(adjusted_batch_size, self.embed_batch_size)
+            
+        logger.info(f"Procesando lote grande en sublotes de {batch_size} textos", 
+                  extra={"tenant_id": tenant_id, "total_texts": len(texts)})
         
-        # Crear tareas para procesar sublotes en paralelo (hasta un límite razonable)
-        max_concurrent_tasks = min(5, (len(texts) + batch_size - 1) // batch_size)
+        # Dividir lote en sublotes
+        sublotes = [texts[i:i+batch_size] for i in range(0, len(texts), batch_size)]
+        
+        # Dividir chunk_ids si se proporcionaron
+        chunk_id_batches = None
+        if chunk_id:
+            chunk_id_batches = [chunk_id[i:i+batch_size] for i in range(0, len(chunk_id), batch_size)]
+        
+        # Procesar cada sublote en paralelo
         tasks = []
-        
-        for i in range(0, len(texts), batch_size):
-            # Obtener sublote de textos
-            sublote = texts[i:i+batch_size]
-            logger.debug(f"Preparando sublote {i//batch_size + 1} con {len(sublote)} textos")
+        for i, sublote in enumerate(sublotes):
+            # Obtener chunk_ids para este sublote si existen
+            current_chunk_ids = chunk_id_batches[i] if chunk_id_batches else None
             
-            # Preparar los chunk_ids correspondientes si existen
-            sublote_chunk_ids = None
-            if chunk_id:
-                sublote_chunk_ids = chunk_id[i:i+batch_size]
-                logger.debug(f"Usando {len(sublote_chunk_ids)} chunk_ids para este sublote")
-            
-            # Crear tarea para procesar sublote
-            task = self.get_batch_embeddings(
-                texts=sublote, 
-                collection_id=collection_id,
-                chunk_id=sublote_chunk_ids,
-                ctx=ctx
+            # Crear tarea para proceso asíncrono
+            task = asyncio.create_task(
+                generate_embeddings_with_llama_index(
+                    texts=sublote,
+                    tenant_id=tenant_id,
+                    model_name=self.model_name,
+                    collection_id=collection_id,
+                    chunk_id=current_chunk_ids,
+                    ctx=ctx
+                )
             )
             tasks.append(task)
-            
-            # Procesar en grupos para limitar la concurrencia
-            if len(tasks) >= max_concurrent_tasks or i + batch_size >= len(texts):
-                # Ejecutar tareas en paralelo y recolectar resultados
-                batch_results = await asyncio.gather(*tasks)
-                for br in batch_results:
-                    results.extend(br)
-                # Reiniciar lista de tareas
-                tasks = []
         
-        return results
+        # Esperar a que todos los sublotes terminen
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Procesar resultados y posibles errores
+        all_embeddings = []
+        
+        for i, result in enumerate(results):
+            # Verificar si hubo una excepción
+            if isinstance(result, Exception):
+                logger.error(f"Error en sublote {i}: {str(result)}", 
+                           extra={"tenant_id": tenant_id, "batch_index": i})
+                
+                # Para no bloquear todo el proceso, usar embeddings vacíos como fallback
+                # Incluir tantos embeddings vacíos como textos en el sublote
+                missing_embeddings = [[0.0] * self.dimensions for _ in range(len(sublotes[i]))]
+                all_embeddings.extend(missing_embeddings)
+            else:
+                # Desempaquetar resultado (embeddings, metadata)
+                embeddings, _ = result
+                all_embeddings.extend(embeddings)
+        
+        # Verificar que tenemos el número correcto de embeddings
+        if len(all_embeddings) != len(texts):
+            logger.warning(f"Discrepancia en el número de embeddings: {len(all_embeddings)} vs {len(texts)} esperados", 
+                         extra={"tenant_id": tenant_id})
+            
+            # Completar los faltantes con embeddings vacíos
+            while len(all_embeddings) < len(texts):
+                all_embeddings.append([0.0] * self.dimensions)
+                
+            # O recortar si tenemos más de lo esperado
+            if len(all_embeddings) > len(texts):
+                all_embeddings = all_embeddings[:len(texts)]
+        
+        logger.info(f"Procesamiento por lotes completado: {len(all_embeddings)} embeddings generados", 
+                  extra={"tenant_id": tenant_id})
+        
+        return all_embeddings
