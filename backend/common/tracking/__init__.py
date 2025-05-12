@@ -42,6 +42,7 @@ OPERATION_CLASSIFICATION = "classification"
 OPERATION_EXTRACTION = "extraction"
 OPERATION_BATCH = "batch"      # Procesamiento por lotes (batch)
 OPERATION_INTERNAL = "internal"  # Operaciones internas entre servicios
+OPERATION_EMBEDDING = "embedding"  # Generación de embeddings
 
 __all__ = [
     # Funciones principales de tracking
@@ -65,6 +66,9 @@ __all__ = [
     'OPERATION_GENERATION',
     'OPERATION_CLASSIFICATION',
     'OPERATION_EXTRACTION',
+    'OPERATION_BATCH',
+    'OPERATION_INTERNAL',
+    'OPERATION_EMBEDDING',
     
     # Servicios de atribución
     'TokenAttributionService',

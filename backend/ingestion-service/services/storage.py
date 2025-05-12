@@ -14,7 +14,10 @@ import os
 import tempfile
 import uuid
 from typing import Dict, Any, Optional, List, Tuple
-from supabase.storage import StorageException
+# Definir nuestra propia clase StorageException ya que la importación de supabase.storage no está disponible
+class StorageException(Exception):
+    """Excepción personalizada para errores de almacenamiento de Supabase."""
+    pass
 
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
