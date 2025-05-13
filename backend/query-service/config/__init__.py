@@ -5,7 +5,7 @@ Este paquete centraliza toda la configuración específica del servicio,
 siguiendo el patrón de configuración unificado para todos los servicios.
 """
 
-from config.settings import get_settings, get_health_status, get_collection_config
+from config.settings import get_settings, get_health_status
 from config.constants import (
     LLM_DEFAULT_TEMPERATURE,
     LLM_MAX_TOKENS,
@@ -43,7 +43,6 @@ from config.constants import (
 __all__ = [
     "get_settings",
     "get_health_status",
-    "get_collection_config",
     "LLM_DEFAULT_TEMPERATURE",
     "LLM_MAX_TOKENS",
     "DEFAULT_SIMILARITY_TOP_K",

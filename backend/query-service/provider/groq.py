@@ -341,7 +341,10 @@ class GroqLLM:
             **kwargs: Parámetros adicionales específicos del modelo
             
         Returns:
-            Dict[str, Any]: Respuesta generada con metadatos
+            Dict[str, Any]: Respuesta generada con metadatos completos, incluyendo:
+                - content: El texto de respuesta
+                - usage: Información detallada de uso de tokens
+                - metadata: Información adicional sobre el modelo y la respuesta
             
         Raises:
             GroqAuthenticationError: Si hay problemas con la API key
@@ -357,28 +360,44 @@ class GroqLLM:
         params = {**self.default_params, **kwargs}
         
         try:
+            # Registrar tiempo de inicio para métricas de rendimiento
+            start_time = time.time()
+            
+            # Realizar llamada a la API
             completion = await self.async_client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 **params
             )
             
-            # Construir respuesta estructurada
+            # Calcular tiempo total de la llamada
+            elapsed_time = time.time() - start_time
+            
+            # Extraer contenido de la respuesta
             response_content = completion.choices[0].message.content
             
-            # Calcular tokens si es posible
-            input_tokens = completion.usage.prompt_tokens if hasattr(completion, 'usage') else None
-            output_tokens = completion.usage.completion_tokens if hasattr(completion, 'usage') else None
+            # Extraer información de uso de tokens directamente de la API
+            token_usage = {}
+            if hasattr(completion, 'usage'):
+                token_usage = {
+                    "prompt_tokens": getattr(completion.usage, 'prompt_tokens', 0),
+                    "completion_tokens": getattr(completion.usage, 'completion_tokens', 0),
+                    "total_tokens": getattr(completion.usage, 'total_tokens', 0),
+                    "queue_time": getattr(completion.usage, 'queue_time', 0),
+                    "prompt_time": getattr(completion.usage, 'prompt_time', 0),
+                    "completion_time": getattr(completion.usage, 'completion_time', 0),
+                    "total_time": getattr(completion.usage, 'total_time', 0)
+                }
             
+            # Construir respuesta enriquecida con todos los metadatos
             return {
                 "content": response_content,
+                "usage": token_usage,
                 "metadata": {
                     "model": self.model,
                     "provider": "groq",
-                    "input_tokens": input_tokens,
-                    "output_tokens": output_tokens,
-                    "total_tokens": input_tokens + output_tokens if input_tokens and output_tokens else None,
-                    "finish_reason": completion.choices[0].finish_reason if hasattr(completion.choices[0], 'finish_reason') else None
+                    "finish_reason": getattr(completion.choices[0], 'finish_reason', None) if hasattr(completion, 'choices') and completion.choices else None,
+                    "api_response_time": elapsed_time
                 }
             }
         except Exception as e:

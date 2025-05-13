@@ -110,7 +110,7 @@ async def process_query_with_sources(
             # Extraer respuesta
             response = query_result.response
             
-            # Calcular tokens aproximados
+            # Extraer información del modelo usado
             model_used = getattr(query_result, "model", "unknown")
             if not model_used or model_used == "unknown":
                 # Intentar extraer del LLM
@@ -122,15 +122,39 @@ async def process_query_with_sources(
             
             # Identificar proveedor del modelo para metadatos enriquecidos
             # Usamos la función especializada del módulo provider
-            if is_groq_model(model_used):
-                provider = "groq"  # Groq es el proveedor principal para LLMs
-            else:
-                provider = "other"  # Otros modelos (posiblemente de OpenAI o proveedores futuros)
+            is_groq = is_groq_model(model_used)
+            provider = "groq" if is_groq else "other"  # Groq es el proveedor principal para LLMs
             
-            # Cálculo preciso de tokens según el modelo
-            tokens_in = count_tokens(query, model_name=model_used)
-            tokens_out = count_tokens(response, model_name=model_used)
-            tokens_total = tokens_in + tokens_out
+            # Intentar extraer información de tokens directamente de la API (cuando esté disponible)
+            api_token_usage = None
+            tokens_in = 0
+            tokens_out = 0
+            tokens_total = 0
+            
+            # Primero intentar extraer del callback manager si está disponible (datos de Groq)
+            if is_groq and hasattr(query_engine, "callback_manager") and query_engine.callback_manager:
+                try:
+                    callback_data = query_engine.callback_manager.get_data()
+                    # llama_index almacena datos de respuesta de API en el callback manager
+                    for event in callback_data.get("events", []):
+                        if event.get("event_type") == "llm" and event.get("response") and hasattr(event["response"], "usage"):
+                            api_token_usage = event["response"].usage
+                            if hasattr(api_token_usage, "prompt_tokens"):
+                                tokens_in = getattr(api_token_usage, "prompt_tokens", 0)
+                            if hasattr(api_token_usage, "completion_tokens"):
+                                tokens_out = getattr(api_token_usage, "completion_tokens", 0)
+                            if hasattr(api_token_usage, "total_tokens"):
+                                tokens_total = getattr(api_token_usage, "total_tokens", 0)
+                            break
+                except Exception as callback_err:
+                    logger.debug(f"No se pudieron extraer tokens del callback: {str(callback_err)}")
+                    
+            # Fallback: si no tenemos datos de la API, usar nuestro contador local
+            if tokens_total == 0:
+                tokens_in = count_tokens(query, model_name=model_used)
+                tokens_out = count_tokens(response, model_name=model_used)
+                tokens_total = tokens_in + tokens_out
+                logger.debug(f"Usando conteo de tokens estimado: in={tokens_in}, out={tokens_out}, total={tokens_total}")
             
             # Generación de clave de idempotencia para evitar doble conteo
             query_hash = hashlib.md5(query.encode()).hexdigest()[:10]
