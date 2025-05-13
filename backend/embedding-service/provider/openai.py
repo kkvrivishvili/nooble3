@@ -254,18 +254,56 @@ async def get_openai_embedding(
                     
                     # Capturar información de uso y tokens
                     usage = result.get("usage", {})
-                    prompt_tokens = usage.get("prompt_tokens", tokens)
-                    total_tokens = usage.get("total_tokens", tokens)
+                    
+                    # Determinar si los tokens vienen de la API o son estimados
+                    api_prompt_tokens = usage.get("prompt_tokens", 0)
+                    api_total_tokens = usage.get("total_tokens", 0)
+                    
+                    # Determinar la fuente de los datos de tokens
+                    token_source = "api" if "usage" in result and api_prompt_tokens > 0 else "estimated"
+                    
+                    # Usar valores de la API si están disponibles, sino usar estimados
+                    prompt_tokens = api_prompt_tokens if api_prompt_tokens > 0 else tokens
+                    total_tokens = api_total_tokens if api_total_tokens > 0 else tokens
+                    
+                    # Si no hay tokens reportados pero tenemos texto, asegurarnos de usar la estimación
+                    if total_tokens == 0 and text:
+                        # Ya tenemos tokens estimados en la variable 'tokens'
+                        total_tokens = tokens
+                        prompt_tokens = tokens  # En embeddings, prompt_tokens == total_tokens
+                        token_source = "estimated"
+                    
+                    # Generar hash del texto para identificar el embedding (para idempotencia)
+                    from hashlib import md5
+                    text_hash = md5(text.encode()).hexdigest()[:10]
                     
                     # Registrar uso de tokens si hay un tenant_id válido
-                    if tenant_id and tenant_id != "default":
+                    if tenant_id and tenant_id != "default" and total_tokens > 0:
+                        # Crear metadata enriquecida para el tracking
+                        tracking_metadata = {
+                            "service": "embedding-service", 
+                            "provider": "openai",
+                            "token_source": token_source,
+                            "text_hash": text_hash,
+                            "text_length": len(text),
+                            "embedding_dimension": len(embedding) if embedding else dimensions
+                        }
+                        
+                        # Añadir IDs relevantes si están disponibles
+                        if collection_id:
+                            tracking_metadata["collection_id"] = collection_id
+                        if document_id:
+                            tracking_metadata["document_id"] = document_id
+                        if chunk_id:
+                            tracking_metadata["chunk_id"] = chunk_id
+                        
                         await track_token_usage(
                             tenant_id=tenant_id,
-                            tokens=prompt_tokens,
+                            tokens=total_tokens,
                             model=model,
                             token_type=TOKEN_TYPE_EMBEDDING,
                             operation=OPERATION_EMBEDDING,
-                            metadata={"service": "embedding-service", "collection_id": collection_id},
+                            metadata=tracking_metadata,
                             idempotency_key=idempotency_key
                         )
                     
@@ -278,7 +316,8 @@ async def get_openai_embedding(
                         },
                         "latency": elapsed_time,
                         "source": "generation",
-                        "input_tokens": tokens
+                        "input_tokens": tokens,
+                        "token_source": token_source
                     }
                     
                     # Estandarizar los metadatos para el formato LlamaIndex
