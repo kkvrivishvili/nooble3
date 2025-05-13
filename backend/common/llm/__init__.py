@@ -1,13 +1,12 @@
 """
 Integración con modelos de lenguaje (LLMs) y embeddings.
+Este módulo se centra exclusivamente en Groq y Ollama como proveedores de LLM.
 """
 
 from .base import BaseEmbeddingModel, BaseLLM
-from .openai import get_openai_client, get_openai_embedding_model
 from .ollama import OllamaEmbeddings, OllamaLLM, get_embedding_model, get_llm_model, is_using_ollama
 from .token_counters import count_tokens, count_message_tokens, estimate_max_tokens_for_model, estimate_remaining_tokens
-from .streaming import stream_openai_response, stream_ollama_response
-from .llamaindex import create_response_synthesizer
+from .streaming import stream_ollama_response, stream_groq_response
 
 # Importar integración con Groq si está disponible
 try:
@@ -32,9 +31,6 @@ __all__ = [
     # Interfaces base
     'BaseEmbeddingModel', 'BaseLLM',
     
-    # OpenAI
-    'get_openai_client', 'get_openai_embedding_model',
-    
     # Ollama
     'OllamaEmbeddings', 'OllamaLLM', 'get_embedding_model', 'get_llm_model', 'is_using_ollama',
     
@@ -42,12 +38,9 @@ __all__ = [
     'count_tokens', 'count_message_tokens', 'estimate_max_tokens_for_model', 'estimate_remaining_tokens',
     
     # Streaming
-    'stream_openai_response', 'stream_ollama_response',
+    'stream_ollama_response', 'stream_groq_response',
     
     # Groq
     'GroqLLM', 'get_groq_client', 'get_async_groq_client', 'get_groq_llm_model',
-    'stream_groq_response', 'is_groq_model', 'GROQ_MODELS', 'GROQ_AVAILABLE',
-    
-    # LlamaIndex utilities
-    'create_response_synthesizer'
+    'stream_groq_response', 'is_groq_model', 'GROQ_MODELS', 'GROQ_AVAILABLE'
 ]

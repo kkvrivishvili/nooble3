@@ -1,8 +1,8 @@
 """
-Utilidades para trabajar con LlamaIndex.
+Utilidades para trabajar con LlamaIndex específicas para el servicio de consulta.
 
 Proporciona funciones y configuraciones para interactuar con componentes
-de LlamaIndex de manera estandarizada en todos los servicios.
+de LlamaIndex de manera estandarizada.
 """
 
 import logging
@@ -23,7 +23,7 @@ def create_response_synthesizer(
     Crea un sintetizador de respuestas configurado para LlamaIndex.
     
     Esta función centraliza la creación de componentes de síntesis de respuestas
-    para mantener consistencia en todos los servicios.
+    para mantener consistencia en el servicio de consulta.
     
     Args:
         llm: Modelo de lenguaje a utilizar

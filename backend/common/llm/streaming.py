@@ -1,5 +1,6 @@
 """
 Funciones para streaming de respuestas LLM.
+Este módulo provee funcionalidades de streaming para Ollama y Groq exclusivamente.
 """
 
 import asyncio
@@ -9,7 +10,7 @@ from typing import List, Dict, Any, Optional, AsyncGenerator
 
 logger = logging.getLogger(__name__)
 
-async def stream_openai_response(
+async def stream_groq_response(
     client,
     messages: List[Dict[str, str]],
     model: str,
@@ -18,12 +19,12 @@ async def stream_openai_response(
     stream_handler: Optional[callable] = None
 ) -> AsyncGenerator[str, None]:
     """
-    Genera una respuesta de OpenAI en streaming.
+    Genera una respuesta de Groq en streaming.
     
     Args:
-        client: Cliente OpenAI
-        messages: Lista de mensajes en formato OpenAI
-        model: Nombre del modelo
+        client: Cliente Groq
+        messages: Lista de mensajes en formato compatible con Chat API
+        model: Nombre del modelo de Groq (ej: "llama2-70b-4096")
         temperature: Temperatura de generación
         max_tokens: Límite de tokens
         stream_handler: Función opcional para manejar cada fragmento
@@ -61,7 +62,7 @@ async def stream_openai_response(
                 # Devolver el fragmento
                 yield delta.content
     except Exception as e:
-        error_msg = f"Error en streaming OpenAI: {str(e)}"
+        error_msg = f"Error en streaming Groq: {str(e)}"
         logger.error(error_msg)
         yield f"Error: {str(e)}"
 

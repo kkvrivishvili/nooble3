@@ -328,13 +328,13 @@ async def create_query_engine(
     
     from services.vector_store import get_vector_store_for_collection
     from services.llm import get_llm_for_tenant
-    from common.llm.llamaindex import create_response_synthesizer
+    from ..utils.llamaindex_utils import create_response_synthesizer
     
     settings = get_settings()
     
     try:
         # Crear handler para debugging y tracking
-        from common.llm.callbacks import TokenCountingHandler, LatencyTrackingHandler
+        from ..utils.callbacks import TokenCountingHandler, LatencyTrackingHandler
         debug_handler = LlamaDebugHandler()
         callback_manager = CallbackManager(
             handlers=[debug_handler, TokenCountingHandler(), LatencyTrackingHandler()]

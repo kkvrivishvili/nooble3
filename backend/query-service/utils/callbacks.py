@@ -1,7 +1,7 @@
 """
-Módulo centralizado para callbacks relacionados con modelos LLM.
-Proporciona implementaciones estándar de callbacks para tracking, conteo de tokens
-y otras funcionalidades comunes para todos los servicios.
+Callback handlers para procesar llamadas a modelos LLM.
+Proporciona implementaciones de callbacks para tracking, conteo de tokens
+y medición de latencia específicos para el servicio de consulta.
 """
 
 import time
@@ -10,14 +10,13 @@ from typing import List, Dict, Any, Optional
 
 from llama_index.core.callbacks import CallbackManager, CBEventType, EventPayload
 
-from ..llm.token_counters import count_tokens
+from common.llm.token_counters import count_tokens
 
 logger = logging.getLogger(__name__)
 
 class TokenCountingHandler:
     """
     Callback handler para contar tokens de entrada y salida con precisión.
-    Implementación centralizada para uso en todos los servicios.
     Compatible con LlamaIndex.
     """
     
@@ -102,7 +101,7 @@ class TrackingCallbackHandler:
             # Usar la función centralizada de tracking (async)
             # Este es un llamado que normalmente sería async, pero lo hacemos sin await
             # porque langchain no soporta callbacks async
-            from ..tracking import track_token_usage_sync
+            from common.tracking import track_token_usage_sync
             
             track_token_usage_sync(
                 tenant_id=self.tenant_id,
