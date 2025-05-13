@@ -1,6 +1,11 @@
 """
 Integración con modelos de lenguaje (LLMs) y embeddings.
 Este módulo se centra exclusivamente en Groq como proveedor de LLM.
+
+[OBSOLETO] Este módulo está marcado como obsoleto y está en proceso de migración.
+Las funcionalidades de LLM se han movido a provider/groq.py en query-service.
+Las funcionalidades de conteo de tokens se han movido a utils/token_counters.py en cada servicio.
+Por favor, utilice las nuevas implementaciones en los servicios específicos en lugar de este módulo común.
 """
 
 from .base import BaseEmbeddingModel, BaseLLM

@@ -292,7 +292,7 @@ class CachedEmbeddingProvider:
             total_tokens = 0
             for text in texts:
                 if text.strip():  # Solo contar tokens en textos no vacíos
-                    total_tokens += estimate_openai_tokens(text)
+                    total_tokens += estimate_openai_tokens(text, model_to_use)
             
             elapsed_time = time.time() - start_time
             

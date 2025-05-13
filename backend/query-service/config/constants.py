@@ -35,8 +35,17 @@ DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small" # Modelo de embedding predete
 # Los modelos de Ollama han sido eliminados
 
 # Modelos de Groq
-DEFAULT_GROQ_MODEL = "llama3-70b-8192" # Modelo predeterminado para Groq
+# Modelos tradicionales
+DEFAULT_GROQ_MODEL = "llama3-70b-8192" # Modelo predeterminado para Groq (70B para alta calidad)
 DEFAULT_GROQ_LLM_MODEL = "llama3-70b-8192" # Modelo LLM predeterminado para Groq
+
+# Nuevos modelos de Groq con características avanzadas
+GROQ_EXTENDED_CONTEXT_MODEL = "llama-3.1-8b-instant-128k" # Modelo con ventana de contexto de 128K
+GROQ_FAST_MODEL = "llama-3.1-8b-instant" # Modelo optimizado para baja latencia
+
+# Modelos Llama 4 en Groq
+GROQ_MAVERICK_MODEL = "llama-4-maverick-17bx128e" # Llama 4 Maverick (17Bx128E) para alto rendimiento
+GROQ_SCOUT_MODEL = "llama-4-scout-17bx16e" # Llama 4 Scout (17Bx16E) balanceado para uso general
 
 # La configuración de proveedores ahora se determina por variables en .env
 # Nota: Solo se soporta Groq para LLMs y OpenAI para embeddings

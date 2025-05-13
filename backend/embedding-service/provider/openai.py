@@ -30,7 +30,8 @@ from common.tracking import OPERATION_EMBEDDING
 from common.config.tiers import get_embedding_model_details, get_available_embedding_models
 from common.cache.helpers import get_with_cache_aside, standardize_llama_metadata
 from common.cache.manager import CacheManager
-from common.llm.token_counters import count_tokens
+# Importamos el contador de tokens desde el módulo local
+from utils.token_counters import count_embedding_tokens as count_tokens
 
 # Importar configuración centralizada
 from config.settings import get_settings
@@ -99,17 +100,20 @@ def is_openai_embedding_model(model_name: str) -> bool:
     model_name_lower = model_name.lower()
     return any(model.lower() in model_name_lower for model in OPENAI_EMBEDDING_MODELS.keys())
 
-def estimate_openai_tokens(text: str) -> int:
+def estimate_openai_tokens(text: str, model_name: str = "text-embedding-3-small") -> int:
     """
     Estima la cantidad de tokens en un texto para los modelos de OpenAI.
     
     Args:
         text: Texto para estimar tokens
+        model_name: Nombre del modelo de embedding (por defecto: text-embedding-3-small)
         
     Returns:
         int: Cantidad estimada de tokens
     """
-    return count_tokens(text)
+    # Usamos la función especializada de conteo de tokens para embeddings
+    from utils.token_counters import count_embedding_tokens
+    return count_embedding_tokens(text, model_name)
 
 async def get_openai_config(tenant_id: str, model_name: str) -> Tuple[str, str]:
     """
@@ -199,8 +203,8 @@ async def get_openai_embedding(
     # Controlar tiempos límite
     timeout = aiohttp.ClientTimeout(total=TIMEOUTS.get("embedding_timeout", 30))
     
-    # Calcular tokens para tracking
-    tokens = estimate_openai_tokens(text)
+    # Calcular tokens para tracking usando el modelo específico
+    tokens = estimate_openai_tokens(text, model)
     
     try:
         # Preparar request para la API de OpenAI

@@ -17,43 +17,80 @@ try:
 except ImportError:
     GROQ_AVAILABLE = False
 
-# Importación para contadores de tokens (mismo que usa el resto del servicio)
-from common.llm.token_counters import count_tokens
+# Importamos funciones de conteo de tokens desde utils
+from utils.token_counters import count_tokens, count_message_tokens, estimate_model_max_tokens
+
+# Importamos tipos desde common (solo tipos, no implementación)
+from common.errors import ServiceError, ErrorCode
 
 logger = logging.getLogger(__name__)
 
-# Modelos disponibles en Groq (actualizados según documentación oficial)
+# Diccionario de modelos disponibles en Groq con su ventana de contexto
 GROQ_MODELS = {
-    # Modelos de producción actuales
+    # Modelos Llama 3 (originales)
     "llama3-8b-8192": {
+        "description": "Llama 3 8B con contexto de 8K tokens",
         "context_window": 8192,
-        "description": "Llama 3 8B (GroqCloud)",
         "default_max_tokens": 4096
     },
     "llama3-70b-8192": {
+        "description": "Llama 3 70B con contexto de 8K tokens",
         "context_window": 8192,
-        "description": "Llama 3 70B (GroqCloud)",
         "default_max_tokens": 4096
     },
-    "llama-3.3-70b-versatile": {
-        "context_window": 8192,
-        "description": "Llama 3.3 70B Versatile (GroqCloud)",
-        "default_max_tokens": 4096
-    },
+    
+    # Nuevos modelos Llama 3.1
     "llama-3.1-8b-instant": {
-        "context_window": 8192, 
-        "description": "Llama 3.1 8B Instant (GroqCloud)",
+        "description": "Llama 3.1 8B optimizado para baja latencia",
+        "context_window": 8192,
         "default_max_tokens": 4096
     },
+    "llama-3.1-8b-instant-128k": {
+        "description": "Llama 3.1 8B con ventana de contexto extendida de 128K tokens",
+        "context_window": 131072,  # 128K tokens
+        "default_max_tokens": 8192
+    },
+    
+    # Nuevos modelos Llama 3.3
+    "llama-3.3-70b-versatile": {
+        "description": "Llama 3.3 70B con mejor rendimiento general",
+        "context_window": 8192,
+        "default_max_tokens": 4096
+    },
+    
+    # Modelos Llama 4
+    "llama-4-maverick-17bx128e": {
+        "description": "Llama 4 Maverick (17Bx128E) - alto rendimiento para contextos complejos",
+        "context_window": 32768,  # 32K tokens
+        "default_max_tokens": 8192
+    },
+    "llama-4-scout-17bx16e": {
+        "description": "Llama 4 Scout (17Bx16E) - balanceado para uso general",
+        "context_window": 32768,  # 32K tokens
+        "default_max_tokens": 8192
+    },
+    
+    # Modelos Mixtral (mantenidos para compatibilidad)
+    "mixtral-8x7b-32768": {
+        "description": "Mixtral 8x7B con contexto de 32K tokens",
+        "context_window": 32768,
+        "default_max_tokens": 8192
+    },
+    
+    # Modelos Gemma (mantenidos para compatibilidad)
+    "gemma-7b-it": {
+        "description": "Gemma 7B Instruction Tuned",
+        "context_window": 8192,
+        "default_max_tokens": 4096
+    },
+    
+    # Otros modelos
     "gemma-2-9b-it": {
         "context_window": 8192,
         "description": "Gemma 2 9B Instruction Tuned (GroqCloud)",
         "default_max_tokens": 4096
     }
 }
-
-# Importaciones para tipos de error estándar
-from common.errors import ServiceError, ErrorCode
 
 # Errores específicos para Groq que siguen el estándar del proyecto
 class GroqError(ServiceError):
@@ -86,79 +123,42 @@ def is_groq_model(model_name: str) -> bool:
     Returns:
         bool: True si es un modelo de Groq, False en caso contrario
     """
+    # Si no hay nombre de modelo, no es un modelo de Groq
+    if not model_name:
+        return False
+        
+    # Normalizar el nombre del modelo a minúsculas
+    model_name_lower = model_name.lower()
+    
     # Verificar si el modelo está en la lista de modelos Groq
     if model_name in GROQ_MODELS:
         return True
     
-    # También verificar por prefijos de Groq (actualizados para nuevos formatos)
-    groq_prefixes = ["llama3-", "llama-3", "mixtral-", "gemma-"]
-    return any(model_name.startswith(prefix) for prefix in groq_prefixes)
-
-def estimate_groq_tokens(text: str, model_name: str) -> int:
-    """
-    Estima el número de tokens en un texto para modelos de Groq.
+    # Verificar si es un nuevo modelo que aún no está en nuestro diccionario
+    # pero cumple con los patrones de nomenclatura de Groq
+    groq_prefixes = [
+        "llama3-", 
+        "llama-3", 
+        "llama-3.1", 
+        "llama-3.3", 
+        "llama-4", 
+        "mixtral-", 
+        "gemma-"
+    ]
     
-    Args:
-        text: Texto para estimar tokens
-        model_name: Nombre del modelo para la estimación
+    # Verificar patrones específicos de modelos Groq
+    if any(model_name_lower.startswith(prefix) for prefix in groq_prefixes):
+        return True
         
-    Returns:
-        int: Número estimado de tokens
-    """
-    # Usar estimadores específicos según el modelo
-    if "llama" in model_name.lower():
-        return count_tokens(text, model="llama")
-    elif "gemma" in model_name.lower():
-        return count_tokens(text, model="gemma")
-    else:
-        # Fallback general
-        return count_tokens(text)
-
-def get_groq_client(api_key: Optional[str] = None) -> Union['Groq', None]:
-    """
-    Obtiene un cliente de Groq.
-    
-    Args:
-        api_key: API key de Groq (opcional, usa la variable de entorno GROQ_API_KEY por defecto)
+    # Verificar patrones específicos como "maverick" o "scout" que son exclusivos de Groq
+    groq_patterns = ["maverick", "scout", "instant-128k"]
+    if any(pattern in model_name_lower for pattern in groq_patterns):
+        return True
         
-    Returns:
-        Groq: Cliente de Groq o None si no está disponible
-    """
-    if not GROQ_AVAILABLE:
-        logger.warning("La biblioteca de Groq no está instalada. Ejecuta 'pip install groq' para instalar.")
-        return None
-    
-    # Usar la API key proporcionada o la de entorno
-    api_key = api_key or os.environ.get("GROQ_API_KEY")
-    
-    if not api_key:
-        logger.warning("No se encontró GROQ_API_KEY en las variables de entorno")
-        return None
-    
-    return Groq(api_key=api_key)
+    return False
 
-def get_async_groq_client(api_key: Optional[str] = None) -> Union['AsyncGroq', None]:
-    """
-    Obtiene un cliente asíncrono de Groq.
-    
-    Args:
-        api_key: API key de Groq (opcional, usa la variable de entorno GROQ_API_KEY por defecto)
-        
-    Returns:
-        AsyncGroq: Cliente asíncrono de Groq o None si no está disponible
-    """
-    if not GROQ_AVAILABLE:
-        logger.warning("La biblioteca de Groq no está instalada. Ejecuta 'pip install groq' para instalar.")
-        return None
-    
-    # Usar la API key proporcionada o la de entorno
-    api_key = api_key or os.environ.get("GROQ_API_KEY")
-    
-    if not api_key:
-        logger.warning("No se encontró GROQ_API_KEY en las variables de entorno")
-        return None
-    
-    return AsyncGroq(api_key=api_key)
+# Referencia a las funciones token_counters
+# Las funciones count_tokens y count_message_tokens ahora se importan de utils.token_counters
 
 class GroqLLM:
     """Implementación completa del cliente LLM para Groq."""

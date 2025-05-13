@@ -10,7 +10,8 @@ from typing import List, Dict, Any, Optional
 
 from llama_index.core.callbacks import CallbackManager, CBEventType, EventPayload
 
-from common.llm.token_counters import count_tokens
+# Importamos el contador de tokens desde el módulo local
+from utils.token_counters import count_tokens
 
 logger = logging.getLogger(__name__)
 

@@ -28,7 +28,8 @@ from common.errors import (
     EmbeddingGenerationError, EmbeddingModelError, TextTooLargeError
 )
 from common.tracking import track_token_usage, estimate_prompt_tokens, TOKEN_TYPE_LLM, OPERATION_QUERY
-from common.llm.token_counters import count_tokens
+# Actualizar importación de contador de tokens desde utils
+from utils.token_counters import count_tokens
 from provider.groq import is_groq_model
 from common.models import TenantInfo
 from common.cache import (
