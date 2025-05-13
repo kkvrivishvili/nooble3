@@ -9,9 +9,12 @@ import hashlib
 import random
 import asyncio
 from typing import Dict, Any, List, Optional
+import re
+import importlib
+import logging
 
-# Importar contador de tokens robusto
-from ..llm.token_counters import count_tokens
+# Reemplazar la dependencia de common/llm con un sistema dinámico
+# que detecta el contador de tokens adecuado según el servicio
 
 # Usamos solo las importaciones necesarias sin crear ciclos
 from ..db.supabase import get_supabase_client
@@ -324,13 +327,104 @@ async def estimate_prompt_tokens(text: str, model: str = "gpt-3.5-turbo") -> int
     Returns:
         int: Cantidad estimada de tokens
     """
-    try:
-        # Delegar al contador robusto de token_counters.py
-        return count_tokens(text, model)
-    except Exception as e:
-        # Fallback a estimación simple en caso de error
-        logger.warning(f"Error usando count_tokens, usando estimación simple: {str(e)}")
-        return int(len(text.split()) * 1.3)
+    # Obtener referencia al logger
+    logger = logging.getLogger(__name__)
+
+    # Variable global para evitar intentos repetidos de importación fallidos
+    _token_counter_cache = {
+        "query_service": None,
+        "embedding_service": None,
+        "tried_import": False
+    }
+
+    def _try_import_token_counters():
+        """
+        Intenta importar los contadores de tokens de los servicios específicos.
+        Actualiza el caché global con las funciones importadas.
+        """
+        if _token_counter_cache["tried_import"]:
+            return  # Ya lo intentamos antes, no repetir
+        
+        try:
+            # Intentar importar el contador de tokens del servicio de query
+            try:
+                from query_service.utils.token_counters import count_tokens as query_count_tokens
+                _token_counter_cache["query_service"] = query_count_tokens
+                logger.debug("Contador de tokens de query-service importado correctamente")
+            except ImportError:
+                logger.debug("No se pudo importar el contador de tokens de query-service")
+                
+            # Intentar importar el contador de tokens del servicio de embeddings
+            try:
+                from embedding_service.utils.token_counters import count_embedding_tokens
+                _token_counter_cache["embedding_service"] = count_embedding_tokens
+                logger.debug("Contador de tokens de embedding-service importado correctamente")
+            except ImportError:
+                logger.debug("No se pudo importar el contador de tokens de embedding-service")
+        except Exception as e:
+            logger.warning(f"Error al importar contadores de tokens: {str(e)}")
+        finally:
+            _token_counter_cache["tried_import"] = True
+
+    def estimate_tokens(text: str, model: str = None) -> int:
+        """
+        Estima la cantidad aproximada de tokens en un texto.
+        Usa el contador de tokens más preciso disponible según el servicio.
+            
+        Args:
+            text: Texto para estimar tokens
+            model: Modelo para optimizar la estimación (opcional)
+            
+        Returns:
+            int: Cantidad estimada de tokens
+        """
+        if not text:
+            return 0
+            
+        # Intentar importar los contadores si no lo hemos hecho ya
+        if not _token_counter_cache["tried_import"]:
+            _try_import_token_counters()
+        
+        # Determinar qué tipo de modelo es (llm o embedding)
+        is_embedding_model = False
+        if model and any(emb in model.lower() for emb in ["text-embedding", "ada-002"]):
+            is_embedding_model = True
+        
+        # Intentar usar el contador apropiado según el tipo de modelo
+        try:
+            if is_embedding_model and _token_counter_cache["embedding_service"]:
+                # Usar contador de embeddings
+                return _token_counter_cache["embedding_service"](text, model)
+            elif not is_embedding_model and _token_counter_cache["query_service"]:
+                # Usar contador de LLM
+                return _token_counter_cache["query_service"](text, model)
+        except Exception as e:
+            logger.debug(f"Error usando contador especializado: {str(e)}")
+        
+        # Fallback a estimación básica
+        try:
+            # Algoritmo simplificado de estimación basado en palabras y caracteres
+            words = len(text.split())
+            chars = len(text)
+            
+            # Factor de ajuste basado en el tipo de modelo
+            factor = 1.3  # Valor por defecto
+            if model:
+                model_lower = model.lower()
+                if "gpt-4" in model_lower or "gpt-3.5" in model_lower:
+                    factor = 1.33
+                elif "llama" in model_lower:
+                    factor = 1.4
+            
+            # Fórmula de estimación: palabras + factor * (caracteres / 4)
+            estimated_tokens = int(words + factor * (chars / 4))
+            return max(1, estimated_tokens)
+        except Exception as e:
+            # Estimación ultra simple como último recurso
+            logger.warning(f"Error en estimación de tokens, usando método ultra simple: {str(e)}")
+            return max(1, len(text) // 4)
+
+    return estimate_tokens(text, model)
 
 async def track_usage(
     tenant_id: str,

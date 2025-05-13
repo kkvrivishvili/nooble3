@@ -97,7 +97,7 @@ El sistema de tracking ahora incluye soporte completo para modelos de Groq:
 
 ```python
 from common.tracking import track_token_usage, TOKEN_TYPE_LLM, OPERATION_QUERY
-from common.llm import get_groq_llm_model
+from query_service.provider.groq import get_groq_llm_model
 
 # Obtener un modelo Groq
 llm = get_groq_llm_model(model="llama3-70b-8192")

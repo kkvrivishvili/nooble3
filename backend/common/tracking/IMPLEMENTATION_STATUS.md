@@ -86,8 +86,12 @@ Los metadatos ahora incluyen información adicional crítica:
 - La función `track_token_usage()` en `_base.py` es ahora la única implementación centralizada
 - Código legacy eliminado completamente del sistema (`increment_token_usage` y relacionados)
 - Todos los servicios utilizan constantes estandarizadas del módulo `common.tracking`
-- Implementado soporte para Groq en `common.llm.groq` con tracking unificado
+- Implementado soporte para Groq en `query-service/provider/groq.py` con tracking unificado
+- Implementadas funciones específicas de conteo de tokens en cada servicio:
+  - `query-service/utils/token_counters.py`: Para modelos LLM (Groq, OpenAI, etc.)
+  - `embedding-service/utils/token_counters.py`: Para modelos de embedding
+- La carpeta `common/llm` ha sido completamente eliminada y sus funcionalidades migradas a los servicios específicos
 
 ---
 
-*Última actualización: 2025-05-08*
+*Última actualización: 2025-05-13*

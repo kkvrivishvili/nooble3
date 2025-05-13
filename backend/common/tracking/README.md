@@ -19,6 +19,7 @@ Este módulo proporciona un sistema centralizado para el tracking, contabilizaci
    - Interfaz unificada para el registro de uso de recursos
    - Implementación de políticas de rate limiting
    - Integración con sistema de caché para contadores rápidos
+   - Importación dinámica de contadores de tokens específicos de cada servicio
 
 2. **Servicio de Atribución** (`attribution.py`)
    - Determina la propiedad de los tokens según el contexto
@@ -34,6 +35,11 @@ Este módulo proporciona un sistema centralizado para el tracking, contabilizaci
    - Monitorea umbrales de consumo
    - Notifica sobre anomalías o uso excesivo
    - Registra eventos para auditoría
+
+5. **Contadores de Tokens** (específicos de cada servicio)
+   - `query-service/utils/token_counters.py`: Para modelos LLM (Groq, OpenAI, etc.)
+   - `embedding-service/utils/token_counters.py`: Para modelos de embedding
+   - Conteo preciso y específico para cada tipo de modelo
 
 ### Flujo de Datos
 
@@ -72,6 +78,8 @@ async def track_token_usage(
 
 **Características:**
 - Obtiene contexto automáticamente si no se proporciona
+- Detecta dinámicamente el contador de tokens apropiado en función del servicio activo
+- Funciona con contadores de tokens específicos de cada servicio (`query_service/utils/token_counters.py` y `embedding_service/utils/token_counters.py`)
 
 ### Procedimientos Almacenados Actualizados
 
