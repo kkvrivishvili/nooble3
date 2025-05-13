@@ -9,7 +9,7 @@ from typing import Dict, List, Any
 
 # Dimensiones de embeddings por modelo
 EMBEDDING_DIMENSIONS: Dict[str, int] = {
-    "text-embedding-ada-002": 1536,
+    "text-embedding-ada-002": 1536,  # OBSOLETO: Modelo legacy de OpenAI, marcado para depreciación
     "text-embedding-3-small": 1536,
     "text-embedding-3-large": 3072,
     "ada": 1024,

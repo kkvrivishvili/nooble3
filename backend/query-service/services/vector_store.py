@@ -15,7 +15,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from common.errors import handle_errors, ServiceError, ErrorCode
 from common.db.supabase import get_supabase_client
 from common.db.tables import get_table_name
-from common.tracking import track_operation
+# Track operation eliminado según plan de refactorización
 
 # Importar configuración centralizada del servicio
 from config.settings import get_settings
@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 @handle_errors(error_type="service", log_traceback=True)
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 @with_context(tenant=True, validate_tenant=True)  # Requerimos tenant válido para acceder a vector store
-@track_operation(operation_name="get_vector_store", operation_type="query")
+# @track_operation eliminado según plan de refactorización
 async def get_vector_store_for_collection(
     tenant_id: str,
     collection_id: str,

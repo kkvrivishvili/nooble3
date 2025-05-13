@@ -35,7 +35,7 @@ try:
             "gpt-4": 1.33,
             "gpt-4-turbo": 1.33,
             # Embeddings
-            "text-embedding-ada-002": 0.75,
+            "text-embedding-ada-002": 0.75,  # OBSOLETO: Modelo legacy de OpenAI
             "text-embedding-3-small": 0.75,
             "text-embedding-3-large": 0.75,
             # Anthropic
@@ -59,7 +59,7 @@ except Exception as e:
         "gpt-3.5-turbo": 1.33,
         "gpt-4": 1.33,
         "gpt-4-turbo": 1.33,
-        "text-embedding-ada-002": 0.75,
+        "text-embedding-ada-002": 0.75,  # OBSOLETO: Modelo legacy de OpenAI
         "text-embedding-3-small": 0.75,
         "text-embedding-3-large": 0.75,
         "claude-instant": 1.45,
