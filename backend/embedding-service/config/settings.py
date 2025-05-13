@@ -18,7 +18,6 @@ from .constants import (
     DEFAULT_EMBEDDING_DIMENSION,
     QUALITY_THRESHOLDS,
     CACHE_EFFICIENCY_THRESHOLDS,
-    OLLAMA_API_ENDPOINTS,
     TIMEOUTS
 )
 
@@ -38,10 +37,7 @@ class EmbeddingServiceSettings(BaseSettings):
         description="Umbrales para determinar la eficiencia de caché"
     )
     
-    ollama_api_endpoints: Dict[str, str] = Field(
-        default_factory=lambda: OLLAMA_API_ENDPOINTS,
-        description="Endpoints de la API de Ollama"
-    )
+    # Ollama ha sido eliminado como proveedor soportado
     
     timeouts: Dict[str, float] = Field(
         default_factory=lambda: TIMEOUTS,
@@ -108,14 +104,16 @@ class EmbeddingServiceSettings(BaseSettings):
         description="Modelo de embedding predeterminado para OpenAI"
     )
 
-    default_ollama_embedding_model: str = Field(
-        "nomic-embed-text:latest",
-        description="Modelo de embedding predeterminado para Ollama (con version)"
+    # OpenAI API Key para embeddings
+    openai_api_key: str = Field(
+        "",
+        description="API Key para OpenAI"
     )
-
-    ollama_base_url: str = Field(
-        "http://ollama:11434",
-        description="URL base para el servicio Ollama"
+    
+    # Configuración para el proveedor de embeddings
+    use_openai: bool = Field(
+        True,
+        description="Si se debe usar OpenAI como proveedor de embeddings"
     )
 
     # Tamaño de lote para procesamiento por API

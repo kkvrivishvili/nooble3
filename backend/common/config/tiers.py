@@ -367,14 +367,15 @@ def get_embedding_model_details(model_id: str) -> Dict[str, Any]:
             "version": "2",
             "cost_per_1k_tokens": 0.1
         },
-        "nomic-embed-text": {
-            "dimensions": 768,
-            "description": "Nomic AI embedding model for Ollama",
-            "max_tokens": 8192,
-            "provider": "ollama",
-            "version": "1",
-            "cost_per_1k_tokens": 0
-        }
+        # Nomic embed model se ha eliminado porque era para Ollama
+        # "nomic-embed-text": {
+        #     "dimensions": 768,
+        #     "description": "Nomic AI embedding model - Eliminado",
+        #     "max_tokens": 8192,
+        #     "provider": "deprecated",
+        #     "version": "1",
+        #     "cost_per_1k_tokens": 0
+        # }
     }
     
     # Si el modelo no existe, devolver diccionario vacío
@@ -423,26 +424,27 @@ def get_llm_model_details(model_id: str) -> Dict[str, Any]:
             "cost_per_1k_output_tokens": 0.03,
             "capabilities": ["text_generation", "chat", "function_calling", "advanced_reasoning", "vision"]
         },
-        "llama3": {
-            "context_window": 8192,
-            "description": "Modelo Llama3 de Meta a través de Ollama",
-            "max_output_tokens": 4096,
-            "provider": "ollama",
-            "version": "3",
-            "cost_per_1k_input_tokens": 0,
-            "cost_per_1k_output_tokens": 0,
-            "capabilities": ["text_generation", "chat"]
-        },
-        "qwen3:1.7b": {
-            "context_window": 8192,
-            "description": "Modelo Qwen3 de Alibaba (1.7b) a través de Ollama",
-            "max_output_tokens": 4096,
-            "provider": "ollama",
-            "version": "3",
-            "cost_per_1k_input_tokens": 0,
-            "cost_per_1k_output_tokens": 0,
-            "capabilities": ["text_generation", "chat", "function_calling"]
-        }
+        # Modelos de Ollama han sido eliminados
+        # "llama3": {
+        #     "context_window": 8192,
+        #     "description": "Modelo Llama3 de Meta - Eliminado",
+        #     "max_output_tokens": 4096,
+        #     "provider": "deprecated",
+        #     "version": "3",
+        #     "cost_per_1k_input_tokens": 0,
+        #     "cost_per_1k_output_tokens": 0,
+        #     "capabilities": ["text_generation", "chat"]
+        # },
+        # "qwen3:1.7b": {
+        #     "context_window": 8192,
+        #     "description": "Modelo Qwen3 de Alibaba (1.7b) - Eliminado",
+        #     "max_output_tokens": 4096,
+        #     "provider": "deprecated",
+        #     "version": "3",
+        #     "cost_per_1k_input_tokens": 0,
+        #     "cost_per_1k_output_tokens": 0,
+        #     "capabilities": ["text_generation", "chat", "function_calling"]
+        # }
     }
     
     # Si el modelo no existe, devolver diccionario vacío

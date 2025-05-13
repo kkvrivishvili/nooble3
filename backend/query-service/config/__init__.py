@@ -29,11 +29,9 @@ from config.constants import (
     # Modelos predeterminados
     DEFAULT_LLM_MODEL,
     DEFAULT_EMBEDDING_MODEL,
-    DEFAULT_OLLAMA_LLM_MODEL,
-    DEFAULT_OLLAMA_EMBEDDING_MODEL,
     DEFAULT_GROQ_MODEL,
     DEFAULT_GROQ_LLM_MODEL,
-    # Nota: La configuración de proveedores (USE_OLLAMA, USE_GROQ) se obtiene de variables de entorno,
+    # Nota: Solo soportamos Groq para LLMs y OpenAI para embeddings
     # Límites de recursos
     MAX_DOC_SIZE_MB,
     # Rate Limiting
@@ -65,11 +63,9 @@ __all__ = [
     "MAX_QUERY_RETRIES",
     "MAX_WORKERS",
     "STREAMING_TIMEOUT",
-    # Modelos predeterminados
+    # Modelos predeterminados (Ollama ya no es compatible)
     "DEFAULT_LLM_MODEL",
     "DEFAULT_EMBEDDING_MODEL",
-    "DEFAULT_OLLAMA_LLM_MODEL",
-    "DEFAULT_OLLAMA_EMBEDDING_MODEL",
     "DEFAULT_GROQ_MODEL",
     "DEFAULT_GROQ_LLM_MODEL",
     # Límites de recursos

@@ -44,13 +44,7 @@ CACHE_EFFICIENCY_THRESHOLDS = {
     "degraded_hit_ratio": 0.2  # >= 20% es "degraded", < 20% también "degraded"
 }
 
-# Endpoints de API de Ollama
-OLLAMA_API_ENDPOINTS = {
-    "embeddings": "/api/embeddings",
-    "health": "/api/health",
-    "models": "/api/tags",
-    "model_info": "/api/show"
-}
+# Ollama ha sido eliminado como proveedor soportado
 
 # Timeouts para diferentes operaciones
 TIMEOUTS = {

@@ -29,6 +29,7 @@ from common.errors import (
 )
 from common.tracking import track_token_usage, estimate_prompt_tokens, TOKEN_TYPE_LLM, OPERATION_QUERY
 from common.llm.token_counters import count_tokens
+from provider.groq import is_groq_model
 from common.models import TenantInfo
 from common.cache import (
     get_with_cache_aside,
@@ -119,12 +120,11 @@ async def process_query_with_sources(
                     model_used = DEFAULT_LLM_MODEL
             
             # Identificar proveedor del modelo para metadatos enriquecidos
-            if "llama-3.2-70b" in model_used.lower() or "llama-3.1-8b" in model_used.lower():
-                provider = "groq"
-            elif "qwen" in model_used.lower():
-                provider = "ollama"
+            # Usamos la función especializada del módulo provider
+            if is_groq_model(model_used):
+                provider = "groq"  # Groq es el proveedor principal para LLMs
             else:
-                provider = "other"
+                provider = "other"  # Otros modelos (posiblemente de OpenAI o proveedores futuros)
             
             # Cálculo preciso de tokens según el modelo
             tokens_in = count_tokens(query, model_name=model_used)

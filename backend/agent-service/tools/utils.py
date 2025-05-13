@@ -8,7 +8,6 @@ from typing import Dict, Any, List, Optional, Union
 from langchain_core.language_models import BaseChatModel
 from langchain_openai import ChatOpenAI
 from langchain_groq import ChatGroq
-from langchain_community.chat_models import ChatOllama
 
 from langchain_core.messages import (
     AIMessage,
@@ -69,15 +68,7 @@ def get_langchain_chat_model(
             max_tokens=max_tokens,
             groq_api_key=settings.groq_api_key
         )
-    elif model_name.startswith("ollama:"):
-        # Ollama local
-        model_name = model_name.replace("ollama:", "")
-        return ChatOllama(
-            model=model_name,
-            temperature=temperature,
-            num_ctx=max_tokens or 4096,
-            base_url=settings.ollama_base_url
-        )
+    # Ollama ha sido eliminado como proveedor soportado
     else:
         # Por defecto, usar OpenAI
         logger.warning(f"Modelo desconocido {model_name}, usando gpt-3.5-turbo por defecto")

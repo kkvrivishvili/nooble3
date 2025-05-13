@@ -67,12 +67,14 @@ class Settings(BaseSettings):
     default_llm_model: str = Field("gpt-3.5-turbo", env="DEFAULT_OPENAI_LLM_MODEL", description="Modelo predeterminado para LLM")
     default_embedding_model: str = Field("text-embedding-3-small", env="DEFAULT_OPENAI_EMBEDDING_MODEL", description="Modelo predeterminado para embeddings")
     
-    # =========== Configuración de Ollama ===========
-    use_ollama: bool = Field(True, env="USE_OLLAMA", description="Usar Ollama en lugar de OpenAI")
-    ollama_api_url: str = Field("http://ollama:11434", env="OLLAMA_API_URL", description="URL de la API de Ollama")
-    default_ollama_model: str = Field("qwen3:1.7b", env="DEFAULT_OLLAMA_MODEL", description="Modelo predeterminado para Ollama")
-    default_ollama_llm_model: str = Field("qwen3:1.7b", env="DEFAULT_OLLAMA_LLM_MODEL", description="Modelo LLM predeterminado para Ollama")
-    default_ollama_embedding_model: str = Field("nomic-embed-text", env="DEFAULT_OLLAMA_EMBEDDING_MODEL", description="Modelo de embedding para Ollama")
+    # =========== Ollama ha sido eliminado como proveedor soportado ===========
+    # Estas configuraciones se han eliminado porque Ollama ya no es compatible
+    # Se mantienen como comentarios solo para referencia
+    # use_ollama: bool = False  # Ollama ya no es compatible
+    # ollama_api_url: str = ""  # No se usa
+    # default_ollama_model: str = ""  # No se usa
+    # default_ollama_llm_model: str = ""  # No se usa
+    # default_ollama_embedding_model: str = ""  # No se usa
     
     # =========== Configuración de Groq ===========
     use_groq: bool = Field(False, env="USE_GROQ", description="Usar Groq para LLM")

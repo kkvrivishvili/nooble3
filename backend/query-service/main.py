@@ -76,7 +76,7 @@ app = FastAPI(
     - Búsqueda semántica de documentos por similitud vectorial
     - Generación de respuestas basadas en contexto recuperado
     - Soporte para diferentes estrategias de recuperación y sintetización
-    - Múltiples motores LLM (OpenAI, Ollama) con configuración por tenant
+    - LLMs mediante Groq con configuración por tenant y modelos dinámicos según tier
     
     ## Dependencias
     - Redis: Para caché y almacenamiento temporal

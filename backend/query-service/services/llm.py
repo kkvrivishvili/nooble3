@@ -5,16 +5,19 @@ Funciones para interactuar con modelos de lenguaje (LLMs).
 import logging
 from typing import Optional, Any, Dict
 
-# Eliminamos importación de OpenAI ya que solo usaremos Groq y Ollama
-
 from common.models import TenantInfo
 from common.auth import validate_model_access
-from common.llm.ollama import get_llm_model
 from common.context import with_context, Context
 from common.errors import handle_errors, ErrorCode
 
-# Importar módulos de proveedores LLM
-from common.llm.groq import GroqLLM
+# Importar el proveedor de Groq desde el módulo local
+from provider.groq import (
+    GroqLLM, 
+    GroqError, 
+    GroqAuthenticationError, 
+    GroqRateLimitError,
+    GroqModelNotFoundError
+)
 
 # Importar configuración centralizada del servicio
 from config.settings import get_settings
@@ -29,7 +32,16 @@ from config.constants import (
 logger = logging.getLogger(__name__)
 
 @with_context(tenant=True)
-@handle_errors(error_type="simple", log_traceback=False)
+@handle_errors(
+    error_type="service", 
+    log_traceback=True,
+    error_map={
+        GroqAuthenticationError: (ErrorCode.AUTHORIZATION_ERROR, 401),
+        GroqRateLimitError: (ErrorCode.RATE_LIMIT_EXCEEDED, 429),
+        GroqModelNotFoundError: (ErrorCode.MODEL_NOT_FOUND_ERROR, 404),
+        GroqError: (ErrorCode.EXTERNAL_SERVICE_ERROR, 500)
+    }
+)
 async def get_llm_for_tenant(tenant_info: TenantInfo, requested_model: Optional[str] = None, ctx: Context = None) -> Any:
     """
     Obtiene un modelo LLM apropiado para un tenant según su nivel de suscripción.
@@ -58,39 +70,21 @@ async def get_llm_for_tenant(tenant_info: TenantInfo, requested_model: Optional[
         "max_tokens": settings.llm_max_tokens if hasattr(settings, 'llm_max_tokens') else LLM_MAX_TOKENS
     }
     
-    # Detectar y configurar el proveedor LLM correcto (Ollama, Groq u OpenAI)
-    if hasattr(settings, 'use_ollama') and settings.use_ollama:
-        # Usar Ollama (get_llm_model devuelve un modelo compatible con LlamaIndex)
-        logger.info(f"Usando modelo Ollama: {model_name}")
-        return get_llm_model(model_name, **common_params)
-    elif hasattr(settings, 'use_groq') and settings.use_groq:
-        # Usar Groq
-        logger.info(f"Usando modelo Groq: {model_name}")
-        # Verificar que tenemos la API key configurada
-        if not hasattr(settings, 'groq_api_key') or not settings.groq_api_key:
-            logger.error("API key de Groq no configurada")
-            raise ValueError("Se requiere API key de Groq para usar modelos de Groq")
-            
-        # Crear cliente Groq usando el wrapper compatible con LlamaIndex
-        return GroqLLM(
-            model=model_name,
-            api_key=settings.groq_api_key,
-            **common_params
-        )
-    else:
-        # Si no está configurado ni Ollama ni Groq, usamos Groq como predeterminado
-        logger.info(f"Configuración de LLM no especificada, usando Groq como predeterminado: {model_name}")
-        # Verificar si tenemos API key de Groq configurada
-        if not hasattr(settings, 'groq_api_key') or not settings.groq_api_key:
-            logger.error("API key de Groq no configurada y es necesaria como fallback")
-            raise ValueError("Se requiere API key de Groq para usar modelos LLM")
+    # Configurar el proveedor LLM (Groq)
+    # Usamos la implementación local de Groq en el módulo provider
+    logger.info(f"Usando modelo Groq: {model_name}")
+    
+    # Verificar que tenemos la API key configurada
+    if not hasattr(settings, 'groq_api_key') or not settings.groq_api_key:
+        logger.error("API key de Groq no configurada")
+        raise GroqAuthenticationError("Se requiere API key de Groq para usar modelos de Groq")
         
-        # Usar Groq como fallback predeterminado
-        return GroqLLM(
-            model=model_name,
-            api_key=settings.groq_api_key,
-            **common_params
-        )
+    # Crear cliente Groq usando la implementación local (provider/groq.py)
+    return GroqLLM(
+        model=model_name,
+        api_key=settings.groq_api_key,
+        **common_params
+    )
 
 @with_context(tenant=True, agent=True, conversation=True)
 @handle_errors(error_type="detailed", log_traceback=True)

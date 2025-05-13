@@ -35,9 +35,8 @@ ENV SERVICE_NAME=query-service
 ENV CONFIG_ENVIRONMENT=development
 ENV TENANT_ID=default
 ENV LOAD_CONFIG_FROM_SUPABASE=false
-ENV OLLAMA_HOST=ollama
-ENV OLLAMA_PORT=11434
-ENV OLLAMA_PULL_MODELS=true
+# Las variables de entorno de Ollama han sido eliminadas
+# El servicio ahora usa exclusivamente OpenAI y Groq para modelos
 ENV USE_GROQ=false
 ENV GROQ_API_KEY=""
 ENV DEFAULT_GROQ_MODEL=llama3-70b-8192

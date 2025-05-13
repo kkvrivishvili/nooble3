@@ -111,7 +111,7 @@ Este documento describe los endpoints de verificación de salud y estado impleme
 **Componentes verificados**:
 - `cache`: Disponibilidad de la caché Redis
 - `database`: Conectividad con Supabase
-- `embedding_provider`: Estado del proveedor de embeddings (OpenAI/Ollama)
+- `embedding_provider`: Estado del proveedor de embeddings (OpenAI)
 - `cache_efficiency`: Eficiencia de la caché de embeddings
 - `api_rate_limits`: Estado de los límites de API (OpenAI)
 
@@ -129,11 +129,9 @@ Este documento describe los endpoints de verificación de salud y estado impleme
 
 El endpoint utiliza los siguientes componentes internos para realizar verificaciones:
 
-- `check_embedding_provider()`: Verifica el proveedor de embeddings (OpenAI u Ollama)
+- `check_embedding_provider()`: Verifica el proveedor de embeddings (OpenAI)
 - `check_cache_efficiency()`: Verifica la eficiencia de la caché de embeddings
 - `check_api_rate_limits()`: Verifica el estado de los límites de API
-- `check_ollama_service()`: Verifica que el servicio Ollama esté disponible (si se usa Ollama)
-- `check_ollama_model()`: Verifica que el modelo específico esté disponible en Ollama
 - `check_memory_usage()`: Verifica el uso de memoria del sistema (para modelos locales)
 - `verify_embedding_quality()`: Evalúa la calidad del embedding generado
 

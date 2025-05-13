@@ -1,12 +1,11 @@
 """
 Integración con modelos de lenguaje (LLMs) y embeddings.
-Este módulo se centra exclusivamente en Groq y Ollama como proveedores de LLM.
+Este módulo se centra exclusivamente en Groq como proveedor de LLM.
 """
 
 from .base import BaseEmbeddingModel, BaseLLM
-from .ollama import OllamaEmbeddings, OllamaLLM, get_embedding_model, get_llm_model, is_using_ollama
 from .token_counters import count_tokens, count_message_tokens, estimate_max_tokens_for_model, estimate_remaining_tokens
-from .streaming import stream_ollama_response, stream_groq_response
+from .streaming import stream_groq_response
 
 # Importar integración con Groq si está disponible
 try:
@@ -31,14 +30,13 @@ __all__ = [
     # Interfaces base
     'BaseEmbeddingModel', 'BaseLLM',
     
-    # Ollama
-    'OllamaEmbeddings', 'OllamaLLM', 'get_embedding_model', 'get_llm_model', 'is_using_ollama',
+    # Este bloque se ha eliminado - No más soporte para Ollama
     
     # Conteo de tokens
     'count_tokens', 'count_message_tokens', 'estimate_max_tokens_for_model', 'estimate_remaining_tokens',
     
     # Streaming
-    'stream_ollama_response', 'stream_groq_response',
+    'stream_groq_response',
     
     # Groq
     'GroqLLM', 'get_groq_client', 'get_async_groq_client', 'get_groq_llm_model',

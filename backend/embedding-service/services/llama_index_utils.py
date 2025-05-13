@@ -73,6 +73,61 @@ def configure_llama_index():
     
     logger.info("LlamaIndex configurado globalmente")
 
+# Función para seleccionar el mejor modelo de embedding según el tier
+def select_best_embedding_model(tier: str, tenant_id: Optional[str] = None) -> str:
+    """Selecciona el mejor modelo de embedding disponible para el tier.
+    
+    Args:
+        tier: Tier del tenant ('free', 'pro', 'business', 'enterprise')
+        tenant_id: ID opcional del tenant para personalización
+        
+    Returns:
+        str: Nombre del mejor modelo de embedding disponible para el tier
+    """
+    # Obtener modelos disponibles para el tier
+    available_models = get_available_embedding_models(tier, tenant_id)
+    
+    # Definir preferencias de modelo por tier
+    tier_model_preferences = {
+        "free": "text-embedding-3-small",        # Modelo económico para tier gratuito
+        "pro": "text-embedding-3-large",        # Modelo avanzado para tier pro
+        "business": "text-embedding-3-large",   # Modelo premium para business
+        "enterprise": "text-embedding-3-large"   # Modelo premium para enterprise
+    }
+    
+    # Seleccionar el modelo preferido para el tier si está disponible
+    preferred_model = tier_model_preferences.get(tier, "text-embedding-3-small")
+    
+    if preferred_model in available_models:
+        return preferred_model
+    
+    # Si el modelo preferido no está disponible, usar el mejor disponible
+    if "text-embedding-3-large" in available_models:
+        return "text-embedding-3-large"
+    
+    if "text-embedding-3-small" in available_models:
+        return "text-embedding-3-small"
+    
+    # Usar el primer modelo disponible como fallback
+    if available_models:
+        return available_models[0]
+    
+    # Si no hay modelos disponibles, usar el default
+    return settings.default_embedding_model
+
+# Función para obtener configuración de OpenAI
+async def _get_embedding_config(tenant_id: str, model_name: str) -> Tuple[str, str]:
+    """Obtiene la configuración de OpenAI para embeddings"""
+    # Usar la API key de OpenAI configurada
+    api_key = settings.openai_api_key
+    
+    # Endpoint de OpenAI para embeddings
+    endpoint = "https://api.openai.com/v1/embeddings"
+    
+    # Añadir lógica específica por tenant/modelo si es necesario en el futuro
+    
+    return api_key, endpoint
+
 # Inicialización
 configure_llama_index()
 
@@ -121,8 +176,12 @@ async def generate_embeddings_with_llama_index(
     if ctx and hasattr(ctx, 'tenant_info') and ctx.tenant_info:
         tier = ctx.tenant_info.tier
     
-    # Usar modelo solicitado o modelo por defecto
-    model_name = model_name or settings.default_embedding_model
+    # Si no se especificó un modelo, seleccionar el mejor según el tier
+    if not model_name:
+        model_name = select_best_embedding_model(tier, tenant_id)
+    else:
+        # Usar el modelo solicitado si se especificó explícitamente
+        model_name = model_name
     
     # Validar acceso al modelo según el tier
     available_models = get_available_embedding_models(tier, tenant_id)
@@ -266,16 +325,13 @@ async def generate_embeddings_with_llama_index(
                 # Obtener configuración de la API
                 api_key, endpoint = await _get_embedding_config(tenant_id, model_name)
                 
-                # Usar valores por defecto si no hay configuración específica
-                if not endpoint or not api_key:
-                    if not settings.default_embedding_endpoint:
-                        raise ValueError(f"No hay endpoint de embeddings configurado para {tenant_id}")
-                    endpoint = settings.default_embedding_endpoint
-                    api_key = settings.default_embedding_api_key
-                
-                # Preparar request
-                headers = {"Authorization": f"Bearer {api_key}"}
-                data = {"text": text, "model": model_name}
+                # Preparar request para la API de OpenAI
+                headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+                data = {
+                    "input": text,
+                    "model": model_name,
+                    "encoding_format": "float"
+                }
                 request_timeout = TIMEOUTS.get("embedding_api", 30)  # Timeout optimizado
                 
                 # Realizar solicitud a la API con timeout y manejo de errores mejorado
@@ -292,10 +348,14 @@ async def generate_embeddings_with_llama_index(
                             result = await response.json()
                             latency_ms = (time.time() - start_time) * 1000
                             
-                            # Obtener el embedding del resultado
-                            raw_embedding = result.get("embedding")
+                            # Obtener el embedding del resultado de OpenAI
+                            # La estructura de respuesta de OpenAI es: {"data": [{"embedding": [...], ...}]}
+                            if "data" not in result or not result["data"] or len(result["data"]) == 0:
+                                raise ValueError("La API de OpenAI no devolvió datos de embedding válidos")
+                                
+                            raw_embedding = result["data"][0].get("embedding")
                             if not raw_embedding:
-                                raise ValueError("La API no devolvió un embedding válido")
+                                raise ValueError("La API de OpenAI no devolvió un embedding válido")
                             
                             # Serializar para caché si es necesario
                             try:

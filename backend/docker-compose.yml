@@ -17,33 +17,8 @@ services:
       timeout: 5s
       retries: 3
 
-  ollama:
-    build:
-      context: ./docker/ollama
-      dockerfile: Dockerfile
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama-data:/root/.ollama
-      - ./docker/ollama/scripts:/scripts
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    environment:
-      - OLLAMA_LOG_LEVEL=info
-      - OLLAMA_VERBOSE=false
-      - CUDA_VISIBLE_DEVICES=0
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    restart: always
+  # El servicio Ollama ha sido eliminado ya que no es compatible con la arquitectura actual
+  # que usa exclusivamente OpenAI y Groq para los modelos de embeddings y LLM
 
   embedding-service:
     build:
@@ -65,19 +40,15 @@ services:
       - SERVICE_NAME=embedding-service
       - DOCKER_CONTAINER=true
       - REDIS_URL=redis://redis:6379/0
-      - OLLAMA_API_URL=http://ollama:11434
       - LOG_LEVEL=INFO
-      - USE_OLLAMA=${USE_OLLAMA:-true}
       - USE_GROQ=${USE_GROQ:-false}
-      - DEFAULT_OLLAMA_EMBEDDING_MODEL=${DEFAULT_OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
-      - DEFAULT_OLLAMA_LLM_MODEL=${DEFAULT_OLLAMA_LLM_MODEL:-qwen3:1.7b}
+      # Variables de Ollama eliminadas - usando exclusivamente OpenAI y Groq
       - DEFAULT_GROQ_MODEL=${DEFAULT_GROQ_MODEL:-llama3-70b-8192}
       - SUPABASE_URL=postgresql://postgres:postgres@supabase-dev:54321/postgres
     depends_on:
       redis:
         condition: service_healthy
-      ollama:
-        condition: service_started
+      # La dependencia de Ollama ha sido eliminada
 
   query-service:
     build:
@@ -100,12 +71,9 @@ services:
       - DOCKER_CONTAINER=true
       - REDIS_URL=redis://redis:6379/0
       - EMBEDDING_SERVICE_URL=http://embedding-service:8001
-      - OLLAMA_API_URL=http://ollama:11434
       - LOG_LEVEL=INFO
-      - USE_OLLAMA=${USE_OLLAMA:-true}
       - USE_GROQ=${USE_GROQ:-false}
-      - DEFAULT_OLLAMA_EMBEDDING_MODEL=${DEFAULT_OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
-      - DEFAULT_OLLAMA_LLM_MODEL=${DEFAULT_OLLAMA_LLM_MODEL:-qwen3:1.7b}
+      # Variables de Ollama eliminadas - usando exclusivamente OpenAI y Groq
       - DEFAULT_GROQ_MODEL=${DEFAULT_GROQ_MODEL:-llama3-70b-8192}
       - DEFAULT_GROQ_LLM_MODEL=${DEFAULT_GROQ_LLM_MODEL:-llama3-70b-8192}
     depends_on:
@@ -113,8 +81,7 @@ services:
         condition: service_healthy
       embedding-service:
         condition: service_started
-      ollama:
-        condition: service_started
+      # La dependencia de Ollama ha sido eliminada
 
   agent-service:
     build:
@@ -138,12 +105,9 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - EMBEDDING_SERVICE_URL=http://embedding-service:8001
       - QUERY_SERVICE_URL=http://query-service:8002
-      - OLLAMA_API_URL=http://ollama:11434
       - LOG_LEVEL=INFO
-      - USE_OLLAMA=${USE_OLLAMA:-true}
       - USE_GROQ=${USE_GROQ:-false}
-      - DEFAULT_OLLAMA_EMBEDDING_MODEL=${DEFAULT_OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
-      - DEFAULT_OLLAMA_LLM_MODEL=${DEFAULT_OLLAMA_LLM_MODEL:-qwen3:1.7b}
+      # Variables de Ollama eliminadas - usando exclusivamente OpenAI y Groq
       - DEFAULT_GROQ_MODEL=${DEFAULT_GROQ_MODEL:-llama3-70b-8192}
       - DEFAULT_GROQ_LLM_MODEL=${DEFAULT_GROQ_LLM_MODEL:-llama3-70b-8192}
       - JOB_LOCK_EXPIRE_SECONDS=600
@@ -154,8 +118,7 @@ services:
         condition: service_started
       query-service:
         condition: service_started
-      ollama:
-        condition: service_started
+      # La dependencia de Ollama ha sido eliminada
 
   ingestion-service:
     build:
@@ -179,12 +142,9 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - EMBEDDING_SERVICE_URL=http://embedding-service:8001
       - QUERY_SERVICE_URL=http://query-service:8002
-      - OLLAMA_API_URL=http://ollama:11434
       - LOG_LEVEL=INFO
-      - USE_OLLAMA=${USE_OLLAMA:-true}
       - USE_GROQ=${USE_GROQ:-false}
-      - DEFAULT_OLLAMA_EMBEDDING_MODEL=${DEFAULT_OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
-      - DEFAULT_OLLAMA_LLM_MODEL=${DEFAULT_OLLAMA_LLM_MODEL:-qwen3:1.7b}
+      # Variables de Ollama eliminadas - usando exclusivamente OpenAI y Groq
       - DEFAULT_GROQ_MODEL=${DEFAULT_GROQ_MODEL:-llama3-70b-8192}
       - DEFAULT_GROQ_LLM_MODEL=${DEFAULT_GROQ_LLM_MODEL:-llama3-70b-8192}
       - JOB_LOCK_EXPIRE_SECONDS=600
@@ -193,8 +153,7 @@ services:
         condition: service_healthy
       embedding-service:
         condition: service_started
-      ollama:
-        condition: service_started
+      # La dependencia de Ollama ha sido eliminada
 
   worker-service:
     build:
@@ -219,7 +178,7 @@ services:
       - QUERY_SERVICE_URL=http://query-service:8002
       - AGENT_SERVICE_URL=http://agent-service:8003
       - INGESTION_SERVICE_URL=http://ingestion-service:8000
-      - OLLAMA_API_URL=http://ollama:11434
+      # OLLAMA_API_URL ya no es soportado - el sistema usa exclusivamente OpenAI y Groq
       - LOG_LEVEL=INFO
       - MAX_WORKERS=3
     depends_on:
@@ -237,5 +196,5 @@ services:
 volumes:
   supabase-data:
   redis-data:
-  ollama-data:
+  # El volumen ollama-data ya no es necesario
   logs:

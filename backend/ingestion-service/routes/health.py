@@ -189,7 +189,7 @@ async def check_embedding_service_status() -> str:
     """
     Verifica el estado del servicio de embeddings.
     Incluye verificación detallada si el servicio está disponible pero degradado.
-    Soporta verificación de los proveedores principales: Ollama y Groq.
+    Soporta verificación de los proveedores principales: OpenAI y Groq.
     
     Returns:
         str: Estado del servicio ("available", "degraded" o "unavailable")
@@ -230,7 +230,7 @@ async def check_embedding_service_status() -> str:
                 
             status_data = result.get("data", {})
             
-            # Verificar el estado del proveedor de embeddings (puede ser Ollama o Groq)
+            # Verificar el estado del proveedor de embeddings (OpenAI) y LLM (Groq)
             components = status_data.get("components", {})
             
             # Verificar el estado de Groq si está configurado
@@ -238,26 +238,17 @@ async def check_embedding_service_status() -> str:
                 logger.warning("Proveedor Groq no disponible")
                 # Si Groq está configurado como principal y no está disponible, es crítico
                 import os
-                if os.environ.get("USE_GROQ", "False").lower() == "true" and \
-                   os.environ.get("USE_OLLAMA", "False").lower() != "true":
+                # Groq o OpenAI son las únicas opciones disponibles ahora
+                if os.environ.get("USE_GROQ", "False").lower() == "true":
                     return "unavailable"
                 else:
-                    return "degraded"  # Hay fallback a Ollama
+                    return "degraded"  # Hay fallback a OpenAI
                 
-            # Verificar el estado de Ollama si está configurado
-            if components.get("ollama_provider") == "unavailable":
-                logger.warning("Proveedor Ollama no disponible")
-                # Si Ollama está configurado como principal y no está disponible, es crítico
-                import os
-                if os.environ.get("USE_OLLAMA", "False").lower() == "true" and \
-                   os.environ.get("USE_GROQ", "False").lower() != "true":
-                    return "unavailable"
-                else:
-                    return "degraded"  # Hay fallback a Groq
+            # Solo se usa OpenAI para embeddings y Groq para LLMs
             
-            # Si ambos están degradados pero no indisponibles, reportar como degradado
+            # Si alguno de los proveedores está degradado pero no indisponible, reportar como degradado
             if (components.get("groq_provider") == "degraded" or 
-                components.get("ollama_provider") == "degraded"):
+                components.get("openai_provider") == "degraded"):
                 logger.warning("Al menos un proveedor de embeddings en estado degradado")
                 return "degraded"
             

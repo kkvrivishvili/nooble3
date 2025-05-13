@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS ai.agent_configs (
     is_public BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
-    llm_model TEXT DEFAULT 'gpt-3.5-turbo', -- Puede ser modelo de OpenAI, Ollama o Groq (ej: 'llama3-70b-8192')
+    llm_model TEXT DEFAULT 'gpt-3.5-turbo', -- Modelo de Groq (ej: 'llama3-70b-8192')
     tools JSONB DEFAULT '[]'::jsonb,
     client_reference_id TEXT,
     meta_prompt TEXT,
@@ -58,7 +58,7 @@ CREATE TABLE IF NOT EXISTS ai.collections (
     tenant_id UUID NOT NULL REFERENCES public.tenants(tenant_id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     description TEXT,
-    embedding_model TEXT DEFAULT 'text-embedding-3-small', -- Modelo de embedding (OpenAI, Ollama o compatible con Groq)
+    embedding_model TEXT DEFAULT 'text-embedding-3-small', -- Modelo de embedding de OpenAI
     created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
     collection_id UUID UNIQUE DEFAULT uuid_generate_v4(),

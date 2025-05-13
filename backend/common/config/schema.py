@@ -106,21 +106,22 @@ AGENT_SERVICE_CONFIGURATIONS = {
         default_value="gpt-3.5-turbo",
         is_sensitive=False,
     ),
-    "use_ollama": ConfigurationSchema(
-        key="use_ollama",
-        description="Si se debe usar Ollama en lugar de OpenAI",
-        config_type="boolean",
-        default_value=False,
-        is_sensitive=False,
-    ),
-    "ollama_base_url": ConfigurationSchema(
-        key="ollama_base_url",
-        description="URL base del servicio Ollama",
-        config_type="string",
-        default_value="http://localhost:11434",
-        is_sensitive=False,
-        scopes=["tenant", "service"]
-    ),
+    # Esquemas relacionados con Ollama han sido eliminados
+    # "use_ollama": ConfigurationSchema(
+    #    key="use_ollama",
+    #    description="Si se debe usar Ollama en lugar de OpenAI",
+    #    config_type="boolean",
+    #    default_value=False,
+    #    is_sensitive=False,
+    # ),
+    # "ollama_base_url": ConfigurationSchema(
+    #    key="ollama_base_url",
+    #    description="URL base del servicio Ollama",
+    #    config_type="string",
+    #    default_value="http://localhost:11434",
+    #    is_sensitive=False,
+    #    scopes=["tenant", "service"]
+    # ),
     "agent_default_temperature": ConfigurationSchema(
         key="agent_default_temperature",
         description="Temperatura por defecto para generación de texto",

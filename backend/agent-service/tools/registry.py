@@ -7,7 +7,7 @@ import time
 import uuid
 from typing import Dict, Any, List, Callable, Optional, Union, Type
 
-from langchain_core.tools import BaseTool
+from langchain_core.tools import BaseTool as LangChainBaseTool
 
 from common.context import with_context, Context
 from common.errors import handle_errors, ServiceError

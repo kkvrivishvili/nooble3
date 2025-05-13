@@ -31,16 +31,15 @@ STREAMING_TIMEOUT = 60 # Timeout para streaming (segundos)
 DEFAULT_LLM_MODEL = "gpt-3.5-turbo"  # Modelo LLM predeterminado para OpenAI
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small" # Modelo de embedding predeterminado para OpenAI
 
-# Modelos de Ollama
-DEFAULT_OLLAMA_LLM_MODEL = "qwen3:1.7b" # Modelo LLM Ollama predeterminado
-DEFAULT_OLLAMA_EMBEDDING_MODEL = "nomic-embed-text" # Modelo de embedding Ollama
+# Ollama ya no es compatible con el sistema
+# Los modelos de Ollama han sido eliminados
 
 # Modelos de Groq
 DEFAULT_GROQ_MODEL = "llama3-70b-8192" # Modelo predeterminado para Groq
 DEFAULT_GROQ_LLM_MODEL = "llama3-70b-8192" # Modelo LLM predeterminado para Groq
 
 # La configuración de proveedores ahora se determina por variables en .env
-# USE_OLLAMA, USE_GROQ - Se leen dinámicamente en tiempo de ejecución
+# Nota: Solo se soporta Groq para LLMs y OpenAI para embeddings
 
 # Límites de recursos
 MAX_DOC_SIZE_MB = 10  # Tamaño máximo de documentos (MB)

@@ -40,14 +40,12 @@ from config.constants import (
     DEFAULT_EMBEDDING_DIMENSION,
     QUALITY_THRESHOLDS,
     CACHE_EFFICIENCY_THRESHOLDS,
-    OLLAMA_API_ENDPOINTS,
     TIMEOUTS,
     METRICS_CONFIG
 )
 
 # Importamos directamente el cliente para evitar dependencias circulares
 from llama_index.embeddings.openai import OpenAIEmbedding
-from llama_index.embeddings.ollama import OllamaEmbedding
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -158,8 +156,14 @@ async def service_status(ctx: Context = None) -> ServiceStatusResponse:
         # Métricas detalladas específicas del servicio
         extra_metrics={
             # Información del modelo de embeddings
-            "embedding_model": settings.default_ollama_embedding_model if settings.use_ollama else settings.default_embedding_model,
-            "provider": "ollama" if settings.use_ollama else "openai",
+            "embedding_model": settings.default_embedding_model,
+            "embedding_model_by_tier": {
+                "free": "text-embedding-3-small",
+                "pro": "text-embedding-3-large",
+                "business": "text-embedding-3-large",
+                "enterprise": "text-embedding-3-large"
+            },
+            "provider": "groq" if (hasattr(settings, 'use_groq') and settings.use_groq) else "openai",
             "embedding_dimensions": get_embedding_dimensions(),
             "model_statistics": model_stats,
             
@@ -178,7 +182,7 @@ async def service_status(ctx: Context = None) -> ServiceStatusResponse:
 
 async def check_embedding_provider() -> str:
     """
-    Verifica el proveedor de embeddings configurado (OpenAI, Ollama o Groq).
+    Verifica el proveedor de embeddings configurado (OpenAI).
     Incluye verificación real con texto de prueba para determinar disponibilidad,
     latencia y calidad del servicio.
     
@@ -186,91 +190,47 @@ async def check_embedding_provider() -> str:
         str: Estado del proveedor ("available", "degraded" o "unavailable")
     """
     try:
-        # Determinar el proveedor y modelo según la configuración
-        if settings.use_ollama:
-            provider = "ollama"
-            model = settings.default_ollama_embedding_model
-        elif hasattr(settings, 'use_groq') and settings.use_groq:
-            provider = "groq"
-            model = settings.default_groq_model if hasattr(settings, 'default_groq_model') else "llama3-70b-8192"
-        else:
-            provider = "openai"
-            model = settings.default_embedding_model
+        # Solo se utiliza OpenAI para embeddings
+        provider = "openai"
+        model = settings.default_embedding_model
             
         test_text = "This is a test to verify the embedding provider and model quality."
         start_time = time.time()
         
-        # Verificar disponibilidad del proveedor
-        if settings.use_ollama:
-            # Para Ollama (local), verificar servicio Ollama
-            try:
-                # Verificar primero que el servicio Ollama esté funcionando
-                if not await check_ollama_service():
-                    logger.error("Servicio Ollama no disponible")
-                    return "unavailable"
-                    
-                # Verificar que el modelo específico esté disponible
-                if not await check_ollama_model(model):
-                    logger.warning(f"Modelo {model} no disponible en Ollama")
-                    return "degraded"
-                
-                # Probar embeddings con texto real
-                client = OllamaEmbedding(model_name=model, base_url=settings.ollama_base_url)
-                embedding = client.get_text_embedding(test_text)
-                
-                # Verificar calidad del embedding según las dimensiones esperadas del modelo
-                model_base_name = model.split(':')[0] if ':' in model else model
-                expected_dimension = EMBEDDING_DIMENSIONS.get(model_base_name, DEFAULT_EMBEDDING_DIMENSION)
-                
-                # Si tiene las dimensiones esperadas, se considera válido dimensionalmente
-                if len(embedding) != expected_dimension:
-                    logger.info(f"Embedding con dimensiones {len(embedding)}, esperadas: {expected_dimension} para modelo {model}")
-                    # No degradamos el servicio si la dimensión no coincide exactamente pero el embedding es válido
-                elif not verify_embedding_quality(embedding):
-                    logger.warning(f"Verificación de calidad fallida para embedding de {len(embedding)} dimensiones")
-                    return "degraded"
-                    
-                # Verificar uso de memoria (importante para modelos locales)
-                memory_usage = await check_memory_usage()
-                if memory_usage == "critical":
-                    logger.warning("Uso de memoria crítico")
-                    return "degraded"
-            except Exception as e:
-                logger.error(f"Error con Ollama: {str(e)}")
+        # Verificar disponibilidad del proveedor usando nuestro nuevo proveedor
+        try:
+            # Verificar que haya una API key configurada
+            if not settings.openai_api_key:
+                logger.error("API key de OpenAI no configurada")
                 return "unavailable"
-        # Eliminamos la verificación de Groq ya que el embedding-service solo debe enfocarse en embeddings
-        else:
-            # Para OpenAI, verificar las credenciales y conectividad
-            try:
-                # Verificar que haya una API key configurada
-                if not settings.openai_api_key:
-                    logger.error("API key de OpenAI no configurada")
-                    return "unavailable"
+            
+            # Importar nuestro nuevo proveedor de OpenAI
+            from provider.openai import OpenAIEmbeddingProvider
+            
+            # Probar embeddings con texto real usando nuestro nuevo proveedor
+            client = OpenAIEmbeddingProvider(model=model, api_key=settings.openai_api_key)
+            embedding = await client.embed_query(test_text)
+            
+            # Verificar calidad del embedding según las dimensiones esperadas del modelo
+            model_base_name = model.split(':')[0] if ':' in model else model
+            expected_dimension = EMBEDDING_DIMENSIONS.get(model_base_name, DEFAULT_EMBEDDING_DIMENSION)
+            
+            # Si tiene las dimensiones esperadas, se considera válido dimensionalmente
+            if len(embedding) != expected_dimension:
+                logger.info(f"Embedding con dimensiones {len(embedding)}, esperadas: {expected_dimension} para modelo {model}")
+                # No degradamos el servicio si la dimensión no coincide exactamente pero el embedding es válido
+            elif not verify_embedding_quality(embedding):
+                logger.warning(f"Verificación de calidad fallida para embedding de {len(embedding)} dimensiones")
+                return "degraded"
                 
-                # Probar embeddings con texto real
-                client = OpenAIEmbedding(model=model, api_key=settings.openai_api_key)
-                embedding = client.get_text_embedding(test_text)
-                
-                # Verificar calidad del embedding según las dimensiones esperadas del modelo
-                model_base_name = model.split(':')[0] if ':' in model else model
-                expected_dimension = EMBEDDING_DIMENSIONS.get(model_base_name, DEFAULT_EMBEDDING_DIMENSION)
-                
-                # Si tiene las dimensiones esperadas, se considera válido dimensionalmente
-                if len(embedding) != expected_dimension:
-                    logger.info(f"Embedding con dimensiones {len(embedding)}, esperadas: {expected_dimension} para modelo {model}")
-                    # No degradamos el servicio si la dimensión no coincide exactamente pero el embedding es válido
-                elif not verify_embedding_quality(embedding):
-                    logger.warning(f"Verificación de calidad fallida para embedding de {len(embedding)} dimensiones")
-                    return "degraded"
-                    
-                # Verificar rate limits
-                rate_limit_status = await check_api_rate_limits()
-                if rate_limit_status == "degraded":
-                    logger.warning("Acercando a límites de API")
-                    return "degraded"
-            except Exception as e:
-                logger.error(f"Error con OpenAI: {str(e)}")
-                return "unavailable"
+            # Verificar rate limits
+            rate_limit_status = await check_api_rate_limits()
+            if rate_limit_status == "degraded":
+                logger.warning("Acercando a límites de API")
+                return "degraded"
+        except Exception as e:
+            logger.error(f"Error con OpenAI: {str(e)}")
+            return "unavailable"
         
         # Verificar latencia del proveedor
         end_time = time.time()
@@ -319,110 +279,9 @@ async def check_cache_efficiency() -> str:
         logger.warning(f"Caché con eficiencia baja: {hit_ratio:.2%}")
         return "degraded"
         
-async def check_ollama_service() -> bool:
-    """
-    Verifica que el servicio Ollama esté funcionando.
-    
-    Returns:
-        bool: True si el servicio está disponible, False en caso contrario
-    """
-    try:
-        # Obtener configuración centralizada
-        from config.constants import OLLAMA_API_ENDPOINTS, TIMEOUTS
-        
-        from common.utils.http import check_service_health
-        
-        base_url = settings.ollama_base_url.rstrip('/')
-        health_url = f"{base_url}{OLLAMA_API_ENDPOINTS['health']}"
-        models_url = f"{base_url}{OLLAMA_API_ENDPOINTS['models']}"
-        timeout = TIMEOUTS['health_check']
-        
-        # Intentar primero la ruta /api/health usando la función centralizada
-        health_check = await check_service_health(
-            service_url=base_url,
-            service_name="ollama",
-            timeout=timeout,
-            path=OLLAMA_API_ENDPOINTS['health'].lstrip('/')
-        )
-        
-        if health_check:
-            return True
-            
-        # Si falla, intentar con el endpoint de modelos
-        try:
-            from common.utils.http import call_service
-            result = await call_service(
-                url=models_url,
-                data={},
-                method="GET",
-                custom_timeout=timeout,
-                operation_type="health_check"
-            )
-            return result.get("success", False)
-        except Exception as e:
-            logger.error(f"Error conectando con Ollama: {str(e)}")
-            return False
-    except Exception as e:
-        logger.error(f"Error verificando servicio Ollama: {str(e)}")
-        return False
+# Función check_ollama_service ha sido eliminada - Ollama no es soportado
 
-async def check_ollama_model(model: str) -> bool:
-    """
-    Verifica que un modelo específico esté disponible en Ollama.
-    Maneja comparaciones de modelos con o sin versión (ej: nomic-embed-text vs nomic-embed-text:latest).
-    
-    Args:
-        model: Nombre del modelo a verificar
-        
-    Returns:
-        bool: True si el modelo está disponible, False en caso contrario
-    """
-    try:
-        # Obtener configuración centralizada
-        from config.constants import OLLAMA_API_ENDPOINTS, TIMEOUTS
-        
-        from common.utils.http import call_service
-        
-        base_url = settings.ollama_base_url.rstrip('/')
-        models_url = f"{base_url}{OLLAMA_API_ENDPOINTS['models']}"
-        timeout = TIMEOUTS['model_check']
-        
-        try:
-            response = await call_service(
-                url=models_url,
-                data={},
-                method="GET",
-                custom_timeout=timeout,
-                operation_type="health_check"
-            )
-            
-            if not response.get("success", False):
-                logger.warning(f"Error obteniendo lista de modelos de Ollama")
-                return False
-                
-            models_data = response.get("data", {})
-            available_models = [m.get("name") for m in models_data.get("models", [])]
-            
-            # Obtener el nombre base del modelo (sin versión)
-            model_base_name = model.split(':')[0] if ':' in model else model
-            
-            # Verificar coincidencias exactas o parciales (con o sin versión)
-            for available_model in available_models:
-                available_base = available_model.split(':')[0] if ':' in available_model else available_model
-                
-                if model == available_model or model_base_name == available_base:
-                    return True
-            
-            # No se encontró el modelo
-            logger.warning(f"Modelo '{model}' no disponible en Ollama")
-            return False
-        except Exception as e:
-            logger.error(f"Error verificando modelo de Ollama: {str(e)}")
-            logger.warning(f"Modelo {model} no encontrado en Ollama")
-            return False
-    except Exception as e:
-        logger.error(f"Error verificando modelos en Ollama: {str(e)}")
-        return False
+# Función check_ollama_model ha sido eliminada - Ollama no es soportado
 
 def verify_embedding_quality(embedding: list) -> bool:
     """
@@ -517,9 +376,9 @@ async def check_api_rate_limits() -> str:
     Returns:
         str: Estado de los límites ("available", "degraded" o "unavailable")
     """
-    # Solo relevante para OpenAI
-    if settings.use_ollama:
-        return "available"  # Local no tiene límites
+    # Solo relevante para OpenAI/Groq (no para servicios locales)
+    if False:  # Ollama ha sido eliminado
+        return "available"  # Mantenemos esta estructura para futuras extensiones
     
     # Verificar tiempo desde última verificación (evitar muchas llamadas)
     global LAST_API_RATE_CHECK
@@ -568,8 +427,8 @@ async def get_model_usage_stats() -> Dict[str, Any]:
         Dict[str, Any]: Estadísticas de uso de modelos
     """
     # En implementación real, obtener estos datos de un storage persistente
-    provider = "ollama" if settings.use_ollama else "openai"
-    model = settings.default_ollama_embedding_model if settings.use_ollama else settings.default_embedding_model
+    provider = "groq" if (hasattr(settings, 'use_groq') and settings.use_groq) else "openai"
+    model = settings.default_groq_model if (hasattr(settings, 'use_groq') and settings.use_groq) else settings.default_embedding_model
     
     # Valores simulados para información de ejemplo
     latency_avg = statistics.mean(embedding_latencies) if embedding_latencies else 0
@@ -593,14 +452,14 @@ async def check_api_limits() -> Dict[str, Any]:
     Returns:
         Dict[str, Any]: Información sobre límites de API
     """
-    # Solo relevante para OpenAI y otros servicios basados en API externa
-    if settings.use_ollama:
+    # Verificar el proveedor de embeddings (OpenAI o Groq)
+    if hasattr(settings, 'use_groq') and settings.use_groq:
         return {
-            "provider": "ollama",
-            "limit_type": "unlimited",  # Local no tiene límites de API
-            "current_usage": 0,
-            "max_usage": 0,
-            "usage_percentage": 0
+            "provider": "groq",
+            "limit_type": "rpm",  # Groq tiene límites de Rate Per Minute
+            "current_rpm": 8,  # Valor simulado
+            "max_rpm": 50,     # Valor simulado
+            "usage_percentage": 16.0,  # Valor simulado
         }
     
     # Para OpenAI, implementar lectura de los headers de límites
@@ -617,7 +476,7 @@ async def check_api_limits() -> Dict[str, Any]:
 def get_embedding_dimensions() -> int:
     """
     Determina las dimensiones del modelo de embedding configurado.
-    Soporta tanto modelos de OpenAI como de Ollama.
+    Soporta modelos de OpenAI y Groq.
     
     Returns:
         int: Número de dimensiones del modelo
@@ -626,13 +485,12 @@ def get_embedding_dimensions() -> int:
     from config.constants import EMBEDDING_DIMENSIONS, DEFAULT_EMBEDDING_DIMENSION
     
     # Seleccionar el modelo correcto según el proveedor configurado
-    if settings.use_ollama:
-        # Para Ollama, usar el modelo configurado en default_ollama_embedding_model
-        model_name = settings.default_ollama_embedding_model.lower()
-        # Extraer el nombre base sin versión (ej: 'nomic-embed-text:latest' -> 'nomic-embed-text')
-        model_base = model_name.split(':')[0] if ':' in model_name else model_name
+    if hasattr(settings, 'use_groq') and settings.use_groq:
+        # Para Groq
+        model_name = settings.default_groq_model.lower() if hasattr(settings, 'default_groq_model') else "llama3-70b-8192"
+        model_base = model_name
     else:
-        # Para OpenAI u otros proveedores
+        # Para OpenAI por defecto
         model_name = settings.default_embedding_model.lower()
         model_base = model_name
     

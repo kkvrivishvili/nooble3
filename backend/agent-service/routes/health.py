@@ -226,33 +226,7 @@ async def status(request: Request, ctx=None):
         details={"error": groq_error} if groq_error else None
     ))
     
-    # Ollama (si está configurado)
-    ollama_start = time.time()
-    ollama_status = "unknown"
-    ollama_error = None
-    if settings.ollama_base_url:
-        try:
-            # Verificar la conexión a Ollama
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get(f"{settings.ollama_base_url}/api/tags")
-                if response.status_code == 200:
-                    ollama_status = "ok"
-                else:
-                    ollama_status = "error"
-                    ollama_error = f"Status code: {response.status_code}"
-        except Exception as e:
-            ollama_status = "error"
-            ollama_error = str(e)
-            logger.warning(f"Ollama health check failed: {ollama_error}")
-    else:
-        ollama_status = "disabled"
-    
-    dependencies.append(ServiceStatus(
-        name="ollama_provider",
-        status=ollama_status,
-        latency_ms=round((time.time() - ollama_start) * 1000, 2),
-        details={"error": ollama_error} if ollama_error else None
-    ))
+    # Ollama ha sido eliminado de los proveedores soportados
     
     # Return status with all dependency checks
     response = HealthResponse(

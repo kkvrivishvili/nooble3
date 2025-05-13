@@ -20,8 +20,7 @@ from common.helpers.health import (
     basic_health_check,
     detailed_status_check,
     get_service_health,
-    check_groq_availability,
-    check_ollama_availability
+    check_groq_availability
 )
 
 logger = logging.getLogger(__name__)
@@ -208,7 +207,7 @@ async def health_check(ctx: Context = None) -> HealthResponse:
     scheduler_status = await check_scheduler()
     health_result["components"]["scheduler"] = scheduler_status
     
-    # Verificación de disponibilidad de Groq y Ollama
+    # Verificación de disponibilidad de Groq (único proveedor LLM soportado)
     try:
         groq_status = await check_groq_availability()
         health_result["components"]["groq"] = groq_status
@@ -216,19 +215,11 @@ async def health_check(ctx: Context = None) -> HealthResponse:
         logger.warning(f"Error verificando Groq: {e}")
         health_result["components"]["groq"] = "unavailable"
     
-    try:
-        ollama_status = await check_ollama_availability()
-        health_result["components"]["ollama"] = ollama_status
-    except Exception as e:
-        logger.warning(f"Error verificando Ollama: {e}")
-        health_result["components"]["ollama"] = "unavailable"
-    
     # Si el scheduler no está disponible, el servicio no está disponible
     if scheduler_status == "unavailable":
         health_result["status"] = "unavailable"
-    # Si Groq y Ollama están indisponibles, marcar como degradado
-    elif (health_result["components"].get("groq") == "unavailable" and 
-          health_result["components"].get("ollama") == "unavailable") and \
+    # Si Groq está indisponible, marcar como degradado (único proveedor LLM soportado)
+    elif health_result["components"].get("groq") == "unavailable" and \
          health_result["status"] == "available":
         health_result["status"] = "degraded"
     elif scheduler_status == "degraded" and health_result["status"] == "available":

@@ -27,6 +27,18 @@ from common.tracking import track_token_usage, estimate_prompt_tokens
 from common.auth.models import validate_model_access
 from common.cache import generate_resource_id_hash
 
+# Importar el nuevo proveedor de OpenAI
+from provider.openai import (
+    OpenAIEmbeddingProvider,
+    get_openai_embedding,
+    is_openai_embedding_model,
+    estimate_openai_tokens,
+    OpenAIEmbeddingError,
+    OpenAIAuthenticationError,
+    OpenAIRateLimitError,
+    OpenAIModelNotFoundError
+)
+
 # Importar configuración centralizada
 from config.constants import (
     EMBEDDING_DIMENSIONS,
@@ -44,30 +56,42 @@ settings = get_settings()
 class CachedEmbeddingProvider:
     """
     Proveedor de embeddings con soporte de caché.
-    Soporta múltiples backends (OpenAI, Ollama) y contexto multinivel.
+    Usa OpenAI como backend exclusivo para generación de embeddings con soporte de contexto multinivel.
     """
     
     def __init__(
         self,
-        model_name: str = settings.default_embedding_model,
+        model_name: Optional[str] = None,
         tenant_id: Optional[str] = None,
         collection_id: Optional[str] = None,
         embed_batch_size: int = settings.embedding_batch_size,
-        api_key: Optional[str] = None
+        api_key: Optional[str] = None,
+        tier: Optional[str] = "free"
     ):
-        self.model_name = model_name
         self.api_key = api_key or settings.openai_api_key
         self.embed_batch_size = embed_batch_size
         self.tenant_id = tenant_id
         self.collection_id = collection_id  # Añadir collection_id para especificidad en caché
+        self.tier = tier
+        
+        # Si no se especifica un modelo, se seleccionará dinámicamente según el tier
+        # en el momento de la generación
+        self.model_name = model_name
+        
+        # Importar la función para seleccionar el mejor modelo
+        from services.llama_index_utils import select_best_embedding_model
         
         # Determinar dimensiones del embedding desde la configuración centralizada
-        model_name_lower = model_name.lower()
         self.dimensions = DEFAULT_EMBEDDING_DIMENSION
-        for name, dims in EMBEDDING_DIMENSIONS.items():
-            if name in model_name_lower:
-                self.dimensions = dims
-                break
+        
+        # Si se especifica un modelo, intentar determinar sus dimensiones
+        if model_name:
+            model_name_lower = model_name.lower()
+            for name, dims in EMBEDDING_DIMENSIONS.items():
+                if name in model_name_lower:
+                    self.dimensions = dims
+                    break
+        # Si no se especifica modelo, usar dimensión por defecto (text-embedding-3-small = 1536)
         
         # Límites de procesamiento para controlar uso de memoria y tokens
         self.max_batch_size = settings.max_batch_size
@@ -78,7 +102,11 @@ class CachedEmbeddingProvider:
         EmbeddingGenerationError: (ErrorCode.EMBEDDING_ERROR, 500),
         EmbeddingModelError: (ErrorCode.MODEL_ERROR, 500),
         TextTooLargeError: (ErrorCode.TEXT_TOO_LARGE, 413),
-        BatchTooLargeError: (ErrorCode.BATCH_TOO_LARGE, 413)
+        BatchTooLargeError: (ErrorCode.BATCH_TOO_LARGE, 413),
+        OpenAIEmbeddingError: (ErrorCode.EXTERNAL_SERVICE_ERROR, 500),
+        OpenAIAuthenticationError: (ErrorCode.AUTHORIZATION_ERROR, 401),
+        OpenAIRateLimitError: (ErrorCode.RATE_LIMIT_EXCEEDED, 429),
+        OpenAIModelNotFoundError: (ErrorCode.MODEL_NOT_FOUND_ERROR, 404)
     })
     @with_context(tenant=True, validate_tenant=True)
     async def get_embedding(self, text: str, tenant_id: Optional[str] = None, collection_id: Optional[str] = None, ctx: Context = None) -> List[float]:
@@ -98,6 +126,7 @@ class CachedEmbeddingProvider:
             EmbeddingGenerationError: Si hay errores al generar los embeddings
             TextTooLargeError: Si el texto excede el límite de tokens
             ServiceError: Si no hay tenant válido disponible
+            OpenAIEmbeddingError: Si hay errores específicos con OpenAI
         """
         # Si el texto está vacío, devolver vector de ceros
         if not text or not text.strip():
@@ -110,17 +139,35 @@ class CachedEmbeddingProvider:
             # Verificar longitud del texto
             await self._validate_text_length(text, tenant_id)
             
-            # Utilizar la implementación centralizada compatible con ingestion-service
-            embeddings, metadata = await generate_embeddings_with_llama_index(
-                texts=[text], 
+            # Determinar el tier a partir del contexto o usar el predeterminado
+            current_tier = self.tier
+            if ctx and hasattr(ctx, 'tenant_info') and ctx.tenant_info:
+                current_tier = ctx.tenant_info.tier
+            
+            # Seleccionar el modelo apropiado si no se especificó uno explícitamente
+            model_to_use = self.model_name
+            if not model_to_use:
+                # Usar la función standard de tiers para seleccionar el mejor modelo
+                available_models = get_available_embedding_models(current_tier, tenant_id)
+                if available_models:
+                    model_to_use = available_models[0]  # Usar el primer modelo disponible
+                else:
+                    model_to_use = "text-embedding-3-small"  # Modelo por defecto
+            
+            # Crear un proveedor de OpenAI para este modelo
+            provider = OpenAIEmbeddingProvider(
+                model=model_to_use,
+                api_key=self.api_key
+            )
+            
+            # Usar directamente el proveedor de OpenAI
+            embedding = await provider.embed_query(
+                text=text,
                 tenant_id=tenant_id,
-                model_name=self.model_name,
-                collection_id=coll_id,  # Pasar collection_id para mejor caché
                 ctx=ctx
             )
             
-            # Retornar el primer (y único) embedding del resultado
-            return embeddings[0]
+            return embedding
         except Exception as e:
             # Mejorar manejo de errores con más contexto
             logger.error(f"Error al generar embedding: {str(e)}", 
@@ -133,6 +180,152 @@ class CachedEmbeddingProvider:
                 raise EmbeddingGenerationError(
                     message=f"Error al generar embedding con el modelo {self.model_name}",
                     details={"original_error": str(e), "model": self.model_name}
+                ) from e
+                
+    @handle_errors(error_type="service", log_traceback=True, error_map={
+        EmbeddingGenerationError: (ErrorCode.EMBEDDING_ERROR, 500),
+        EmbeddingModelError: (ErrorCode.MODEL_ERROR, 500),
+        TextTooLargeError: (ErrorCode.TEXT_TOO_LARGE, 413),
+        BatchTooLargeError: (ErrorCode.BATCH_TOO_LARGE, 413),
+        InvalidEmbeddingParamsError: (ErrorCode.INVALID_REQUEST, 400),
+        OpenAIEmbeddingError: (ErrorCode.EXTERNAL_SERVICE_ERROR, 500),
+        OpenAIAuthenticationError: (ErrorCode.AUTHORIZATION_ERROR, 401),
+        OpenAIRateLimitError: (ErrorCode.RATE_LIMIT_EXCEEDED, 429),
+        OpenAIModelNotFoundError: (ErrorCode.MODEL_NOT_FOUND_ERROR, 404)
+    })
+    @with_context(tenant=True, validate_tenant=True)
+    async def batch_embeddings(
+        self, 
+        texts: List[str], 
+        tenant_id: Optional[str] = None, 
+        collection_id: Optional[str] = None,
+        document_id: Optional[str] = None,
+        chunk_ids: Optional[List[str]] = None,
+        ctx: Context = None
+    ) -> Tuple[List[List[float]], Dict[str, Any]]:
+        """
+        Genera embeddings para una lista de textos con soporte de caché.
+        
+        Args:
+            texts: Lista de textos para generar embeddings
+            tenant_id: ID del tenant
+            collection_id: ID de la colección (para mejorar especificidad en caché)
+            document_id: ID del documento (para mejorar especificidad en caché)
+            chunk_ids: Lista opcional de IDs de chunks (para mejorar especificidad en caché)
+            ctx: Contexto proporcionado por el decorador with_context
+            
+        Returns:
+            Tuple[List[List[float]], Dict[str, Any]]: 
+                - Lista de embeddings generados
+                - Metadatos del proceso (tokens, tiempos, etc)
+                
+        Raises:
+            EmbeddingGenerationError: Si hay errores al generar los embeddings
+            BatchTooLargeError: Si el batch excede el límite máximo
+            ServiceError: Si no hay tenant válido disponible
+            OpenAIEmbeddingError: Si hay errores específicos con OpenAI
+        """
+        # Si no hay textos, retornar lista vacía y metadatos básicos
+        if not texts:
+            return [], {
+                "total_tokens": 0,
+                "num_texts": 0,
+                "source": "generation",
+                "latency": 0
+            }
+
+        # Si todos los textos están vacíos, retornar vectores de ceros
+        if all(not text.strip() for text in texts):
+            zero_embeddings = [[0.0] * self.dimensions for _ in range(len(texts))]
+            return zero_embeddings, {
+                "total_tokens": 0,
+                "num_texts": len(texts),
+                "source": "generation",
+                "latency": 0
+            }
+        
+        # Resolver parámetros de contexto
+        tenant_id, coll_id = self._resolve_context_params(tenant_id=tenant_id, collection_id=collection_id, ctx=ctx)
+        
+        try:
+            # Verificar que el número de textos no exceda el máximo permitido
+            await self._validate_batch_size(texts, tenant_id)
+            
+            # Verificar que cada texto no exceda el límite de tokens
+            for i, text in enumerate(texts):
+                if text.strip():  # Solo verificar textos no vacíos
+                    await self._validate_text_length(text, tenant_id)
+
+            # Determinar el tier a partir del contexto o usar el predeterminado
+            current_tier = self.tier
+            if ctx and hasattr(ctx, 'tenant_info') and ctx.tenant_info:
+                current_tier = ctx.tenant_info.tier
+            
+            # Seleccionar el modelo apropiado si no se especificó uno explícitamente
+            model_to_use = self.model_name
+            if not model_to_use:
+                from services.llama_index_utils import select_best_embedding_model
+                available_models = get_available_embedding_models(current_tier, tenant_id)
+                if available_models:
+                    model_to_use = available_models[0]  # Usar el primer modelo disponible
+                else:
+                    model_to_use = "text-embedding-3-small"  # Modelo por defecto
+
+            # Crear un proveedor de OpenAI para este modelo
+            provider = OpenAIEmbeddingProvider(
+                model=model_to_use,
+                api_key=self.api_key
+            )
+            
+            # Usar directamente el proveedor de OpenAI para documentos
+            embeddings = await provider.embed_documents(
+                texts=texts,
+                tenant_id=tenant_id,
+                collection_id=collection_id,
+                document_id=document_id,
+                chunk_ids=chunk_ids,
+                ctx=ctx
+            )
+            
+            # Crear metadatos básicos
+            start_time = time.time()
+            total_tokens = 0
+            for text in texts:
+                if text.strip():  # Solo contar tokens en textos no vacíos
+                    total_tokens += estimate_openai_tokens(text)
+            
+            elapsed_time = time.time() - start_time
+            
+            metadata = {
+                "model": model_to_use,
+                "usage": {
+                    "total_tokens": total_tokens,
+                    "prompt_tokens": total_tokens
+                },
+                "latency": elapsed_time,
+                "source": "batch",
+                "num_texts": len(texts),
+                "provider": "openai"
+            }
+            
+            # Retornar embeddings y metadatos
+            return embeddings, metadata
+        except Exception as e:
+            # Mejorar manejo de errores con más contexto
+            logger.error(f"Error al generar embeddings en batch: {str(e)}", 
+                         extra={"tenant_id": tenant_id, "model": self.model_name, "batch_size": len(texts)})
+            
+            # Propagar el error con contexto enriquecido
+            if isinstance(e, ServiceError):
+                raise e
+            else:
+                raise EmbeddingGenerationError(
+                    message=f"Error al generar embeddings en batch con el modelo {self.model_name}",
+                    details={
+                        "original_error": str(e), 
+                        "model": self.model_name,
+                        "batch_size": len(texts)
+                    }
                 ) from e
     
     async def _validate_text_length(self, text: str, tenant_id: Optional[str] = None) -> None:
@@ -198,6 +391,17 @@ class CachedEmbeddingProvider:
         """
         # Resolver tenant_id y collection_id usando método centralizado
         tenant_id, coll_id = self._resolve_context_params(tenant_id=ctx.get_tenant_id() if ctx else None, collection_id=collection_id, ctx=ctx)
+        
+        # Determinar el tier a partir del contexto o usar el predeterminado
+        current_tier = self.tier
+        if ctx and hasattr(ctx, 'tenant_info') and ctx.tenant_info:
+            current_tier = ctx.tenant_info.tier
+            
+        # Seleccionar el modelo apropiado si no se especificó uno explícitamente
+        model_to_use = self.model_name
+        if not model_to_use:
+            from services.llama_index_utils import select_best_embedding_model
+            model_to_use = select_best_embedding_model(current_tier, tenant_id)
         
         # Verificaciones básicas
         if not texts:
@@ -284,7 +488,7 @@ class CachedEmbeddingProvider:
             embeddings, metadata = await generate_embeddings_with_llama_index(
                 texts=texts,
                 tenant_id=tenant_id,
-                model_name=self.model_name,
+                model_name=model_to_use,
                 collection_id=coll_id,
                 chunk_id=chunk_id,
                 ctx=ctx
@@ -351,7 +555,7 @@ class CachedEmbeddingProvider:
             
         return resolved_tenant_id, resolved_collection_id
     
-    async def _process_large_batch(self, texts: List[str], tenant_id: str, ctx: Context, estimated_tokens: Optional[int] = None, collection_id: Optional[str] = None, chunk_id: Optional[List[str]] = None) -> List[List[float]]:
+    async def _process_large_batch(self, texts: List[str], tenant_id: str, ctx: Context, estimated_tokens: Optional[int] = None, collection_id: Optional[str] = None, chunk_id: Optional[List[str]] = None, model_name: Optional[str] = None) -> List[List[float]]:
         """
         Procesa un lote grande dividiéndolo en sublotes manejables.
         
@@ -402,7 +606,7 @@ class CachedEmbeddingProvider:
                 generate_embeddings_with_llama_index(
                     texts=sublote,
                     tenant_id=tenant_id,
-                    model_name=self.model_name,
+                    model_name=model_name or self.model_name,  # Usar el modelo proporcionado o el predeterminado
                     collection_id=collection_id,
                     chunk_id=current_chunk_ids,
                     ctx=ctx

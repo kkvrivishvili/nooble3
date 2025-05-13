@@ -5,7 +5,7 @@
 El Servicio de Embeddings es un componente central de la arquitectura RAG de la plataforma, responsable de generar representaciones vectoriales de textos que permiten búsquedas semánticas, comparaciones de similitud y otras operaciones basadas en significado.
 
 Este servicio proporciona:
-- Generación de embeddings mediante diversos modelos (OpenAI, Ollama, etc.)
+- Generación de embeddings mediante modelos de OpenAI
 - Caché multinivel optimizada
 - Validación de acceso basada en tier de tenant
 - Tracking detallado de uso y rendimiento
@@ -36,7 +36,7 @@ Este servicio proporciona:
 ### Flujo de Datos
 
 ```
-Cliente → API → CachedEmbeddingProvider → LlamaIndexUtils → Modelo (OpenAI/Ollama) → Cache → Cliente
+Cliente → API → CachedEmbeddingProvider → LlamaIndexUtils → Modelo (OpenAI) → Cache → Cliente
 ```
 
 1. Cliente envía texto(s) para embedding
@@ -124,11 +124,9 @@ El servicio soporta diferentes modelos según el tier del tenant:
 
 | Modelo | Dimensiones | Tiers Permitidos | Notas |
 |--------|-------------|------------------|-------|
-| text-embedding-ada-002 | 1536 | premium, standard, free | OpenAI |
-| text-embedding-3-small | 1536 | premium, standard | OpenAI |
-| text-embedding-3-large | 3072 | premium | OpenAI |
-| nomic-embed-text | 768 | premium, standard, free | Ollama (local) |
-| all-MiniLM-L6-v2 | 384 | standard, free | Ollama (local) |
+| text-embedding-ada-002 | 1536 | premium, standard, free | OpenAI (legacy) |
+| text-embedding-3-small | 1536 | standard, free | OpenAI |
+| text-embedding-3-large | 3072 | premium, business, enterprise | OpenAI |
 
 ## Patrón Cache-Aside Optimizado
 
