@@ -10,8 +10,7 @@ from ._base import (
     track_query,
     track_usage,
     estimate_prompt_tokens,
-    track_embedding_usage,
-    track_operation
+    track_embedding_usage
 )
 from .attribution import TokenAttributionService
 from .reconciliation import (
@@ -49,7 +48,7 @@ __all__ = [
     'track_token_usage',
     'track_query',
     'track_usage',
-    'track_operation',
+    # 'track_operation' eliminado según plan de refactorización
     'estimate_prompt_tokens',
     'track_embedding_usage',
     

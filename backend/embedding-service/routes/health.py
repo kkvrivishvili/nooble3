@@ -23,7 +23,6 @@ from config.constants import (
     QUALITY_THRESHOLDS,
     CACHE_EFFICIENCY_THRESHOLDS
 )
-import httpx
 import numpy as np
 
 from common.models import HealthResponse, ServiceStatusResponse
@@ -369,31 +368,38 @@ async def check_ollama_service() -> bool:
         # Obtener configuración centralizada
         from config.constants import OLLAMA_API_ENDPOINTS, TIMEOUTS
         
+        from common.utils.http import check_service_health
+        
         base_url = settings.ollama_base_url.rstrip('/')
         health_url = f"{base_url}{OLLAMA_API_ENDPOINTS['health']}"
         models_url = f"{base_url}{OLLAMA_API_ENDPOINTS['models']}"
         timeout = TIMEOUTS['health_check']
         
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            # Intentar primero la ruta /api/health
-            try:
-                health_response = await client.get(health_url)
-                if health_response.status_code == 200:
-                    return True
-            except Exception:
-                # Si falla, intentar con /api/tags (endpoints para listar modelos)
-                pass
-                
-            # Intentar verificar el endpoint de modelos como alternativa
-            try:
-                models_response = await client.get(models_url)
-                if models_response.status_code == 200:
-                    return True
-            except Exception as e:
-                logger.error(f"Error conectando con Ollama: {str(e)}")
-                return False
-                
-        return False
+        # Intentar primero la ruta /api/health usando la función centralizada
+        health_check = await check_service_health(
+            service_url=base_url,
+            service_name="ollama",
+            timeout=timeout,
+            path=OLLAMA_API_ENDPOINTS['health'].lstrip('/')
+        )
+        
+        if health_check:
+            return True
+            
+        # Si falla, intentar con el endpoint de modelos
+        try:
+            from common.utils.http import call_service
+            result = await call_service(
+                url=models_url,
+                data={},
+                method="GET",
+                custom_timeout=timeout,
+                operation_type="health_check"
+            )
+            return result.get("success", False)
+        except Exception as e:
+            logger.error(f"Error conectando con Ollama: {str(e)}")
+            return False
     except Exception as e:
         logger.error(f"Error verificando servicio Ollama: {str(e)}")
         return False
@@ -413,18 +419,26 @@ async def check_ollama_model(model: str) -> bool:
         # Obtener configuración centralizada
         from config.constants import OLLAMA_API_ENDPOINTS, TIMEOUTS
         
+        from common.utils.http import call_service
+        
         base_url = settings.ollama_base_url.rstrip('/')
         models_url = f"{base_url}{OLLAMA_API_ENDPOINTS['models']}"
         timeout = TIMEOUTS['model_check']
         
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.get(models_url)
+        try:
+            response = await call_service(
+                url=models_url,
+                data={},
+                method="GET",
+                custom_timeout=timeout,
+                operation_type="health_check"
+            )
             
-            if response.status_code != 200:
-                logger.warning(f"Error obteniendo lista de modelos de Ollama: código {response.status_code}")
+            if not response.get("success", False):
+                logger.warning(f"Error obteniendo lista de modelos de Ollama")
                 return False
                 
-            models_data = response.json()
+            models_data = response.get("data", {})
             available_models = [m.get("name") for m in models_data.get("models", [])]
             
             # Obtener el nombre base del modelo (sin versión)
@@ -432,18 +446,17 @@ async def check_ollama_model(model: str) -> bool:
             
             # Verificar coincidencias exactas o parciales (con o sin versión)
             for available_model in available_models:
-                # Coincidencia exacta
-                if model == available_model:
-                    return True
-                
-                # Coincidencia de nombre base
                 available_base = available_model.split(':')[0] if ':' in available_model else available_model
-                if model_base_name == available_base:
-                    logger.info(f"Modelo {model} encontrado como {available_model}")
+                
+                if model == available_model or model_base_name == available_base:
                     return True
             
-            # No se encontró ninguna coincidencia
-            logger.warning(f"Modelo {model} no encontrado en Ollama. Disponibles: {available_models}")
+            # No se encontró el modelo
+            logger.warning(f"Modelo '{model}' no disponible en Ollama")
+            return False
+        except Exception as e:
+            logger.error(f"Error verificando modelo de Ollama: {str(e)}")
+            logger.warning(f"Modelo {model} no encontrado en Ollama")
             return False
     except Exception as e:
         logger.error(f"Error verificando modelos en Ollama: {str(e)}")

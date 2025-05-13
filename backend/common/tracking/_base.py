@@ -471,85 +471,22 @@ async def track_embedding_usage(
         logger.error(f"Excepción al registrar uso de embedding: {str(e)}")
         return False
 
-def track_operation(operation_name: str, operation_type: str):
-    """
-    Decorador para registrar operaciones y su rendimiento.
-    
-    Este decorador sirve como compatibilidad con implementaciones anteriores
-    y redirige el tracking a track_usage.
-    
-    Args:
-        operation_name: Nombre de la operación (ej: "get_agent_config")
-        operation_type: Tipo de operación (ej: "agent", "embedding")
-        
-    Returns:
-        Decorador configurado
-    """
-    def decorator(func):
-        import functools
-        
-        @functools.wraps(func)
-        async def wrapper(*args, **kwargs):
-            import time
-            start_time = time.time()
-            
-            # Extraer tenant_id de los argumentos si está presente
-            tenant_id = None
-            if 'tenant_id' in kwargs:
-                tenant_id = kwargs['tenant_id']
-            elif len(args) > 1 and isinstance(args[1], str):
-                # Asumiendo que el segundo argumento podría ser tenant_id en algunas funciones
-                tenant_id = args[1]
-            
-            try:
-                # Ejecutar la función original
-                result = await func(*args, **kwargs)
-                
-                # Calcular tiempo de ejecución
-                execution_time = time.time() - start_time
-                
-                # Crear metadatos de la operación
-                metadata = {
-                    "operation_name": operation_name,
-                    "operation_type": operation_type,
-                    "execution_time": execution_time,
-                    "status": "success"
-                }
-                
-                # Registrar la operación exitosa
-                if tenant_id:
-                    await track_usage(
-                        tenant_id=tenant_id,
-                        operation=f"{operation_type}.{operation_name}",
-                        metadata=metadata
-                    )
-                
-                return result
-            except Exception as e:
-                # Calcular tiempo hasta el error
-                execution_time = time.time() - start_time
-                
-                # Crear metadatos de error
-                metadata = {
-                    "operation_name": operation_name,
-                    "operation_type": operation_type,
-                    "execution_time": execution_time,
-                    "status": "error",
-                    "error_type": type(e).__name__,
-                    "error_message": str(e)
-                }
-                
-                # Registrar la operación fallida
-                if tenant_id:
-                    await track_usage(
-                        tenant_id=tenant_id,
-                        operation=f"{operation_type}.{operation_name}.error",
-                        metadata=metadata
-                    )
-                
-                # Re-lanzar la excepción
-                raise
-                
-        return wrapper
-    
-    return decorator
+# El decorador track_operation ha sido eliminado según el plan de refactorización.
+# En su lugar, utilizar las funciones de tracking directas:
+#
+# - Para tracking de operaciones generales: track_usage()
+# - Para tracking de tokens LLM: track_token_usage()
+# - Para tracking de embeddings: track_embedding_usage()
+#
+# NOTA: Si necesitas la funcionalidad de este decorador, puedes implementarlo como:
+#
+# ```python
+# @handle_errors(error_type="service")
+# async def tu_funcion(tenant_id, ...):
+#     start_time = time.time()
+#     # Ejecutar lógica principal
+#     result = await proceso_principal()
+#     # Registrar métricas al finalizar
+#     await track_usage(tenant_id, operation="nombre.operacion", metadata={...})
+#     return result
+# ```

@@ -1477,28 +1477,4 @@ class CacheManager:
         instance = CacheManager.get_instance()
         return await instance.get_set_members(set_name, tenant_id)
 
-    @staticmethod
-    def _generate_hash(data: Any) -> str:
-        """
-        OBSOLETO: Usar generate_resource_id_hash() de helpers.py en su lugar.
-        
-        Esta función está PROGRAMADA PARA ELIMINACIÓN en la próxima versión.
-        Todo el código existente debe migrar a generate_resource_id_hash().
-        
-        Args:
-            data: Datos para generar un hash
-            
-        Returns:
-            str: Hash generado de los datos
-            
-        Warnings:
-            DeprecationWarning: Este método está obsoleto y será eliminado.
-        """
-        import warnings
-        warnings.warn(
-            "CacheManager._generate_hash() está obsoleto y programado para eliminación. "
-            "Use generate_resource_id_hash() en su lugar.",
-            DeprecationWarning, 
-            stacklevel=2
-        )
-        return generate_resource_id_hash(data)
+    # Método _generate_hash eliminado - Usar generate_resource_id_hash() de helpers.py en su lugar
