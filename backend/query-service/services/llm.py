@@ -5,7 +5,7 @@ Funciones para interactuar con modelos de lenguaje (LLMs).
 import logging
 from typing import Optional, Any, Dict
 
-from llama_index.llms.openai import OpenAI
+# Eliminamos importación de OpenAI ya que solo usaremos Groq y Ollama
 
 from common.models import TenantInfo
 from common.auth import validate_model_access
@@ -78,11 +78,17 @@ async def get_llm_for_tenant(tenant_info: TenantInfo, requested_model: Optional[
             **common_params
         )
     else:
-        # Usar OpenAI (default fallback)
-        logger.info(f"Usando modelo OpenAI: {model_name}")
-        return OpenAI(
+        # Si no está configurado ni Ollama ni Groq, usamos Groq como predeterminado
+        logger.info(f"Configuración de LLM no especificada, usando Groq como predeterminado: {model_name}")
+        # Verificar si tenemos API key de Groq configurada
+        if not hasattr(settings, 'groq_api_key') or not settings.groq_api_key:
+            logger.error("API key de Groq no configurada y es necesaria como fallback")
+            raise ValueError("Se requiere API key de Groq para usar modelos LLM")
+        
+        # Usar Groq como fallback predeterminado
+        return GroqLLM(
             model=model_name,
-            api_key=settings.openai_api_key,
+            api_key=settings.groq_api_key,
             **common_params
         )
 

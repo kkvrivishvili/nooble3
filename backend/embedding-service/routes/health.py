@@ -238,45 +238,7 @@ async def check_embedding_provider() -> str:
             except Exception as e:
                 logger.error(f"Error con Ollama: {str(e)}")
                 return "unavailable"
-        elif hasattr(settings, 'use_groq') and settings.use_groq:
-            # Para Groq, verificar las credenciales y conectividad
-            try:
-                # Verificar que haya una API key configurada
-                if not hasattr(settings, 'groq_api_key') or not settings.groq_api_key:
-                    logger.error("API key de Groq no configurada")
-                    return "unavailable"
-                
-                # Como Groq no tiene embeddings nativos, usaremos OpenAI para la verificación
-                # Esta es una verificación provisional hasta que Groq implemente embeddings nativos
-                try:
-                    from common.llm.groq import GroqClient
-                    if hasattr(GroqClient, 'get_embeddings'):
-                        # Si existe una función nativa de embeddings en GroqClient
-                        groq_client = GroqClient(api_key=settings.groq_api_key)
-                        embedding = groq_client.get_embeddings(test_text)
-                    else:
-                        # Verificar solo la conectividad y la API key
-                        import groq
-                        client = groq.Client(api_key=settings.groq_api_key)
-                        # Verificar la lista de modelos disponibles
-                        models = client.models.list()
-                        if not any(m.id == model for m in models.data):
-                            logger.warning(f"Modelo {model} no disponible en Groq")
-                            return "degraded"
-                        # Usar OpenAI como fallback para verificación de embeddings
-                        embedding = [0.1] * 1536  # Simular un embedding válido
-                except Exception as e:
-                    logger.error(f"Error verificando Groq: {str(e)}")
-                    return "degraded"
-                    
-                # Verificar rate limits (si disponible)
-                rate_limit_status = await check_api_rate_limits()
-                if rate_limit_status == "degraded":
-                    logger.warning("Acercando a límites de API de Groq")
-                    return "degraded"
-            except Exception as e:
-                logger.error(f"Error con Groq: {str(e)}")
-                return "unavailable"
+        # Eliminamos la verificación de Groq ya que el embedding-service solo debe enfocarse en embeddings
         else:
             # Para OpenAI, verificar las credenciales y conectividad
             try:
