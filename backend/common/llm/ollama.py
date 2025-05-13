@@ -42,36 +42,85 @@ class OllamaEmbeddings(BaseEmbeddingModel):
         
         logger.info(f"Inicializando OllamaEmbeddings con modelo {self.model_name} en {self.base_url}")
     
-    async def _embed_texts(self, texts: List[str]) -> List[List[float]]:
+    async def _embed_texts(self, texts: List[str], tenant_id: Optional[str] = None) -> List[List[float]]:
         """
         Genera embeddings para una lista de textos
         
         Args:
             texts: Lista de textos para generar embeddings
+            tenant_id: ID del tenant (opcional, para contexto y caché)
             
         Returns:
             Lista de embeddings (vectores)
         """
         embeddings = []
         
-        async with httpx.AsyncClient() as client:
-            for text in texts:
-                # La API de Ollama espera un JSON con el texto a embeber
-                try:
-                    response = await client.post(
-                        f"{self.base_url}/api/embeddings",
-                        json={"model": self.model_name, "prompt": text},
-                        timeout=30.0  # Timeout aumentado para modelos grandes
-                    )
-                    response.raise_for_status()
-                    data = response.json()
+        # Importar la función centralizada
+        from common.utils.http import call_service
+        from common.context.vars import get_current_tenant_id
+        
+        # Obtener tenant_id del contexto si no se proporciona
+        tenant_id = tenant_id or get_current_tenant_id()
+        
+        for i, text in enumerate(texts):
+            # Generar ID para caché basado en hash del texto
+            import hashlib
+            text_hash = hashlib.md5(text.encode()).hexdigest()
+            
+            # La API de Ollama espera un JSON con el texto a embeber
+            try:
+                # Usar call_service con propagación de contexto y caché
+                result = await call_service(
+                    url=f"{self.base_url}/api/embeddings",
+                    data={"model": self.model_name, "prompt": text},
+                    tenant_id=tenant_id,  # Propagar contexto
+                    method="POST",
+                    custom_timeout=30.0,  # Timeout aumentado para modelos grandes
+                    operation_type="embedding_generation",
+                    use_cache=True,  # Utilizar caché para textos frecuentes
+                    cache_ttl=86400  # 24 horas (o usar CacheManager.ttl_extended)
+                )
+                
+                if result.get("success", False):
                     # Extraer el embedding del resultado
+                    data = result.get("data", {})
                     embedding = data.get("embedding", [])
-                    embeddings.append(embedding)
-                except Exception as e:
-                    logger.error(f"Error al obtener embedding de Ollama: {str(e)}")
-                    # En caso de error, devolver un vector de ceros
+                    
+                    # Validar que el embedding sea válido
+                    if embedding and isinstance(embedding, list):
+                        embeddings.append(embedding)
+                    else:
+                        logger.warning(
+                            f"Embedding inválido recibido de Ollama", 
+                            extra={"text_index": i, "model": self.model_name, "tenant_id": tenant_id}
+                        )
+                        embeddings.append([0.0] * self.dimensions)
+                else:
+                    # En caso de error en la respuesta
+                    error_info = result.get('error', {})
+                    logger.error(
+                        f"Error en respuesta de Ollama", 
+                        extra={
+                            "error": error_info,
+                            "text_index": i,
+                            "text_length": len(text),
+                            "model": self.model_name,
+                            "tenant_id": tenant_id
+                        }
+                    )
                     embeddings.append([0.0] * self.dimensions)
+            except Exception as e:
+                logger.error(
+                    f"Error al obtener embedding de Ollama: {str(e)}",
+                    extra={
+                        "error_type": type(e).__name__,
+                        "text_index": i,
+                        "model": self.model_name,
+                        "tenant_id": tenant_id
+                    }
+                )
+                # En caso de error, devolver un vector de ceros
+                embeddings.append([0.0] * self.dimensions)
         
         return embeddings
     

@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Dict, Any, Optional, List, Tuple
 
 from fastapi import APIRouter
-import httpx
+
 from redis.asyncio import Redis
 
 from common.models import HealthResponse, ServiceStatusResponse
@@ -153,33 +153,22 @@ async def service_status(ctx: Context = None) -> ServiceStatusResponse:
 
 async def check_embedding_service() -> bool:
     """
-    Verifica la disponibilidad del servicio de embeddings usando la función común.
+    Verifica la disponibilidad del servicio de embeddings usando la función centralizada.
     
     Returns:
         bool: True si el servicio está disponible, False en caso contrario
     """
-    try:
-        service_url = settings.embedding_service_url
-        logger.info(f"Verificando disponibilidad del embedding-service en {service_url}/health")
-        
-        async with httpx.AsyncClient(timeout=TIMEOUTS["health_check"]) as client:
-            response = await client.get(f"{service_url}/health")
-            
-            if response.status_code == 200:
-                logger.info(f"Servicio embedding-service disponible: código {response.status_code}")
-                return True
-            else:
-                logger.warning(f"Estado degradado en embedding-service: código {response.status_code}")
-                return False
-    except httpx.ConnectError as e:
-        logger.warning(f"Error de conexión con embedding-service: {e}. URL: {settings.embedding_service_url}")
-        return False
-    except httpx.TimeoutException as e:
-        logger.warning(f"Timeout al verificar embedding-service: {e}. URL: {settings.embedding_service_url}")
-        return False
-    except Exception as e:
-        logger.warning(f"Error verificando disponibilidad de embedding-service: {e.__class__.__name__}: {e}")
-        return False
+    from common.utils.http import check_service_health
+    
+    service_url = settings.embedding_service_url
+    logger.info(f"Verificando disponibilidad del embedding-service en {service_url}/health")
+    
+    # Usar la función centralizada en lugar de httpx directo
+    return await check_service_health(
+        service_url=service_url,
+        service_name="embedding-service",
+        timeout=TIMEOUTS["health_check"]
+    )
 
 async def check_embedding_service_status() -> str:
     """
@@ -196,44 +185,52 @@ async def check_embedding_service_status() -> str:
             return "unavailable"
             
         # Verificar detalles usando /status
-        async with httpx.AsyncClient(timeout=TIMEOUTS["status_check_timeout"]) as client:
-            response = await client.get(f"{settings.embedding_service_url}/status")
+        from common.utils.http import call_service
+        
+        # Usar call_service en lugar de httpx directo
+        result = await call_service(
+            url=f"{settings.embedding_service_url}/status",
+            data={},  # Sin datos para GET
+            method="GET",
+            custom_timeout=TIMEOUTS["status_check_timeout"],
+            operation_type="status_check"
+        )
+        
+        if not result.get("success", False):
+            return "degraded"
             
-            if response.status_code != 200:
-                return "degraded"
-                
-            status_data = response.json()
-            components = status_data.get("components", {})
+        status_data = result.get("data", {})
+        components = status_data.get("components", {})
+        
+        # Verificar el estado de Groq si está configurado
+        if components.get("groq_provider") == "unavailable":
+            logger.warning("Proveedor Groq no disponible")
+            # Si Groq está configurado como principal y no está disponible, es crítico
+            import os
+            if os.environ.get("USE_GROQ", "False").lower() == "true" and \
+               os.environ.get("USE_OLLAMA", "False").lower() != "true":
+                return "unavailable"
+            else:
+                return "degraded"  # Hay fallback a Ollama
+        
+        # Verificar el estado de Ollama si está configurado
+        if components.get("ollama_provider") == "unavailable":
+            logger.warning("Proveedor Ollama no disponible")
+            # Si Ollama está configurado como principal y no está disponible, es crítico
+            import os
+            if os.environ.get("USE_OLLAMA", "False").lower() == "true" and \
+               os.environ.get("USE_GROQ", "False").lower() != "true":
+                return "unavailable"
+            else:
+                return "degraded"  # Hay fallback a Groq
+        
+        # Si ambos están degradados pero no indisponibles, reportar como degradado
+        if (components.get("groq_provider") == "degraded" or 
+            components.get("ollama_provider") == "degraded"):
+            logger.warning("Al menos un proveedor de embeddings en estado degradado")
+            return "degraded"
             
-            # Verificar el estado de Groq si está configurado
-            if components.get("groq_provider") == "unavailable":
-                logger.warning("Proveedor Groq no disponible")
-                # Si Groq está configurado como principal y no está disponible, es crítico
-                import os
-                if os.environ.get("USE_GROQ", "False").lower() == "true" and \
-                   os.environ.get("USE_OLLAMA", "False").lower() != "true":
-                    return "unavailable"
-                else:
-                    return "degraded"  # Hay fallback a Ollama
-            
-            # Verificar el estado de Ollama si está configurado
-            if components.get("ollama_provider") == "unavailable":
-                logger.warning("Proveedor Ollama no disponible")
-                # Si Ollama está configurado como principal y no está disponible, es crítico
-                import os
-                if os.environ.get("USE_OLLAMA", "False").lower() == "true" and \
-                   os.environ.get("USE_GROQ", "False").lower() != "true":
-                    return "unavailable"
-                else:
-                    return "degraded"  # Hay fallback a Groq
-            
-            # Si ambos están degradados pero no indisponibles, reportar como degradado
-            if (components.get("groq_provider") == "degraded" or 
-                components.get("ollama_provider") == "degraded"):
-                logger.warning("Al menos un proveedor de embeddings en estado degradado")
-                return "degraded"
-                
-            return "available"
+        return "available"
     except Exception as e:
         logger.warning(f"Error verificando estado detallado de embedding-service: {e}")
         return "degraded" if basic_check else "unavailable"

@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List, Union, Tuple
 
 from fastapi import APIRouter, Depends
-import httpx
+
 import redis.asyncio as redis
 
 from common.models import HealthResponse, ServiceStatusResponse
@@ -212,51 +212,63 @@ async def check_embedding_service_status() -> str:
         
         # Verificar estado detallado (opcional)
         try:
-            async with httpx.AsyncClient(timeout=TIMEOUTS.get("health_check", 2.0)) as client:
-                status_url = f"{service_url}/status"
-                response = await client.get(status_url)
+            from common.utils.http import call_service
+            
+            # Usar call_service en lugar de httpx directo
+            status_url = f"{service_url}/status"
+            result = await call_service(
+                url=status_url,
+                data={},  # Sin datos para GET
+                method="GET",
+                custom_timeout=TIMEOUTS.get("health_check", 2.0),
+                operation_type="status_check"
+            )
+            
+            if not result.get("success", False):
+                logger.warning(f"Estado degradado en embedding-service: respuesta no exitosa")
+                return "degraded"
                 
-                if response.status_code != 200:
-                    logger.warning(f"Estado degradado en embedding-service: código {response.status_code}")
+            status_data = result.get("data", {})
+            
+            # Verificar el estado del proveedor de embeddings (puede ser Ollama o Groq)
+            components = status_data.get("components", {})
+            
+            # Verificar el estado de Groq si está configurado
+            if components.get("groq_provider") == "unavailable":
+                logger.warning("Proveedor Groq no disponible")
+                # Si Groq está configurado como principal y no está disponible, es crítico
+                import os
+                if os.environ.get("USE_GROQ", "False").lower() == "true" and \
+                   os.environ.get("USE_OLLAMA", "False").lower() != "true":
+                    return "unavailable"
+                else:
+                    return "degraded"  # Hay fallback a Ollama
+                
+            # Verificar el estado de Ollama si está configurado
+            if components.get("ollama_provider") == "unavailable":
+                logger.warning("Proveedor Ollama no disponible")
+                # Si Ollama está configurado como principal y no está disponible, es crítico
+                import os
+                if os.environ.get("USE_OLLAMA", "False").lower() == "true" and \
+                   os.environ.get("USE_GROQ", "False").lower() != "true":
+                    return "unavailable"
+                else:
+                    return "degraded"  # Hay fallback a Groq
+            
+            # Si ambos están degradados pero no indisponibles, reportar como degradado
+            if (components.get("groq_provider") == "degraded" or 
+                components.get("ollama_provider") == "degraded"):
+                logger.warning("Al menos un proveedor de embeddings en estado degradado")
+                return "degraded"
+            
+            # Verificar métricas de latencia si están disponibles
+            if "metrics" in status_data and "latency_ms" in status_data["metrics"]:
+                latency = status_data["metrics"]["latency_ms"]
+                if latency > 5000:  # Si la latencia es mayor a 5 segundos
+                    logger.warning(f"Latencia del servicio de embeddings muy alta: {latency}ms")
                     return "degraded"
-                    
-                status_data = response.json()
-                
-                # Verificar el estado del proveedor de embeddings (puede ser Ollama o Groq)
-                components = status_data.get("components", {})
-                
-                # Verificar el estado de Groq si está configurado
-                if components.get("groq_provider") == "unavailable":
-                    logger.warning("Proveedor Groq no disponible")
-                    # Si Groq está configurado como principal y no está disponible, es crítico
-                    if os.environ.get("USE_GROQ", "False").lower() == "true" and \
-                       os.environ.get("USE_OLLAMA", "False").lower() != "true":
-                        return "unavailable"
-                    else:
-                        return "degraded"  # Hay fallback a Ollama
-                
-                # Verificar el estado de Ollama si está configurado
-                if components.get("ollama_provider") == "unavailable":
-                    logger.warning("Proveedor Ollama no disponible")
-                    # Si Ollama está configurado como principal y no está disponible, es crítico
-                    if os.environ.get("USE_OLLAMA", "False").lower() == "true" and \
-                       os.environ.get("USE_GROQ", "False").lower() != "true":
-                        return "unavailable"
-                    else:
-                        return "degraded"  # Hay fallback a Groq
-                
-                # Si ambos están degradados pero no indisponibles, reportar como degradado
-                if (components.get("groq_provider") == "degraded" or 
-                    components.get("ollama_provider") == "degraded"):
-                    logger.warning("Al menos un proveedor de embeddings en estado degradado")
-                    return "degraded"
-                    
-                # Verificar métricas de latencia si están disponibles
-                if "metrics" in status_data and "latency_ms" in status_data["metrics"]:
-                    latency = status_data["metrics"]["latency_ms"]
-                    if latency > 5000:  # Si la latencia es mayor a 5 segundos
-                        logger.warning(f"Latencia del servicio de embeddings muy alta: {latency}ms")
-                        return "degraded"
+            
+            return "available"
                 
         except Exception as detail_error:
             logger.info(f"No se pudo obtener estado detallado: {detail_error}")
