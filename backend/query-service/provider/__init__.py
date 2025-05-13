@@ -10,11 +10,11 @@ from .groq import (
     GroqLLM,
     get_groq_llm_model,
     stream_groq_response,
+    is_groq_model,
     GroqError,
     GroqAuthenticationError,
     GroqRateLimitError,
     GroqModelNotFoundError,
-    estimate_groq_tokens,
     GROQ_MODELS
 )
 
@@ -22,10 +22,10 @@ __all__ = [
     "GroqLLM",
     "get_groq_llm_model",
     "stream_groq_response",
+    "is_groq_model",
     "GroqError",
     "GroqAuthenticationError",
     "GroqRateLimitError",
     "GroqModelNotFoundError",
-    "estimate_groq_tokens",
     "GROQ_MODELS"
 ]

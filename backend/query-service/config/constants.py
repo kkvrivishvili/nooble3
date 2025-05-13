@@ -35,17 +35,86 @@ DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small" # Modelo de embedding predete
 # Los modelos de Ollama han sido eliminados
 
 # Modelos de Groq
+# ---------------
+
 # Modelos tradicionales
-DEFAULT_GROQ_MODEL = "llama3-70b-8192" # Modelo predeterminado para Groq (70B para alta calidad)
-DEFAULT_GROQ_LLM_MODEL = "llama3-70b-8192" # Modelo LLM predeterminado para Groq
+DEFAULT_GROQ_MODEL = "llama3-70b-8192"  # Modelo predeterminado para Groq
+# Especificaciones: 70B parámetros, ventana de contexto de 8192 tokens
+# Uso recomendado: Generación de texto de alta calidad, RAG avanzado
+# Rendimiento: Alta calidad de respuestas, buen razonamiento, velocidad media
+
+DEFAULT_GROQ_LLM_MODEL = "llama3-70b-8192"  # Modelo LLM predeterminado para Groq
+# Este es un alias del modelo anterior para compatibilidad con código existente
 
 # Nuevos modelos de Groq con características avanzadas
-GROQ_EXTENDED_CONTEXT_MODEL = "llama-3.1-8b-instant-128k" # Modelo con ventana de contexto de 128K
-GROQ_FAST_MODEL = "llama-3.1-8b-instant" # Modelo optimizado para baja latencia
+GROQ_EXTENDED_CONTEXT_MODEL = "llama-3.1-8b-instant-128k" 
+# Especificaciones: 8B parámetros, ventana de contexto extendida de 128K tokens
+# Uso recomendado: Análisis de documentos largos, summarización de muchos documentos
+# Rendimiento: Procesamiento rápido, especialmente útil para grandes volúmenes de texto
+# Beneficio principal: Puede manejar hasta 128,000 tokens en una sola consulta
 
-# Modelos Llama 4 en Groq
-GROQ_MAVERICK_MODEL = "llama-4-maverick-17bx128e" # Llama 4 Maverick (17Bx128E) para alto rendimiento
-GROQ_SCOUT_MODEL = "llama-4-scout-17bx16e" # Llama 4 Scout (17Bx16E) balanceado para uso general
+GROQ_FAST_MODEL = "llama-3.1-8b-instant" 
+# Especificaciones: 8B parámetros, ventana estándar
+# Uso recomendado: Consultas que requieren baja latencia, chatbots rápidos
+# Rendimiento: Muy baja latencia (~200ms para respuestas iniciales)
+# Beneficio principal: Optimizado para velocidad sin sacrificar demasiada calidad
+
+# Modelos Llama 4 en Groq (última generación)
+GROQ_MAVERICK_MODEL = "llama-4-maverick-17bx128e" 
+# Especificaciones: Arquitectura 17B con 128 expertos (Mixture of Experts)
+# Uso recomendado: Casos de uso empresariales que requieren alta precisión y razonamiento
+# Rendimiento: Calidad excepcional, capacidad de razonamiento avanzada, contexto de 128K tokens
+# Beneficio principal: Combina alto rendimiento con eficiencia de recursos
+
+GROQ_SCOUT_MODEL = "llama-4-scout-17bx16e" 
+# Especificaciones: Arquitectura 17B con 16 expertos (Mixture of Experts)
+# Uso recomendado: Equilibrio entre rendimiento, calidad y costo
+# Rendimiento: Buena calidad, razonamiento sólido con latencia media
+# Beneficio principal: Opción balanceada para uso general
+
+# Categorización de modelos por tier de tenant
+# Esta estructura facilita la selección de modelos según el tier del tenant
+GROQ_MODELS_BY_TIER = {
+    # Enterprise: acceso a todos los modelos, incluyendo Llama 4
+    "enterprise": {
+        "default": GROQ_MAVERICK_MODEL,  # Máxima calidad por defecto
+        "fast": GROQ_FAST_MODEL,         # Opción rápida
+        "extended_context": GROQ_MAVERICK_MODEL,  # Mejor contexto extendido
+        "balanced": GROQ_SCOUT_MODEL,    # Balance calidad/velocidad
+    },
+    
+    # Business: acceso a modelos de contexto extendido y Llama 4 Scout
+    "business": {
+        "default": GROQ_SCOUT_MODEL,      # Opción balanceada por defecto
+        "fast": GROQ_FAST_MODEL,          # Opción rápida
+        "extended_context": GROQ_EXTENDED_CONTEXT_MODEL,  # Contexto extendido
+        "balanced": GROQ_SCOUT_MODEL,     # Balance calidad/velocidad
+    },
+    
+    # Premium: acceso a modelos Llama 3.1 y 3.3 
+    "premium": {
+        "default": "llama-3.3-70b-versatile",  # Alta calidad para premium
+        "fast": GROQ_FAST_MODEL,               # Opción rápida
+        "extended_context": GROQ_EXTENDED_CONTEXT_MODEL,  # Contexto extendido
+        "balanced": "llama-3.1-8b-instant",     # Balance calidad/velocidad
+    },
+    
+    # Standard: acceso a modelos 8B 
+    "standard": {
+        "default": "llama3-8b-8192",      # Modelo estándar
+        "fast": GROQ_FAST_MODEL,          # Opción rápida
+        "extended_context": "llama3-8b-8192",  # Sin contexto extendido real
+        "balanced": "llama3-8b-8192",     # Modelo estándar
+    },
+    
+    # Free: acceso limitado
+    "free": {
+        "default": "llama3-8b-8192",      # Modelo básico
+        "fast": "llama3-8b-8192",         # Sin opción rápida real
+        "extended_context": "llama3-8b-8192",  # Sin contexto extendido real
+        "balanced": "llama3-8b-8192",     # Modelo básico
+    }
+}
 
 # La configuración de proveedores ahora se determina por variables en .env
 # Nota: Solo se soporta Groq para LLMs y OpenAI para embeddings

@@ -38,7 +38,7 @@ settings = get_settings()
     summary="Consultar colección",
     description="Realiza una consulta RAG sobre una colección específica"
 )
-@with_context(tenant=True, collection=True)
+@with_context(tenant=True, collection=True, agent=True, conversation=True)
 @handle_errors(error_type="simple", log_traceback=False, error_map={
     QueryProcessingError: ("QUERY_PROCESSING_ERROR", 500)
 })
@@ -121,8 +121,8 @@ async def query_collection(
             }
         )
         
-        # Construir respuesta
-        return QueryResponse(
+        # Construir respuesta estandarizada
+        response_data = QueryResponse(
             query=request.query,
             response=result["response"],
             sources=result["sources"],
@@ -135,6 +135,21 @@ async def query_collection(
                 "tokens": result.get("tokens_total", 0)
             }
         )
+        
+        # Devolver en formato estándar {success, data, metadata}
+        return {
+            "success": True,
+            "data": response_data.dict(),
+            "metadata": {
+                "processing_time": processing_time,
+                "model": result["model"],
+                "tokens": {
+                    "input": result.get("tokens_in", 0),
+                    "output": result.get("tokens_out", 0),
+                    "total": result.get("tokens_total", 0)
+                }
+            }
+        }
         
     except Exception as e:
         logger.error(f"Error procesando consulta: {str(e)}")
@@ -155,7 +170,7 @@ async def query_collection(
     summary="Búsqueda semántica",
     description="Realiza una búsqueda semántica sin generación de respuesta"
 )
-@with_context(tenant=True, collection=True)
+@with_context(tenant=True, collection=True, agent=True, conversation=True)
 @handle_errors(error_type="simple", log_traceback=False, error_map={
     QueryProcessingError: ("QUERY_PROCESSING_ERROR", 500)
 })
@@ -236,8 +251,8 @@ async def query_search(
             }
         )
         
-        # Construir respuesta
-        return QueryResponse(
+        # Construir respuesta estandarizada
+        response_data = QueryResponse(
             query=request.query,
             response=result["response"],
             sources=result["sources"],
@@ -250,6 +265,21 @@ async def query_search(
                 "tokens": result.get("tokens_total", 0)
             }
         )
+        
+        # Devolver en formato estándar {success, data, metadata}
+        return {
+            "success": True,
+            "data": response_data.dict(),
+            "metadata": {
+                "processing_time": processing_time,
+                "model": result["model"],
+                "tokens": {
+                    "input": result.get("tokens_in", 0),
+                    "output": result.get("tokens_out", 0),
+                    "total": result.get("tokens_total", 0)
+                }
+            }
+        }
         
     except Exception as e:
         logger.error(f"Error procesando consulta: {str(e)}")
@@ -264,39 +294,5 @@ async def query_search(
             }
         )
 
-@router.post(
-    "/query",
-    response_model=None,
-    summary="Consulta general",
-    description="Realiza una consulta RAG (para compatibilidad con versiones anteriores)",
-    deprecated=True
-)
-@with_context(tenant=True, collection=True)
-@handle_errors(error_type="simple", log_traceback=False, error_map={
-    QueryProcessingError: ("QUERY_PROCESSING_ERROR", 500)
-})
-async def legacy_query_endpoint(
-    request: QueryRequest,
-    tenant_info: TenantInfo = Depends(verify_tenant),
-    ctx: Context = None
-) -> QueryResponse:
-    """
-    Endpoint de compatibilidad para consultas RAG.
-    Redirige a /collections/{collection_id}/query.
-    
-    Args:
-        request: Solicitud de consulta
-        tenant_info: Información del tenant
-        
-    Returns:
-        QueryResponse: Respuesta RAG
-    """
-    if not request.collection_id:
-        raise ErrorCode(
-            message="Se requiere collection_id para realizar consultas",
-            error_code="MISSING_COLLECTION_ID",
-            status_code=400
-        )
-    
-    # Redirigir a la ruta RESTful moderna
-    return await query_collection(str(request.collection_id), request, tenant_info, ctx)
+# Endpoint legacy eliminado para mejorar la consistencia en la API
+# El endpoint recomendado es /collections/{collection_id}/query

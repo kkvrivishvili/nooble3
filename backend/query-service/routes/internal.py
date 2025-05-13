@@ -57,10 +57,12 @@ class InternalSearchRequest(BaseModel):
     description="Endpoint para uso exclusivo del Agent Service"
 )
 @with_context(tenant=True, collection=True, agent=True, conversation=True)
-@handle_errors(error_type="simple", log_traceback=False, error_map={
+@handle_errors(error_type="service", log_traceback=True, error_map={
     QueryProcessingError: ("QUERY_PROCESSING_ERROR", 500),
     RetrievalError: ("RETRIEVAL_ERROR", 500),
-    CollectionNotFoundError: ("COLLECTION_NOT_FOUND", 404)
+    CollectionNotFoundError: ("COLLECTION_NOT_FOUND", 404),
+    GenerationError: ("GENERATION_ERROR", 500),
+    InvalidQueryParamsError: ("INVALID_QUERY_PARAMS", 400)
 })
 async def internal_query(
     request: InternalQueryRequest = Body(...),
@@ -244,9 +246,12 @@ async def internal_query(
     description="Endpoint para búsqueda rápida entre documentos, para uso exclusivo de otros servicios"
 )
 @with_context(tenant=True, collection=True, agent=True, conversation=True)
-@handle_errors(error_type="simple", log_traceback=False, error_map={
+@handle_errors(error_type="service", log_traceback=True, error_map={
     RetrievalError: ("RETRIEVAL_ERROR", 500),
-    CollectionNotFoundError: ("COLLECTION_NOT_FOUND", 404)
+    CollectionNotFoundError: ("COLLECTION_NOT_FOUND", 404),
+    InvalidQueryParamsError: ("INVALID_QUERY_PARAMS", 400),
+    EmbeddingGenerationError: ("EMBEDDING_GENERATION_ERROR", 500),
+    EmbeddingModelError: ("EMBEDDING_MODEL_ERROR", 500)
 })
 async def internal_search(
     request: InternalSearchRequest = Body(...),
