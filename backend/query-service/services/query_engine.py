@@ -150,10 +150,12 @@ async def process_query_with_sources(
                     logger.debug(f"No se pudieron extraer tokens del callback: {str(callback_err)}")
                     
             # Fallback: si no tenemos datos de la API, usar nuestro contador local
+            token_source = "api"  # Por defecto asumimos que proviene de la API
             if tokens_total == 0:
                 tokens_in = count_tokens(query, model_name=model_used)
                 tokens_out = count_tokens(response, model_name=model_used)
                 tokens_total = tokens_in + tokens_out
+                token_source = "estimated"  # Cambiamos a estimado si usamos nuestro contador
                 logger.debug(f"Usando conteo de tokens estimado: in={tokens_in}, out={tokens_out}, total={tokens_total}")
             
             # Generación de clave de idempotencia para evitar doble conteo
@@ -180,6 +182,7 @@ async def process_query_with_sources(
                     "operation_id": operation_id,
                     "tokens_in": tokens_in,
                     "tokens_out": tokens_out,
+                    "token_source": token_source,  # Indicador del origen de los datos de tokens
                     "elapsed_time": time.time() - start_time
                 }
             )
