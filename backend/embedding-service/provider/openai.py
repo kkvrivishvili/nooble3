@@ -4,6 +4,16 @@ Implementación del proveedor de embeddings OpenAI.
 Este módulo proporciona una implementación completa y autónoma del 
 proveedor de embeddings OpenAI, siguiendo los estándares del proyecto
 para manejo de errores, caché y contexto.
+
+Modelos soportados:
+- text-embedding-3-small: 1536 dimensiones, ideal para casos de uso general.
+  Recomendado como opción predeterminada por su balance costo/rendimiento.
+- text-embedding-3-large: 3072 dimensiones, mayor precisión para tareas complejas.
+  Recomendado para aplicaciones donde se necesita máxima precisión.
+
+Referencias:
+- https://platform.openai.com/docs/guides/embeddings
+- https://openai.com/blog/new-embedding-models-and-api-updates
 """
 
 import logging
@@ -30,23 +40,26 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 # Constantes para modelos de OpenAI
+# Referencia actualizada: https://platform.openai.com/docs/models/embeddings
 OPENAI_EMBEDDING_MODELS = {
     "text-embedding-3-small": {
         "dimensions": 1536,
-        "max_tokens": 8191,
-        "tiers": ["free", "standard", "pro", "business", "enterprise"]
+        "max_tokens": 8191,        # Límite de tokens por solicitud
+        "max_batch_size": 2048,     # Máximo número de textos por lote
+        "input_cost": 0.00002,      # Costo por 1K tokens de entrada ($0.00002/1K tokens)
+        "tiers": ["free", "standard", "pro", "business", "enterprise"],
+        "description": "Modelo de embeddings para uso general con excelente balance rendimiento/costo"
     },
     "text-embedding-3-large": {
         "dimensions": 3072,
-        "max_tokens": 8191,
-        "tiers": ["pro", "business", "enterprise"]
-    },
-    "text-embedding-ada-002": {  # Legacy model
-        "dimensions": 1536,
-        "max_tokens": 8191,
-        "tiers": ["standard", "premium", "free"],
-        "deprecated": True
+        "max_tokens": 8191,        # Límite de tokens por solicitud
+        "max_batch_size": 2048,     # Máximo número de textos por lote
+        "input_cost": 0.00013,      # Costo por 1K tokens de entrada ($0.00013/1K tokens)
+        "tiers": ["pro", "business", "enterprise"],
+        "description": "Modelo de alta precisión para tareas complejas que requieren máxima fidelidad"
     }
+    # El modelo text-embedding-ada-002 ha sido eliminado de la implementación activa
+    # pero se mantiene compatibilidad con dimensiones en constants.py
 }
 
 # Errores específicos para OpenAI que siguen el estándar del proyecto
@@ -132,25 +145,29 @@ async def get_openai_embedding(
     """
     Genera un embedding utilizando la API de OpenAI.
     
+    Implementación optimizada para los modelos text-embedding-3-small y text-embedding-3-large.
+    Soporta context tracking, caché y manejo estandarizado de errores según los estándares del proyecto.
+    
     Args:
         text: Texto para generar el embedding
-        model: Modelo a utilizar
-        api_key: API key para OpenAI (opcional)
-        tenant_id: ID del tenant
-        collection_id: ID de la colección (para cache)
-        document_id: ID del documento (para cache)
-        chunk_id: ID del chunk (para cache)
-        ctx: Contexto proporcionado por el decorador
+        model: Modelo a utilizar (text-embedding-3-small o text-embedding-3-large)
+        api_key: API key para OpenAI (opcional, si no se proporciona usa la configuración global)
+        tenant_id: ID del tenant (para contexto multitenancy y tracking)
+        collection_id: ID de la colección (para caché y tracking)
+        document_id: ID del documento (para caché y tracking)
+        chunk_id: ID del chunk (para caché y tracking)
+        ctx: Contexto proporcionado por el decorador with_context
         
     Returns:
         Tuple[List[float], Dict[str, Any]]: 
-            - Vector de embedding
-            - Metadatos del proceso
+            - Vector de embedding (1536 dimensiones para small, 3072 para large)
+            - Metadatos del proceso (modelo, tokens, latencia, origen)
             
     Raises:
-        OpenAIAuthenticationError: Si hay un error de autenticación
-        OpenAIRateLimitError: Si se excede el límite de tasa
-        OpenAIEmbeddingError: Si hay un error general con OpenAI
+        OpenAIAuthenticationError: Error de autenticación (API key inválida o faltante)
+        OpenAIRateLimitError: Se excedió el límite de tasa de la API
+        OpenAIModelNotFoundError: El modelo solicitado no existe o no está disponible
+        OpenAIEmbeddingError: Otros errores en la generación de embeddings (red, formato, etc.)
     """
     start_time = time.time()
     
@@ -187,16 +204,27 @@ async def get_openai_embedding(
     
     try:
         # Preparar request para la API de OpenAI
+        # Cabeceras estándar para la API de OpenAI
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key_to_use}"
+            "Authorization": f"Bearer {api_key_to_use}",
+            "OpenAI-Organization": settings.openai_org_id if hasattr(settings, 'openai_org_id') else None,
+            "User-Agent": "Nooble/EmbeddingService"
         }
+        # Eliminar valores None de las cabeceras
+        headers = {k: v for k, v in headers.items() if v is not None}
         
+        # Configuración optimizada para modelos text-embedding-3-*
+        # Referencia: https://platform.openai.com/docs/api-reference/embeddings/create
         payload = {
             "input": text,
             "model": model,
-            "encoding_format": "float"
+            "encoding_format": "float",   # Formato estándar para vectores (alternativa: 'base64')
+            "dimensions": OPENAI_EMBEDDING_MODELS.get(model, {}).get("dimensions", None)  # Opcional: usar las dimensiones del modelo
         }
+        
+        # Eliminar parámetros None del payload
+        payload = {k: v for k, v in payload.items() if v is not None}
         
         # Generar un ID idempotencia para evitar doble conteo
         import hashlib
@@ -356,25 +384,35 @@ class OpenAIEmbeddingProvider:
     @with_context(tenant=True)
     async def embed_query(self, text: str, tenant_id: Optional[str] = None, ctx: Context = None) -> List[float]:
         """
-        Genera un embedding para una consulta.
+        Genera un embedding para una consulta usando el modelo OpenAI configurado.
+        
+        Implementa el patrón Cache-Aside unificado siguiendo los estándares del proyecto:
+        1. Usa generate_resource_id_hash para generar claves consistentes
+        2. Implementa get_with_cache_aside para el patrón completo
+        3. Utiliza los TTLs estandarizados (ttl_extended = 24 horas para embeddings)
+        4. Integra con el sistema de tracking mediante idempotency_key
         
         Args:
             text: Texto para generar el embedding
-            tenant_id: ID del tenant
-            ctx: Contexto proporcionado por el decorador
+            tenant_id: ID del tenant (puede obtenerse del contexto si es None)
+            ctx: Contexto proporcionado por el decorador with_context
             
         Returns:
-            List[float]: Vector de embedding
+            List[float]: Vector de embedding (1536 o 3072 dimensiones según el modelo)
         """
         # Resolver tenant_id desde el contexto si no se proporciona
         if not tenant_id and ctx:
             tenant_id = ctx.get_tenant_id(validate=False)
         
-        # Generar clave de caché para el embedding
+        # Si el texto está vacío, devolver vector de ceros inmediatamente (optimización)
+        if not text or text.strip() == "":
+            return [0.0] * self.dimensions
+        
+        # Generar clave de caché para el embedding siguiendo el estándar del proyecto
         from common.cache import generate_resource_id_hash
         cache_key = generate_resource_id_hash(text)
         
-        # Usar patrón Cache-Aside centralizado
+        # Función de generación para el patrón Cache-Aside
         async def fetch_embedding():
             embedding, _ = await get_openai_embedding(
                 text=text,
@@ -385,15 +423,17 @@ class OpenAIEmbeddingProvider:
             )
             return embedding
         
-        # Obtener el TTL para embeddings
-        ttl = CacheManager.ttl_extended  # 24 horas para embeddings
+        # Usar TTL estandarizado para embeddings (24 horas)
+        # Referencia: ver CacheManager.ttl_extended en las memorias del proyecto
+        ttl = CacheManager.ttl_extended
         
-        # Usar el patrón Cache-Aside centralizado
+        # Implementar el patrón Cache-Aside siguiendo el estándar unificado
+        # Referencia: ver la memoria "Guía de Implementación de Caché Unificada"
         embedding, metrics = await get_with_cache_aside(
             data_type="embedding",
             resource_id=cache_key,
             tenant_id=tenant_id,
-            fetch_from_db_func=None,  # Sin almacenamiento en BD
+            fetch_from_db_func=None,  # No se requiere persistencia en BD para embeddings
             generate_func=fetch_embedding,
             ttl=ttl
         )
@@ -421,18 +461,29 @@ class OpenAIEmbeddingProvider:
         ctx: Context = None
     ) -> List[List[float]]:
         """
-        Genera embeddings para múltiples documentos.
+        Genera embeddings para múltiples documentos utilizando el modelo OpenAI configurado.
+        
+        Implementa el patrón Cache-Aside unificado para cada documento individual, permitiendo:
+        1. Caché eficiente por documento con keys basadas en el hash del contenido
+        2. Tracking de uso con metadatos enriquecidos por colección/documento/chunk
+        3. Manejo optimizado de casos especiales (textos vacíos, lotes grandes)
+        4. Compatibilidad con los estándares multitenancy del sistema
         
         Args:
             texts: Lista de textos para generar embeddings
-            tenant_id: ID del tenant
-            collection_id: ID de la colección (para cache)
-            document_id: ID del documento (para cache)
-            chunk_ids: Lista de IDs de chunks (para cache)
-            ctx: Contexto proporcionado por el decorador
+            tenant_id: ID del tenant (puede obtenerse del contexto si es None)
+            collection_id: ID de la colección para tracking y metadatos de caché
+            document_id: ID del documento para tracking y metadatos de caché
+            chunk_ids: Lista de IDs de chunks correspondientes a cada texto
+            ctx: Contexto proporcionado por el decorador with_context
             
         Returns:
-            List[List[float]]: Lista de vectores de embedding
+            List[List[float]]: Lista de vectores de embedding (1536 o 3072 dimensiones según modelo)
+            
+        Note:
+            Este método procesa documentos de forma individual para maximizar los hits de caché.
+            Para operaciones realmente masivas con texto nuevo, considere usar la API de batch
+            directamente para optimizar costos y rendimiento.
         """
         # Resolver tenant_id desde el contexto si no se proporciona
         if not tenant_id and ctx:
@@ -446,42 +497,63 @@ class OpenAIEmbeddingProvider:
         if all(not text.strip() for text in texts):
             return [[0.0] * self.dimensions for _ in range(len(texts))]
         
-        # Procesar cada texto individualmente para aprovechar la caché
-        embeddings = []
-        for i, text in enumerate(texts):
-            # Determinar chunk_id para este texto si está disponible
-            chunk_id = chunk_ids[i] if chunk_ids and i < len(chunk_ids) else None
+        # Optimización: primero dividir entre textos vacíos y no vacíos para procesamiento eficiente
+        empty_indices = [i for i, text in enumerate(texts) if not text.strip()]
+        non_empty_indices = [i for i, text in enumerate(texts) if text.strip()]
+        
+        # Inicializar lista para todos los embeddings
+        embeddings = [None] * len(texts)
+        
+        # Asignar vectores de ceros para textos vacíos (optimización inmediata sin caché)
+        for i in empty_indices:
+            embeddings[i] = [0.0] * self.dimensions
+        
+        # Procesar los textos no vacíos con caché
+        if non_empty_indices:
+            # Usar semáforo para limitar procesamiento paralelo y evitar saturación
+            import asyncio
+            semaphore = asyncio.Semaphore(20)  # Máximo de 20 peticiones simultáneas para evitar sobrecarga
             
-            # Generar clave de caché para el embedding
-            cache_key = generate_resource_id_hash(text)
+            async def process_text(index):
+                # Obtener el texto y su chunk_id asociado si existe
+                text = texts[index]
+                chunk_id = chunk_ids[index] if chunk_ids and index < len(chunk_ids) else None
+                
+                # Control de concurrencia
+                async with semaphore:
+                    # Generar clave de caché según el estándar del proyecto
+                    cache_key = generate_resource_id_hash(text)
+                    
+                    # Definir función para generación bajo demanda
+                    async def fetch_embedding():
+                        embedding, _ = await get_openai_embedding(
+                            text=text,
+                            model=self.model,
+                            api_key=self.api_key,
+                            tenant_id=tenant_id,
+                            collection_id=collection_id,
+                            document_id=document_id,
+                            chunk_id=chunk_id,
+                            ctx=ctx
+                        )
+                        return embedding
+                    
+                    # Usar el patrón Cache-Aside unificado como se define en las memorias del proyecto
+                    embedding, _ = await get_with_cache_aside(
+                        data_type="embedding",
+                        resource_id=cache_key,
+                        tenant_id=tenant_id,
+                        fetch_from_db_func=None,  # No se requiere persistencia en DB
+                        generate_func=fetch_embedding,
+                        ttl=CacheManager.ttl_extended  # 24 horas para embeddings según estándar
+                    )
+                    
+                    # Guardar el embedding en su posición original
+                    embeddings[index] = embedding
             
-            # Definir función para generar el embedding si no está en caché
-            async def fetch_embedding():
-                embedding, _ = await get_openai_embedding(
-                    text=text,
-                    model=self.model,
-                    api_key=self.api_key,
-                    tenant_id=tenant_id,
-                    collection_id=collection_id,
-                    document_id=document_id,
-                    chunk_id=chunk_id,
-                    ctx=ctx
-                )
-                return embedding
-            
-            # Obtener el TTL para embeddings
-            ttl = CacheManager.ttl_extended  # 24 horas para embeddings
-            
-            # Usar el patrón Cache-Aside centralizado
-            embedding, metrics = await get_with_cache_aside(
-                data_type="embedding",
-                resource_id=cache_key,
-                tenant_id=tenant_id,
-                fetch_from_db_func=None,  # Sin almacenamiento en BD
-                generate_func=fetch_embedding,
-                ttl=ttl
-            )
-            
-            embeddings.append(embedding)
+            # Crear y ejecutar tareas para procesar todos los embeddings en paralelo
+            # pero controlando la concurrencia con el semáforo
+            tasks = [process_text(i) for i in non_empty_indices]
+            await asyncio.gather(*tasks)
         
         return embeddings

@@ -8,14 +8,14 @@ que anteriormente estaban hardcodeados en diferentes partes del código.
 from typing import Dict, List, Any
 
 # Dimensiones de embeddings por modelo
+# Referencia: https://platform.openai.com/docs/guides/embeddings
 EMBEDDING_DIMENSIONS: Dict[str, int] = {
-    "text-embedding-ada-002": 1536,  # OBSOLETO: Modelo legacy de OpenAI, marcado para depreciación
-    "text-embedding-3-small": 1536,
-    "text-embedding-3-large": 3072,
-    "ada": 1024,
-    "llama2": 4096,
-    "mistral": 4096,
-    "nomic-embed-text": 768  # Dimensión del modelo nomic-embed-text
+    # Modelos actuales de OpenAI
+    "text-embedding-3-small": 1536,  # Modelo recomendado para uso general
+    "text-embedding-3-large": 3072,  # Modelo de alta precisión
+    
+    # Modelos legacy (mantenidos para compatibilidad)
+    "text-embedding-ada-002": 1536   # Obsoleto, reemplazado por text-embedding-3-small
 }
 
 # Valor predeterminado para dimensiones de embeddings no conocidas

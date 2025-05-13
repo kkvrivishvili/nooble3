@@ -88,7 +88,7 @@ async def generate_embeddings(
     Genera embeddings vectoriales para una lista de textos.
     
     Este endpoint transforma texto en vectores densos que capturan el significado semántico,
-    utilizando modelos de embeddings como OpenAI o alternativas locales como Ollama.
+    utilizando exclusivamente modelos de embeddings de OpenAI.
     """
     start_time = time.time()
     tenant_id = tenant_info.tenant_id

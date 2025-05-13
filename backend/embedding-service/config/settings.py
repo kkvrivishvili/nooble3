@@ -37,7 +37,7 @@ class EmbeddingServiceSettings(BaseSettings):
         description="Umbrales para determinar la eficiencia de caché"
     )
     
-    # Ollama ha sido eliminado como proveedor soportado
+    # Configuración de timeouts y límites
     
     timeouts: Dict[str, float] = Field(
         default_factory=lambda: TIMEOUTS,

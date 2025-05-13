@@ -130,7 +130,7 @@ async def service_status(ctx: Context = None) -> ServiceStatusResponse:
     - Tiempo de actividad del servicio
     - Estado de componentes críticos (cache, DB, provider)
     - Métricas de rendimiento (latencia, eficiencia de caché, dimensiones)
-    - Estado del proveedor de embeddings (OpenAI u Ollama)
+    - Estado del proveedor de embeddings (OpenAI)
     - Rate limits y cuotas de API
     - Estadísticas de uso de modelos
     
@@ -279,9 +279,7 @@ async def check_cache_efficiency() -> str:
         logger.warning(f"Caché con eficiencia baja: {hit_ratio:.2%}")
         return "degraded"
         
-# Función check_ollama_service ha sido eliminada - Ollama no es soportado
-
-# Función check_ollama_model ha sido eliminada - Ollama no es soportado
+# Solo se utiliza OpenAI como proveedor de embeddings - No se soportan otros proveedores
 
 def verify_embedding_quality(embedding: list) -> bool:
     """
@@ -376,9 +374,8 @@ async def check_api_rate_limits() -> str:
     Returns:
         str: Estado de los límites ("available", "degraded" o "unavailable")
     """
-    # Solo relevante para OpenAI/Groq (no para servicios locales)
-    if False:  # Ollama ha sido eliminado
-        return "available"  # Mantenemos esta estructura para futuras extensiones
+    # Solo se usa OpenAI como proveedor de embeddings
+    # Esta función solo es relevante para los límites de OpenAI API
     
     # Verificar tiempo desde última verificación (evitar muchas llamadas)
     global LAST_API_RATE_CHECK

@@ -81,14 +81,13 @@ app = FastAPI(
     
     ## Funcionalidad
     - Generación de embeddings unitarios y por lotes
-    - Soporte para múltiples modelos de embeddings (OpenAI, Ollama)
+    - Soporte para modelos de embeddings de OpenAI
     - Aislamiento multi-tenant con caché por tenant
     
     ## Dependencias
     - Redis: Para caché de embeddings
     - Supabase: Para almacenamiento de configuración
-    - Ollama (opcional): Para modelos locales de embeddings
-    - OpenAI API (opcional): Para modelos en la nube
+    - OpenAI API: Para generación de embeddings
     """,
     version=settings.service_version,
     docs_url="/docs",

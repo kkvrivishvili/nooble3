@@ -5,11 +5,11 @@
 El Servicio de Embeddings es un componente central de la arquitectura RAG de la plataforma, responsable de generar representaciones vectoriales de textos que permiten búsquedas semánticas, comparaciones de similitud y otras operaciones basadas en significado.
 
 Este servicio proporciona:
-- Generación de embeddings mediante modelos de OpenAI
-- Caché multinivel optimizada
-- Validación de acceso basada en tier de tenant
-- Tracking detallado de uso y rendimiento
-- Políticas de rate limiting y degradación controlada
+- Generación de embeddings mediante modelos modernos de OpenAI (text-embedding-3-small y text-embedding-3-large)
+- Implementación del patrón Cache-Aside unificado siguiendo los estándares del proyecto
+- Validación de acceso basada en tier de tenant con soporte para multitenancy
+- Tracking detallado de uso y rendimiento con metadatos enriquecidos
+- Políticas optimizadas de rate limiting y manejo de errores centralizado
 
 ## Arquitectura
 
@@ -36,16 +36,25 @@ Este servicio proporciona:
 ### Flujo de Datos
 
 ```
-Cliente → API → CachedEmbeddingProvider → LlamaIndexUtils → Modelo (OpenAI) → Cache → Cliente
+Cliente → API → CachedEmbeddingProvider → OpenAIEmbeddingProvider → API OpenAI → Cache → Cliente
 ```
 
 1. Cliente envía texto(s) para embedding
-2. API valida la solicitud y la pasa al servicio
-3. CachedEmbeddingProvider verifica acceso y políticas
-4. Se busca en caché usando el patrón Cache-Aside centralizado
-5. Si no existe, se consulta en base de datos
-6. Si no existe, se genera con el modelo apropiado
-7. Se almacena en caché y se devuelve al cliente
+2. API valida la solicitud y permisos (tier del tenant)
+3. CachedEmbeddingProvider determina modelo apropiado según tier
+4. Se busca en caché usando el patrón Cache-Aside unificado
+5. Si no hay hit en caché, OpenAIEmbeddingProvider genera embedding
+6. Se aplica tracking de tokens y costos a nivel tenant
+7. Se almacena en caché con TTL estandarizado y se devuelve al cliente
+
+### Modelos Soportados
+
+| Modelo | Dimensiones | Tokens Máximos | Tiers Soportados | Uso Recomendado |
+|--------|------------|----------------|-----------------|------------------|
+| text-embedding-3-small | 1536 | 8191 | free, standard, pro, business, enterprise | Uso general, balance rendimiento/costo |
+| text-embedding-3-large | 3072 | 8191 | pro, business, enterprise | Alta precisión, tareas complejas |
+
+Los modelos de OpenAI proporcionan vectores de alta calidad para búsqueda semántica, clustering y clasificación de texto. La versión "small" ofrece un excelente balance entre costo y rendimiento, mientras que "large" proporciona máxima precisión para casos que requieren mayor fidelidad.
 
 ## Endpoints Principales
 
@@ -67,12 +76,18 @@ POST /api/embedding/generate
   "message": "Embedding generado correctamente",
   "data": {
     "embedding": [0.123, 0.456, ...],
-    "model": "text-embedding-ada-002",
+    "model": "text-embedding-3-small",
     "dimensions": 1536
   },
   "metadata": {
-    "source": "cache|db|generation",
-    "latency_ms": 123
+    "source": "cache|generation",
+    "latency_ms": 123,
+    "token_usage": {
+      "prompt_tokens": 8,
+      "total_tokens": 8
+    },
+    "tenant_id": "t123",
+    "collection_id": "col456"
   }
 }
 ```
@@ -96,17 +111,24 @@ POST /api/embedding/batch
   "message": "Embeddings generados correctamente",
   "data": {
     "embeddings": [[0.123, ...], [0.456, ...], ...],
-    "model": "text-embedding-ada-002",
-    "dimensions": 1536
+    "model": "text-embedding-3-small",
+    "dimensions": 1536,
+    "cached_count": 7,
+    "processed_count": 10
   },
   "metadata": {
     "metrics": {
       "total_texts": 10,
       "cached": 7,
-      "db_retrieved": 2,
-      "generated": 1,
-      "total_time_ms": 156
-    }
+      "generated": 3,
+      "total_time_ms": 156,
+      "token_usage": {
+        "prompt_tokens": 124,
+        "total_tokens": 124
+      }
+    },
+    "provider": "openai",
+    "tenant_id": "t123"
   }
 }
 ```
@@ -120,13 +142,12 @@ GET /status
 
 ## Modelos Soportados
 
-El servicio soporta diferentes modelos según el tier del tenant:
+El servicio soporta los siguientes modelos de OpenAI según el tier del tenant:
 
-| Modelo | Dimensiones | Tiers Permitidos | Notas |
-|--------|-------------|------------------|-------|
-| text-embedding-ada-002 | 1536 | premium, standard, free | OpenAI (legacy) |
-| text-embedding-3-small | 1536 | standard, free | OpenAI |
-| text-embedding-3-large | 3072 | premium, business, enterprise | OpenAI |
+| Modelo | Dimensiones | Tiers Permitidos | Rendimiento |
+|--------|-------------|------------------|-------------|
+| text-embedding-3-small | 1536 | standard, free | Buena calidad para casos de uso general |
+| text-embedding-3-large | 3072 | premium, business, enterprise | Calidad superior para búsquedas semánticas y tareas complejas |
 
 ## Patrón Cache-Aside Optimizado
 
@@ -185,23 +206,25 @@ await track_token_usage(
 )
 ```
 
-## Tolerancia a Fallos y Degradación
+## Tolerancia a Fallos y Manejo de Errores
 
-El servicio implementa mecanismos de degradación controlada:
+El servicio implementa mecanismos robustos para garantizar disponibilidad y resiliencia:
 
-1. **Fallback de modelos**
-   - Si un modelo premium no está disponible, cae a modelos de menor capacidad
-   - Mantiene servicio disponible con modelos alternativos
+1. **Manejo de Errores de API**
+   - Manejo específico para cada tipo de error de la API de OpenAI
+   - Clasificación de errores por tipo: autenticación, límites de tasa, indisponibilidad, etc.
+   - Respuestas claras al cliente sobre la naturaleza del error
 
-2. **Timeouts adaptables**
+2. **Timeouts y Reintentos**
    - Timeout principal para embeddings: 60s
    - Timeouts reducidos para health checks: 5s
-   - Backoff exponencial con jitter para reintentos
+   - Estrategia de reintentos con backoff exponencial y jitter
+   - Máximo de reintentos configurables según política de servicio
 
-3. **Circuit breaker**
-   - Detecta cuando un proveedor está degradado o indisponible
-   - Reduce presión en sistemas ya sobrecargados
-   - Permite recuperación gradual
+3. **Monitoreo de Estado**
+   - Health checks periódicos para detectar problemas con la API de OpenAI
+   - Alertas automáticas al detectar degradación
+   - Métricas detalladas de latencia, uso de tokens y tasa de éxito
 
 ## Políticas de Seguridad
 
@@ -219,49 +242,72 @@ El servicio implementa mecanismos de degradación controlada:
 
 ## Métricas y Monitoreo
 
-El servicio registra métricas detalladas:
+El servicio registra métricas detalladas para monitoreo y optimización:
 
-- **Latencia** - Tiempo de generación de embeddings
-- **Eficiencia de caché** - Hit rate, miss rate
-- **Uso de API** - Tokens consumidos, solicitudes realizadas
-- **Degradación** - Downgrade de modelos, reintentos
-- **Tasa de errores** - Por tipo y causa
+- **Latencia** - Tiempo de generación de embeddings, desglosado por fases (red, procesamiento, etc.)
+- **Eficiencia de caché** - Hit rate, miss rate, tiempo de respuesta de caché
+- **Uso de API de OpenAI** - Tokens consumidos por tenant/colección, solicitudes exitosas/fallidas
+- **Reintentos** - Patrones de reintentos, backoff, y recuperación exitosa
+- **Tasa de errores** - Clasificación por códigos HTTP y tipos de error de OpenAI API
+
+## Gestión de Tokens OpenAI
+
+El servicio implementa un sistema robusto de seguimiento y gestión de tokens:
+
+1. **Registro de Uso**
+   - Contabilización exacta de tokens por solicitud (prompt_tokens)
+   - Agrupación por tenant, colección y modelo
+   - Agregación diaria, semanal y mensual
+
+2. **Optimizaciones de Eficiencia**
+   - Estrategias de truncado y preparación de texto para minimizar tokens
+   - Batch processing para maximizar eficiencia de API
+   - Priorización de caché para textos frecuentes
 
 ## Configuración
 
 Principales variables de configuración en `config/settings.py`:
 
-- `default_embedding_model` - Modelo predeterminado
+- `OPENAI_API_KEY` - Clave API para OpenAI (obligatoria)
+- `OPENAI_ORGANIZATION` - ID de la organización en OpenAI (opcional)
+- `default_embedding_model` - Modelo predeterminado ("text-embedding-3-small")
 - `embedding_batch_size` - Tamaño por defecto para processing por lotes
-- `max_token_length_per_text` - Límite de tokens por texto
-- `max_batch_size` - Límite de textos en un batch
-- `use_memory_cache` - Habilitar/deshabilitar caché en memoria (rapid)
+- `max_token_length_per_text` - Límite de tokens por texto (8191 para text-embedding-3-small)
+- `max_batch_size` - Límite de textos en un batch (2048 por API de OpenAI)
+- `use_memory_cache` - Habilitar/deshabilitar caché en memoria (mejora rendimiento)
+- `openai_timeout_seconds` - Timeout para solicitudes a OpenAI (60s predeterminado)
+- `openai_max_retries` - Número máximo de reintentos para solicitudes fallidas
 - `cache_ttl` - Tiempo de vida en caché para embeddings
 
 ## Buenas Prácticas
 
-1. **Uso del servicio**
-   - Preferir procesamiento por lotes sobre llamadas individuales
-   - Proporcionar collection_id para mejorar especificidad de caché
-   - Proporcionar chunk_id para tracking específico
+1. **Uso Óptimo del Servicio**
+   - Utilizar procesamiento por lotes (batch) para maximizar eficiencia de API
+   - Proporcionar siempre `collection_id` para mejorar especificidad de caché
+   - Incluir metadatos como `tenant_id` y `chunk_id` para mejor tracking y auditoria
+   - Mantener textos dentro de los límites de tokens (8191 para text-embedding-3-small)
 
-2. **Desarrollo y mantenimiento**
-   - Seguir estrictamente el patrón Cache-Aside centralizado
-   - Mantener compatibilidad con el servicio de ingestión
-   - Actualizar tests para nuevos modelos
+2. **Desarrollo y Mantenimiento**
+   - Adherirse a los estándares de manejo de errores de OpenAI API
+   - Seguir estrictamente el patrón Cache-Aside centralizado para minimizar costos
+   - Utilizar las herramientas de monitoreo para detectar cambios en uso de tokens
+   - Mantener actualizadas las versiones SDK de OpenAI para acceder a mejoras
 
 ## Evolución y Roadmap
 
 Posibles mejoras futuras:
 
-1. **Soporte para nuevos modelos**
-   - Modelos multimodales (imagen-texto)
-   - Embeddings específicos por dominio
+1. **Adaptaciones a Nuevos Modelos de OpenAI**
+   - Soporte para futuros modelos de embeddings con mayores dimensiones
+   - Adaptación a modelos multimodales cuando estén disponibles en OpenAI
+   - Ajustes dinámicos de dimensionalidad según caso de uso
 
-2. **Optimizaciones de rendimiento**
-   - Procesamiento en GPU para modelos locales
-   - Compresión de embeddings para reducir uso de memoria
+2. **Optimizaciones de Rendimiento**
+   - Implementación de estrategias de paralelización para batches grandes
+   - Compresión de embeddings para reducir uso de memoria y almacenamiento
+   - Optimización de streaming para procesar textos extensos
 
-3. **Funcionalidades extendidas**
-   - API para similitud directa entre embeddings
-   - Pre-computación en background para textos frecuentes
+3. **Funcionalidades Avanzadas**
+   - API para cálculo de similitud entre embeddings directamente en el servicio
+   - Implementación de pre-computación en background para textos frecuentes
+   - Integración con servicios de análisis para retroalimentación sobre calidad de embeddings
