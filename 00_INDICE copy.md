@@ -2,7 +2,7 @@
 
 Este directorio contiene los planes detallados de implementación del sistema, organizados para minimizar refactorizaciones y completar el Agent Service antes de expandir a otros componentes.
 
-## BLOQUE 1: ARQUITECTURA CORE DEL AGENT SERVICE
+## BLOQUE 1: CORE DEL AGENT SERVICE
 
 ### 1. [Core del Agent Service](01_AGENT_SERVICE_CORE.md)
    - **Componentes implementados**:
@@ -146,7 +146,7 @@ Este directorio contiene los planes detallados de implementación del sistema, o
    - **Dependencias**: common/cache, common/context, common/config, common/utils/metrics
    - **Servicios afectados**: Todos los servicios del backend, Fronted (integración WebSocket)
 
-### 8. [Sistema Multi-Agente](06_MULTI_AGENT_SYSTEM.md)
+### 7. [Sistema Multi-Agente](06_MULTI_AGENT_SYSTEM.md)
    - **Componentes implementados**:
      - `AgentOrchestrator` para coordinación y ejecución de múltiples agentes
      - `ConsultAgentTool` para comunicación entre agentes
@@ -174,7 +174,7 @@ Este directorio contiene los planes detallados de implementación del sistema, o
    - **Dependencias**: 01_AGENT_SERVICE_CORE, common/context, common/errors
    - **Servicios afectados**: Agent Service (principal)
 
-### 9. [Integración con Frontend](05_FRONTEND_INTEGRATION.md)
+### 8. [Integración con Frontend](05_FRONTEND_INTEGRATION.md)
    - **Componentes implementados**:
      - Modelos de solicitud (ExecuteAgentRequest, ConfigureAgentRequest)
      - Modelos de respuesta (AgentExecutionResponse, AgentConfigurationResponse)
@@ -199,9 +199,7 @@ Este directorio contiene los planes detallados de implementación del sistema, o
    - **Dependencias**: 01_AGENT_SERVICE_CORE, 07_WORK_QUEUE_SYSTEM, common/context
    - **Servicios afectados**: Agent Service, Frontend (React)
 
-## BLOQUE 3: INTEGRACIONES Y EXTENSIONES
-
-### 7. [Sistema de Colas de Trabajo](07_WORK_QUEUE_SYSTEM.MD)
+### 9. [Integración de Metadatos](08_METADATA_INTEGRATION.md)
    - **Componentes implementados**:
      - Función centralizada `standardize_langchain_metadata` para compatibilidad
      - Adaptador para RAGQueryTool con soporte de metadatos estandarizados
@@ -223,9 +221,9 @@ Este directorio contiene los planes detallados de implementación del sistema, o
    - **Dependencias**: common/cache, common/langchain, common/context
    - **Servicios afectados**: Agent Service, Query Service, Embedding Service
 
-## BLOQUE 2: SERVICIOS EXTERNOS Y OPTIMIZACIONES
+## BLOQUE 2: OPTIMIZACIÓN DE SERVICIOS BASE
 
-### 4. [Refactorización del Query Service](02_QUERY_SERVICE_REFACTOR.md)
+### 6. [Sistema de Colas de Trabajo](07_WORK_QUEUE_SYSTEM.md)
    - **Componentes implementados**:
      - Infraestructura con Celery y RabbitMQ
      - WorkQueueService para gestión de tareas asíncronas

@@ -55,6 +55,7 @@ class CollectionStrategy:
             La instancia de CollectionStrategy (para encadenamiento)
         """
         # Guardar configuración básica
+        # Guardar metadatos (En Fase 8 se estandarizarán para compatibilidad entre LlamaIndex y LangChain)
         self._metadata = collection_metadata or {}
         self._use_auto_federation = use_auto_federation
         

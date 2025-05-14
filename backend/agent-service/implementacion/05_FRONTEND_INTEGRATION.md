@@ -175,10 +175,11 @@ async def execute_agent_endpoint(
             raise ValueError("No se puede usar streaming y ejecución asíncrona simultáneamente")
         
         # Ejecutar agente con parámetros del frontend
+        # Nota: Los metadatos serán estandarizados según la Fase 8 para compatibilidad con LlamaIndex
         agent_response = await agent_service.execute_agent(
             input_text=request.input,
             collection_id=request.collection_id,
-            collection_metadata=request.metadata,
+            collection_metadata=request.metadata,  # Estos metadatos se estandarizarán internamente,
             tenant_tier=tenant_tier,
             embedding_model=request.embedding_model,
             llm_model=request.llm_model,

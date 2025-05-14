@@ -113,6 +113,7 @@ class AgentOrchestrator:
             )
             
             # Procesar respuesta según tipo (síncrona o asíncrona)
+            # Nota: Los metadatos de respuesta se estandarizaron según la Fase 8 para compatibilidad
             if hasattr(response, 'is_async') and response.is_async:
                 # Caso asíncrono: Esperar completitud del trabajo usando el Work Queue Service
                 from common.queue.work_queue import WorkQueueService

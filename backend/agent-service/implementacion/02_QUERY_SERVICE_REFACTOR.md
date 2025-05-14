@@ -205,6 +205,9 @@ async def internal_query(
     metadata = request.metadata or {}
     service_origin = metadata.get("service_origin", "unknown")
     
+    # Nota: Este punto se integrará con la estandarización de metadatos de la Fase 8
+    # para garantizar compatibilidad entre LlamaIndex y LangChain
+    
     # Validar que se proporciona embedding
     if not request.query_embedding and not request.skip_embedding:
         return BaseResponse(

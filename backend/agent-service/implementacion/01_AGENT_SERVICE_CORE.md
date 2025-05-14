@@ -147,6 +147,7 @@ async def execute_agent(self,
         resource_id=agent_id,
         tenant_id=tenant_id,
         fetch_from_db_func=self._fetch_agent_config_from_db,
+        # Nota: En la Fase 8 se implementará la estandarización de metadatos para compatibilidad con LlamaIndex,
         generate_func=None  # No hay generación dinámica
     )
     
