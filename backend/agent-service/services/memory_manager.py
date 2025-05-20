@@ -6,6 +6,8 @@ Implementa el patrón Cache-Aside para optimizar el acceso a la memoria de conve
 
 import logging
 import time
+import sys
+import json
 import hashlib
 from datetime import datetime
 from typing import Dict, Any, Optional, List
@@ -14,14 +16,17 @@ from common.cache import CacheManager, get_with_cache_aside
 from common.context.decorators import with_context, Context
 from common.errors.handlers import handle_errors
 from common.config import get_settings
-from common.tracking import track_cache_metrics
-from common.cache.helpers import standardize_llama_metadata
+from common.tracking import track_cache_metrics, track_token_usage
+from common.cache.helpers import standardize_llama_metadata, serialize_for_cache
 from common.langchain import standardize_langchain_metadata
 from common.db.supabase import get_supabase_client
+from common.db.tables import get_table_name
 
 logger = logging.getLogger(__name__)
 
 class ConversationMemoryManager:
+    # Constante para identificar el tipo de dato
+    MEMORY_DATA_TYPE = "conversation_memory"
     """
     Gestor de memoria de conversación con integración Cache-Aside.
     
@@ -71,6 +76,11 @@ class ConversationMemoryManager:
             hit=metrics.get("cache_hit", False), 
             latency_ms=metrics.get("latency_ms", 0)
         )
+        
+        # Monitorear tamaño de objetos en caché
+        if memory_dict:
+            memory_size = len(str(memory_dict))  # Estimación simple del tamaño
+            await self._track_cache_size("conversation_memory", tenant_id, memory_size)
         
         # Estandarizar metadatos si existen
         if "metadata" in memory_dict:
@@ -179,18 +189,133 @@ class ConversationMemoryManager:
             latency_ms=latency_ms
         )
         
+        # Monitorear tamaño de objetos en caché
+        memory_size = len(str(memory_dict))  # Estimación simple del tamaño
+        await self._track_cache_size("conversation_memory", tenant_id, memory_size)
+        
         # Persistir en DB si es necesario (por ejemplo, cada N mensajes)
         memory_config = getattr(self.settings, "MEMORY_CONFIG", {})
         message_count = memory_dict["metadata"]["message_count"]
         
         persist_frequency = memory_config.get("PERSIST_FREQUENCY", 5)  # Valor por defecto: cada 5 mensajes
         if message_count % persist_frequency == 0:
-            await self._persist_memory_to_db(tenant_id, conversation_id, memory_dict)
+            await self._persist_memory_to_db(tenant_id, conversation_id, memory_dict, ctx)
     
+    async def _track_cache_size(self, data_type: str, tenant_id: str, size_bytes: int):
+        """Monitorea el tamaño de objetos en caché y genera alertas si es necesario.
+        
+        Args:
+            data_type: Tipo de datos
+            tenant_id: ID del tenant
+            size_bytes: Tamaño estimado en bytes
+        """
+        try:
+            # Threshold para generar alertas (500KB)
+            size_threshold = 500 * 1024
+            
+            if size_bytes > size_threshold:
+                logger.warning(
+                    f"Large object in cache: {data_type} for tenant {tenant_id}",
+                    extra={
+                        "tenant_id": tenant_id,
+                        "data_type": data_type,
+                        "size_bytes": size_bytes,
+                        "threshold_bytes": size_threshold
+                    }
+                )
+            
+            # Registrar métrica de tamaño para análisis de rendimiento
+            await track_performance_metric(
+                metric_type="cache_object_size",
+                value=size_bytes,
+                tenant_id=tenant_id,
+                metadata={
+                    "data_type": data_type,
+                    "size_kb": round(size_bytes / 1024, 2)
+                }
+            )
+            
+            # Log para monitoreo si el tamaño supera umbrales
+            if size_bytes > 1024 * 1024:  # 1MB
+                logger.warning(
+                    f"Large cache object detected: {size_bytes/1024/1024:.2f}MB",
+                    extra={
+                        "tenant_id": tenant_id,
+                        "data_type": data_type,
+                        "size_mb": size_bytes/1024/1024
+                    }
+                )
+        except Exception as e:
+            # No interrumpir el flujo principal si falla el tracking
+            logger.error(f"Error tracking cache size: {str(e)}")
+            
+    @handle_errors(error_type="service", log_traceback=True)
+    async def _persist_memory_to_db(self, tenant_id: str, conversation_id: str, memory_dict: Dict[str, Any], ctx: Context = None):
+        """
+        Persiste la memoria en la base de datos.
+        
+        Args:
+            tenant_id: ID del tenant
+            conversation_id: ID de la conversación
+            memory_dict: Diccionario con memoria a persistir
+            ctx: Contexto opcional
+        """
+        try:
+            start_time = time.time()
+            
+            # Usar formato estandarizado para nombres de tablas
+            table_name = get_table_name("conversation_memories")
+            supabase = get_supabase_client()
+            
+            # Buscar si ya existe
+            result = await supabase.table(table_name)\
+                .select("id")\
+                .eq("tenant_id", tenant_id)\
+                .eq("conversation_id", conversation_id)\
+                .execute()
+                
+            # Preparar datos para inserción/actualización
+            memory_data = {
+                "tenant_id": tenant_id,
+                "conversation_id": conversation_id,
+                "memory": memory_dict,
+                "updated_at": datetime.now().isoformat(),
+                "agent_id": ctx.get_agent_id() if ctx else memory_dict.get("metadata", {}).get("agent_id")
+            }
+            
+            # Crear o actualizar
+            if result.data and len(result.data) > 0:
+                # Actualizar registro existente
+                await supabase.table(table_name)\
+                    .update(memory_data)\
+                    .eq("tenant_id", tenant_id)\
+                    .eq("conversation_id", conversation_id)\
+                    .execute()
+            else:
+                # Crear nuevo registro
+                memory_data["id"] = str(uuid.uuid4())
+                memory_data["created_at"] = datetime.now().isoformat()
+                await supabase.table(table_name).insert(memory_data).execute()
+                
+            # Registrar métricas
+            latency_ms = (time.time() - start_time) * 1000
+            logger.info(
+                f"Memory persisted to DB: {conversation_id}",
+                extra={
+                    "tenant_id": tenant_id,
+                    "conversation_id": conversation_id,
+                    "execution_time": latency_ms,
+                    "message_count": memory_dict.get("metadata", {}).get("message_count", 0)
+                }
+            )
+        except Exception as e:
+            logger.error(f"Error persistiendo memoria en BD: {str(e)}")
+            # No lanzar la excepción para no interrumpir el flujo principal
+            
     @handle_errors(error_type="service", log_traceback=True)
     @with_context(tenant=True)
     async def add_message(self, tenant_id: str, conversation_id: str, role: str, content: str, 
-                     metadata: Optional[Dict[str, Any]] = None, ctx: Context = None) -> str:
+                      metadata: Optional[Dict[str, Any]] = None, ctx: Context = None) -> str:
         """
         Añade un mensaje a la conversación con almacenamiento optimizado en caché.
         

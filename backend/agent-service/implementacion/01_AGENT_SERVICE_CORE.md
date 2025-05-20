@@ -1618,11 +1618,23 @@ def with_logging_context(func):
 
 ## Tareas Pendientes
 
-- [ ] Implementar LangChainAgentService completo con manejo de errores tipados
-- [ ] Implementar ServiceRegistry con propagación de contexto completa
-- [ ] Desarrollar herramientas básicas para el agente (RAG, embedding, etc.)
-- [ ] Desarrollar herramientas de API externas configurables
-- [ ] Implementar memoria de conversación con Supabase
-- [ ] Implementar endpoints FastAPI con decorador @with_context
-- [ ] Desarrollar API para editor visual de frontend
-- [ ] Implementar sistema de logging detallado con contexto
+### Implementaciones Completadas
+- [x] Implementar LangChainAgentService completo con manejo de errores tipados
+- [x] Implementar ServiceRegistry con propagación de contexto completa
+- [x] Desarrollar herramientas básicas para el agente (RAG, embedding, etc.)
+- [x] Desarrollar herramientas de API externas configurables
+- [x] Implementar memoria de conversación con Supabase
+- [x] Implementar endpoints FastAPI con decorador @with_context
+- [x] Desarrollar API para editor visual de frontend
+- [x] Implementar sistema de logging detallado con contexto
+
+### Mejoras Identificadas para Futuros Sprints
+- [ ] Refactorizar el método execute_agent para reducir responsabilidades y mejorar mantenibilidad
+- [ ] Estandarizar el uso de caché en todo el servicio (eliminar inconsistencias en claves de caché)
+- [ ] Mejorar la propagación de contexto para usar siempre Context en lugar de parámetros duplicados
+- [ ] Implementar validación explícita tenant-agente en todos los endpoints
+- [ ] Agregar precarga de herramientas comunes durante la inicialización del servicio
+- [ ] Mejorar el manejo de concurrencia para ejecuciones simultáneas del mismo agente
+- [ ] Implementar invalidación en cascada para cachés relacionadas al eliminar agentes
+- [ ] Mejorar la sanitización de entradas en herramientas de API externas
+- [ ] Agregar pruebas de conectividad para servicios externos antes de ejecutar herramientas

@@ -530,8 +530,17 @@ Las técnicas descritas aquí se integrarán con los sistemas de colas y WebSock
 
 ## Tareas Pendientes
 
-- [ ] Implementar `ConversationMemoryManager` completo
-- [ ] Crear métricas de monitoreo para caché de agentes
+### Implementaciones Completadas
+- [x] Implementar `ConversationMemoryManager` completo
+- [x] Crear métricas básicas para tracking de uso de caché
+
+### Mejoras Identificadas para Futuros Sprints
+- [ ] Estandarizar formato de claves de caché en todo el servicio (evitar inconsistencias entre formatos directos e indirectos)
 - [ ] Optimizar TTLs basados en patrones de uso reales
 - [ ] Implementar pruebas de carga para validar rendimiento
-- [ ] Integrar con sistema de observabilidad para monitoreo
+- [ ] Integrar con sistema de observabilidad para monitoreo avanzado
+- [ ] Implementar invalidación en cascada para cachés relacionadas cuando se actualiza/elimina un agente
+- [ ] Mejorar el manejo de errores en operaciones de caché con fallbacks robustos
+- [ ] Añadir monitoreo de tamaño de objetos en caché para prevenir problemas de memoria
+- [ ] Implementar pre-calentamiento de caché para recursos frecuentemente accedidos
+- [ ] Desarrollar estrategia de purga selectiva para optimizar el espacio de caché

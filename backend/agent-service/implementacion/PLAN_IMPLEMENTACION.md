@@ -5,20 +5,33 @@ Este documento presenta el plan organizado de implementación para el sistema No
 ## BLOQUE 1: ARQUITECTURA CORE DEL AGENT SERVICE
 
 ### 1. Core del Agent Service [01_AGENT_SERVICE_CORE.md]
-- [ ] Implementar clase `LangChainAgentService` con inicialización asíncrona
-- [ ] Desarrollar métodos `create_agent` y `execute_agent` con soporte multitenancy
-- [ ] Crear `ServiceRegistry` para comunicación segura entre servicios
-- [ ] Integrar validación de modelos LLM y embedding según tier
-- [ ] Implementar clase `BaseTool` abstracta con propagación de contexto
-- [ ] Desarrollar `RAGQueryTool` para consultas a colecciones
+- [x] Implementar clase `LangChainAgentService` con inicialización asíncrona
+- [x] Desarrollar métodos `create_agent` y `execute_agent` con soporte multitenancy
+- [x] Crear `ServiceRegistry` para comunicación segura entre servicios
+- [x] Integrar validación de modelos LLM y embedding según tier
+- [x] Implementar clase `BaseTool` abstracta con propagación de contexto
+- [x] Desarrollar `RAGQueryTool` para consultas a colecciones
+
+#### Mejoras Identificadas para Core
+- [x] Refactorizar método `execute_agent` para reducir responsabilidades y mejorar mantenibilidad
+- [x] Implementar validación explícita tenant-agente en todos los endpoints
+- [x] Mejorar el manejo de concurrencia para ejecuciones simultáneas del mismo agente
+- [x] Mejorar la sanitización de entradas en herramientas de API externas
+- [x] Agregar pruebas de conectividad para servicios externos antes de ejecutar herramientas
 
 ### 2. Sistema de Caché para Agent Service [01_02_AGENT_SERVICE_CACHE.md]
-- [ ] Implementar `ConversationMemoryManager` para gestión de historiales
-- [ ] Crear `AgentExecutionStateManager` para estados de ejecución
-- [ ] Establecer jerarquía de claves multi-nivel (tenant > agent > conversation)
-- [ ] Implementar sistema de métricas para rendimiento de caché
-- [ ] Desarrollar métodos de invalidación selectiva para coherencia de datos
-- [ ] Optimizar patrón Cache-Aside para datos persistentes
+- [x] Implementar `ConversationMemoryManager` para gestión de historiales
+- [x] Crear `AgentExecutionStateManager` para estados de ejecución
+- [x] Establecer jerarquía de claves multi-nivel (tenant > agent > conversation)
+- [x] Implementar sistema de métricas básicas para rendimiento de caché
+- [x] Optimizar patrón Cache-Aside para datos persistentes
+
+#### Mejoras Identificadas para Caché
+- [ ] Estandarizar formato de claves de caché en todo el servicio (eliminar inconsistencias)
+- [ ] Optimizar TTLs basados en patrones de uso reales
+- [ ] Implementar invalidación en cascada para cachés relacionadas
+- [x] Añadir monitoreo de tamaño de objetos en caché
+- [ ] Implementar pre-calentamiento de caché para recursos frecuentemente accedidos
 
 ### 3. Estrategia de Colecciones [04_COLLECTION_STRATEGY.md]
 - [ ] Implementar `CollectionStrategy` para selección inteligente de fuentes

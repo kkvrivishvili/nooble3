@@ -6,6 +6,7 @@ import logging
 import time
 import uuid
 import hashlib
+import asyncio
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Union, Tuple
 
@@ -56,15 +57,19 @@ class LangChainAgentService:
     """
 
     def __init__(self):
-        """Inicializa el servicio de agentes con componentes necesarios."""
+        """Inicializa el servicio con componentes base."""
         self.settings = get_settings()
         self.service_registry = ServiceRegistry()
-        self.tool_registry = ToolRegistry()
+        self.memory_manager = ConversationMemoryManager(self.service_registry)
+        
+        # Semáforos para controlar concurrencia por agente
+        self.agent_locks = {}
+        self.max_concurrent_executions = 3  # Configurable según necesidad
 
         # Inicializar gestores especializados
-        self.memory_manager = ConversationMemoryManager(self.service_registry)
         self.config_service = AgentConfigurationService(self.service_registry)
         self.workflow_manager = AgentWorkflowManager(self.service_registry)
+        self.tool_registry = ToolRegistry(self.service_registry)
 
         # Tracking y optimización
         self.use_cache = True  # Flag para control de caché
@@ -246,57 +251,16 @@ class LangChainAgentService:
         # Convertir el diccionario a modelo AgentConfig
         return AgentConfig.model_validate(config_data)
     
-    @handle_errors(error_type="service", log_traceback=True)
-    @with_context(tenant=True, agent=True, conversation=True)
-    async def execute_agent(self, agent_id: str, chat_request: ChatRequest, ctx: Context = None) -> AgentResponse:
+    async def _prepare_langchain_memory(self, conversation_memory: Dict[str, Any]) -> ConversationBufferMemory:
         """
-        Ejecuta un agente con memoria de conversación y herramientas configuradas.
+        Prepara la memoria de LangChain a partir de la memoria de conversación persistente.
         
         Args:
-            agent_id: ID del agente a ejecutar
-            chat_request: Solicitud de chat que contiene el mensaje del usuario
-            ctx: Contexto con tenant_id, agent_id y conversation_id
+            conversation_memory: Memoria de conversación desde la base de datos/caché
             
         Returns:
-            AgentResponse: Respuesta del agente con contenido y metadatos
+            ConversationBufferMemory: Objeto de memoria compatible con LangChain
         """
-        tenant_id = ctx.get_tenant_id()
-        conversation_id = ctx.get_conversation_id()
-        start_time = time.time()
-        
-        # Paso 1: Obtener configuración del agente
-        agent_config = await self.get_agent_config(agent_id, ctx)
-        
-        # Paso 2: Verificar si se trata de un workflow y ejecutarlo si es así
-        if agent_config.workflow_enabled and agent_config.workflow_definition:
-            return await self.workflow_manager.execute_workflow(
-                tenant_id=tenant_id,
-                agent_id=agent_id,
-                conversation_id=conversation_id,
-                user_input=chat_request.message,
-                workflow_definition=agent_config.workflow_definition,
-                ctx=ctx
-            )
-        
-        # Paso 3: Obtener memoria de conversación
-        conversation_memory = await self.memory_manager.get_memory(
-            tenant_id=tenant_id,
-            conversation_id=conversation_id,
-            ctx=ctx
-        )
-        
-        # Paso 4: Configurar herramientas del agente
-        tools = await self._get_tools_for_agent(agent_config, tenant_id, conversation_id, ctx)
-        
-        # Paso 5: Preparar el modelo LLM con la configuración adecuada
-        llm_model = agent_config.llm_config.get("model", self.settings.DEFAULT_LLM_MODEL)
-        llm = get_langchain_chat_model(
-            model=llm_model,
-            temperature=agent_config.llm_config.get("temperature", 0.7),
-            api_key=self.settings.OPENAI_API_KEY
-        )
-        
-        # Paso 6: Crear el agente con la configuración y herramientas
         langchain_memory = ConversationBufferMemory(
             return_messages=True,
             memory_key="chat_history"
@@ -309,131 +273,327 @@ class LangChainAgentService:
                     langchain_memory.chat_memory.add_user_message(msg["content"])
                 elif msg["role"] == "assistant":
                     langchain_memory.chat_memory.add_ai_message(msg["content"])
+                    
+        return langchain_memory
+    
+    async def _create_agent_executor(self, agent_config: AgentConfig, tools: List[BaseTool], 
+                                   langchain_memory: ConversationBufferMemory) -> AgentExecutor:
+        """
+        Crea el ejecutor del agente con la configuración y herramientas adecuadas.
+        
+        Args:
+            agent_config: Configuración del agente
+            tools: Lista de herramientas para el agente
+            langchain_memory: Memoria de conversación preparada para LangChain
+            
+        Returns:
+            AgentExecutor: Ejecutor de agente configurado
+        """
+        # Preparar el modelo LLM con la configuración adecuada
+        llm_model = agent_config.llm_config.get("model", self.settings.DEFAULT_LLM_MODEL)
+        llm = get_langchain_chat_model(
+            model=llm_model,
+            temperature=agent_config.llm_config.get("temperature", 0.7),
+            api_key=self.settings.OPENAI_API_KEY
+        )
         
         # Crear el agente con LangChain
-        agent_executor = create_langchain_agent(
+        return create_langchain_agent(
             llm=llm,
             tools=tools,
             memory=langchain_memory,
             agent_type=agent_config.agent_type or "CONVERSATIONAL_REACT",
             system_message=agent_config.system_message
         )
+    
+    async def _process_agent_response(self, response: Any, start_time: float) -> Tuple[str, Dict[str, Any]]:
+        """
+        Procesa la respuesta del agente para extraer contenido y metadatos.
         
-        # Paso 7: Ejecutar el agente y capturar su respuesta
-        request_id = str(uuid.uuid4())
-        logger.info(
-            f"Executing agent {agent_id}",
+        Args:
+            response: Respuesta del agente desde LangChain
+            start_time: Tiempo de inicio de la ejecución
+            
+        Returns:
+            Tuple[str, Dict[str, Any]]: Contenido de la respuesta y metadatos
+        """
+        # Extraer la respuesta y metadatos
+        response_content = response.get("output", "")
+        response_metadata = {
+            "tool_calls": [],
+            "execution_time": time.time() - start_time
+        }
+        
+        # Extraer llamadas a herramientas si están disponibles
+        if "intermediate_steps" in response:
+            for step in response["intermediate_steps"]:
+                if len(step) >= 2:
+                    tool_action = step[0]
+                    tool_output = step[1]
+                    response_metadata["tool_calls"].append({
+                        "tool": tool_action.tool,
+                        "tool_input": tool_action.tool_input,
+                        "output": str(tool_output)
+                    })
+                    
+        return response_content, response_metadata
+    
+    async def _update_conversation_memory(self, tenant_id: str, conversation_id: str, conversation_memory: Dict[str, Any], 
+                                     user_message: str, response_content: str, ctx: Context = None) -> None:
+        """
+        Actualiza la memoria de conversación con los nuevos mensajes.
+        
+        Args:
+            tenant_id: ID del tenant
+            conversation_id: ID de la conversación
+            conversation_memory: Memoria actual
+            user_message: Mensaje del usuario
+            response_content: Respuesta del agente
+            ctx: Contexto de la operación
+        """
+        new_messages = [
+            {"role": "user", "content": user_message, "timestamp": datetime.now().isoformat()},
+            {"role": "assistant", "content": response_content, "timestamp": datetime.now().isoformat()}
+        ]
+        
+        # Actualizar la memoria con los nuevos mensajes
+        if conversation_memory is None:
+            conversation_memory = {"messages": []}
+        
+        conversation_memory["messages"].extend(new_messages)
+        await self.memory_manager.save_memory(tenant_id, conversation_id, conversation_memory, ctx)
+    
+    async def _track_token_usage(self, tenant_id: str, agent_id: str, conversation_id: str, 
+                           user_message: str, response_content: str, llm_model: str) -> None:
+        """
+        Registra el uso de tokens para seguimiento y facturación.
+        
+        Args:
+            tenant_id: ID del tenant
+            agent_id: ID del agente
+            conversation_id: ID de la conversación
+            user_message: Mensaje del usuario
+            response_content: Respuesta del agente
+            llm_model: Modelo LLM utilizado
+        """
+        # Crear clave de idempotencia para evitar duplicados
+        idempotency_key = f"{tenant_id}:{agent_id}:{conversation_id}:{hashlib.md5(user_message.encode()).hexdigest()}"
+        
+        # Estimar tokens (entrada + salida)
+        input_tokens = len(user_message.split()) * 1.3  # Estimación simple
+        output_tokens = len(response_content.split()) * 1.3
+        
+        await track_token_usage(
+            tenant_id=tenant_id,
+            operation=OPERATION_AGENT_CHAT,
+            token_type=TOKEN_TYPE_LLM,
+            token_count=int(input_tokens + output_tokens),
+            model=llm_model,
+            metadata={
+                "agent_id": agent_id,
+                "conversation_id": conversation_id,
+                "input_tokens": int(input_tokens),
+                "output_tokens": int(output_tokens)
+            },
+            idempotency_key=idempotency_key
+        )
+    
+    async def _handle_agent_error(self, e: Exception, tenant_id: str, agent_id: str, conversation_id: str, 
+                             user_message: str, conversation_memory: Dict[str, Any], ctx: Context = None) -> None:
+        """
+        Maneja errores durante la ejecución del agente, registrando detalles y actualizando memoria.
+        
+        Args:
+            e: Excepción ocurrida
+            tenant_id: ID del tenant
+            agent_id: ID del agente
+            conversation_id: ID de la conversación
+            user_message: Mensaje del usuario
+            conversation_memory: Memoria de conversación actual
+            ctx: Contexto de la operación
+            
+        Raises:
+            ServiceError: Error tipado para propagar al cliente
+        """
+        error_msg = f"Error executing agent: {str(e)}"
+        logger.error(
+            error_msg,
+            exc_info=True,
             extra={
                 "tenant_id": tenant_id,
                 "agent_id": agent_id,
                 "conversation_id": conversation_id,
-                "request_id": request_id
+                "error": str(e)
             }
         )
         
-        try:
-            # Ejecutar el agente
-            response = await agent_executor.ainvoke({"input": chat_request.message})
+        # Registrar el mensaje de error en la conversación
+        error_messages = [
+            {"role": "user", "content": user_message, "timestamp": datetime.now().isoformat()},
+            {"role": "system", "content": "Error en la generación de respuesta", "timestamp": datetime.now().isoformat()}
+        ]
+        
+        if conversation_memory is None:
+            conversation_memory = {"messages": []}
             
-            # Extraer la respuesta y metadatos
-            response_content = response.get("output", "")
-            response_metadata = {
-                "tool_calls": [],
-                "execution_time": time.time() - start_time
+        conversation_memory["messages"].extend(error_messages)
+        await self.memory_manager.save_memory(tenant_id, conversation_id, conversation_memory, ctx)
+        
+        # Propagar el error con contexto detallado
+        raise ServiceError(
+            message=f"Error al ejecutar el agente: {str(e)}",
+            error_code="AGENT_EXECUTION_ERROR",
+            status_code=500,
+            context={
+                "tenant_id": tenant_id,
+                "agent_id": agent_id,
+                "conversation_id": conversation_id,
+                "original_error": str(e)
             }
+        )
+    
+    async def _get_agent_lock(self, agent_id: str) -> asyncio.Semaphore:
+        """Obtiene o crea un semáforo para controlar la concurrencia de un agente.
+        
+        Args:
+            agent_id: ID del agente
             
-            # Extraer llamadas a herramientas si están disponibles
-            if "intermediate_steps" in response:
-                for step in response["intermediate_steps"]:
-                    if len(step) >= 2:
-                        tool_action = step[0]
-                        tool_output = step[1]
-                        response_metadata["tool_calls"].append({
-                            "tool": tool_action.tool,
-                            "tool_input": tool_action.tool_input,
-                            "output": str(tool_output)
-                        })
+        Returns:
+            asyncio.Semaphore: Semáforo para controlar concurrencia
+        """
+        if agent_id not in self.agent_locks:
+            self.agent_locks[agent_id] = asyncio.Semaphore(self.max_concurrent_executions)
+        return self.agent_locks[agent_id]
+        
+    @handle_errors(error_type="service", log_traceback=True)
+    @with_context(tenant=True, agent=True, conversation=True)
+    async def execute_agent(self, agent: Agent, chat_request: ChatRequest, ctx: Context = None) -> ChatResponse:
+        """
+        Procesa una solicitud de chat con un agente.
+
+        Args:
+            agent: Agente para procesar el chat
+            chat_request: Solicitud de chat
+            tenant_id: ID del tenant
+            ctx: Contexto de la operación
             
-            # Paso 8: Registrar el mensaje en la memoria de conversación
-            new_messages = [
-                {"role": "user", "content": chat_request.message, "timestamp": datetime.now().isoformat()},
-                {"role": "assistant", "content": response_content, "timestamp": datetime.now().isoformat()}
-            ]
-            
-            # Actualizar la memoria con los nuevos mensajes
-            if conversation_memory is None:
-                conversation_memory = {"messages": []}
-            
-            conversation_memory["messages"].extend(new_messages)
-            await self.memory_manager.save_memory(tenant_id, conversation_id, conversation_memory, ctx)
-            
-            # Paso 9: Registrar tokens usados para el tracking de uso
-            idempotency_key = f"{tenant_id}:{agent_id}:{conversation_id}:{hashlib.md5(chat_request.message.encode()).hexdigest()}"
-            model_details = self._get_model_details(llm_model)
-            
-            # Estimar tokens (entrada + salida)
-            input_tokens = len(chat_request.message.split()) * 1.3  # Estimación simple
-            output_tokens = len(response_content.split()) * 1.3
-            
-            await track_token_usage(
+        Returns:
+            ChatResponse: Respuesta del chat
+        """
+        tenant_id = ctx.get_tenant_id()
+        start_time = time.time()
+        
+        # Paso 1: Obtener configuración del agente
+        agent_config = await self.get_agent_config(agent.agent_id, ctx)
+        
+        # Paso 2: Verificar si se trata de un workflow y ejecutarlo si es así
+        if agent_config.workflow_enabled and agent_config.workflow_definition:
+            return await self.workflow_manager.execute_workflow(
                 tenant_id=tenant_id,
-                operation=OPERATION_AGENT_CHAT,
-                token_type=TOKEN_TYPE_LLM,
-                token_count=int(input_tokens + output_tokens),
-                model=llm_model,
-                metadata={
-                    "agent_id": agent_id,
-                    "conversation_id": conversation_id,
-                    "input_tokens": int(input_tokens),
-                    "output_tokens": int(output_tokens)
-                },
-                idempotency_key=idempotency_key
+                agent_id=agent.agent_id,
+                conversation_id=ctx.get_conversation_id(),
+                user_input=chat_request.message,
+                workflow_definition=agent_config.workflow_definition,
+                ctx=ctx
             )
-            
-            # Paso 10: Crear y devolver la respuesta
-            return AgentResponse(
-                content=response_content,
-                metadata=response_metadata
-            )
-            
-        except Exception as e:
-            # Registrar el error y devolver una respuesta de error
-            error_msg = f"Error executing agent: {str(e)}"
-            logger.error(
-                error_msg,
-                exc_info=True,
+        
+        # Adquirir semáforo para controlar concurrencia
+        agent_lock = await self._get_agent_lock(agent.agent_id)
+        execution_waiting = not agent_lock.locked()
+        
+        # Log si hay que esperar por el semáforo
+        if not execution_waiting:
+            logger.info(
+                f"Waiting for agent execution slot: {agent.agent_id}", 
                 extra={
                     "tenant_id": tenant_id,
-                    "agent_id": agent_id,
-                    "conversation_id": conversation_id,
-                    "error": str(e)
+                    "agent_id": agent.agent_id,
+                    "conversation_id": ctx.get_conversation_id()
                 }
             )
             
-            # Aún registrar el mensaje de error en la conversación
-            error_messages = [
-                {"role": "user", "content": chat_request.message, "timestamp": datetime.now().isoformat()},
-                {"role": "system", "content": "Error en la generación de respuesta", "timestamp": datetime.now().isoformat()}
-            ]
+        async with agent_lock:
+            # Log de adquisición del semáforo si hubo espera
+            if not execution_waiting:
+                logger.info(
+                    f"Acquired execution slot for agent: {agent.agent_id}",
+                    extra={
+                        "tenant_id": tenant_id,
+                        "agent_id": agent.agent_id,
+                        "conversation_id": ctx.get_conversation_id(),
+                        "wait_time_ms": (time.time() - start_time) * 1000
+                    }
+                )
             
-            if conversation_memory is None:
-                conversation_memory = {"messages": []}
+            try:
+                # Paso 3: Obtener memoria y herramientas
+                conversation_memory = await self.memory_manager.get_memory(tenant_id, ctx.get_conversation_id(), ctx)
+                tools = await self._get_tools_for_agent(agent_config, tenant_id, ctx.get_conversation_id(), ctx)
                 
-            conversation_memory["messages"].extend(error_messages)
-            await self.memory_manager.save_memory(tenant_id, conversation_id, conversation_memory, ctx)
+                # Paso 4: Preparar memoria y ejecutor
+                langchain_memory = await self._prepare_langchain_memory(conversation_memory)
+                agent_executor = await self._create_agent_executor(agent_config, tools, langchain_memory)
             
-            # Propagar el error
-            raise ServiceError(
-                message=f"Error al ejecutar el agente: {str(e)}",
-                error_code="AGENT_EXECUTION_ERROR",
-                status_code=500,
-                context={
-                    "tenant_id": tenant_id,
-                    "agent_id": agent_id,
-                    "conversation_id": conversation_id,
-                    "original_error": str(e)
-                }
-            )
+                # Paso 5: Registrar inicio de ejecución
+                request_id = str(uuid.uuid4())
+                logger.info(
+                    f"Executing agent {agent.agent_id}",
+                    extra={
+                        "tenant_id": tenant_id,
+                        "agent_id": agent.agent_id,
+                        "conversation_id": ctx.get_conversation_id(),
+                        "request_id": request_id
+                    }
+                )
+                
+                # Paso 6: Ejecutar el agente
+                response = await agent_executor.ainvoke({"input": chat_request.message})
+                
+                # Paso 7: Procesar respuesta
+                response_content, response_metadata = await self._process_agent_response(response, start_time)
+                
+                # Paso 8: Actualizar memoria
+                await self._update_conversation_memory(
+                    tenant_id,
+                    ctx.get_conversation_id(),
+                    conversation_memory,
+                    chat_request.message,
+                    response_content,
+                    ctx
+                )
+                
+                # Paso 9: Registrar uso de tokens
+                llm_model = agent_config.llm_config.get("model", self.settings.DEFAULT_LLM_MODEL)
+                await self._track_token_usage(
+                    tenant_id,
+                    agent.agent_id,
+                    ctx.get_conversation_id(),
+                    chat_request.message,
+                    response_content,
+                    llm_model
+                )
+                
+                # Paso 10: Devolver respuesta
+                return ChatResponse(
+                    message=response_content,
+                    conversation_id=ctx.get_conversation_id(),
+                    agent_id=agent.agent_id,
+                    metadata=response_metadata,
+                    sources=[],
+                    tools_used=response_metadata.get("tool_calls")
+                )
+                
+            except Exception as e:
+                # Manejar cualquier error durante la ejecución
+                await self._handle_agent_error(
+                    e,
+                    tenant_id,
+                    agent.agent_id,
+                    ctx.get_conversation_id(), 
+                    chat_request.message,
+                    conversation_memory,
+                    ctx
+                )
     
     async def _get_tools_for_agent(self, agent_config: AgentConfig, tenant_id: str, conversation_id: str, ctx: Context = None) -> List[BaseTool]:
         """
@@ -944,484 +1104,4 @@ class LangChainAgentService:
         
         return metrics
 
-# Fin de la clase LangChainAgentService
-    collection_ids = chat_request.collection_ids or agent.collection_ids
-    
-    # Obtener historial de conversación
-    conversation_history = []
-    if agent.config.context_window > 0:
-        history = await self._get_conversation_history(
-            conversation_id=conversation_id,
-            limit=agent.config.context_window
-        )
-        conversation_history.extend(history)
-    
-    # Añadir mensaje actual al historial
-    conversation_history.append(user_message)
-    
-    # Convertir historial a formato LangChain
-    lc_messages = []
-    for msg in conversation_history:
-        if msg.role == MessageRole.USER:
-            lc_messages.append({
-                "role": "user",
-                "content": msg.content
-            })
-        elif msg.role == MessageRole.ASSISTANT:
-            lc_messages.append({
-                "role": "assistant",
-                "content": msg.content
-            })
-    
-    # Convertir a objetos de mensaje LangChain
-    langchain_messages = convert_to_langchain_messages(lc_messages)
-    
-    # Obtener herramientas disponibles
-    tools = []
-    if agent.config.functions_enabled:
-            tenant_id: ID del tenant
-            
-        Returns:
-            List[Dict[str, Any]]: Lista de herramientas
-        """
-        # Obtener agente
-        agent = await self.get_agent_by_id(agent_id, tenant_id)
-        
-        if not agent:
-            raise ServiceError(f"Agent with ID {agent_id} not found")
-        
-        # Obtener herramientas desde los metadatos del agente o usar valores por defecto
-        available_tools = agent.metadata.get("available_tools", [])
-        if not available_tools and hasattr(agent, "available_tools"):
-            available_tools = agent.available_tools or []
-        
-        # Obtener detalles de las herramientas desde el registro
-        tools = []
-        for tool_name in available_tools:
-            tool = self.tool_registry.get_tool(tool_name)
-            if tool:
-                tools.append(tool.to_dict())
-        
-        # Si el agente tiene collection_ids, añadir herramientas RAG específicas para cada colección
-        if agent.collection_ids:
-            for collection_id in agent.collection_ids:
-                rag_tools = await self.tool_registry.get_tools_for_collection(
-                    collection_id=collection_id,
-                    tenant_id=tenant_id
-                )
-                for tool in rag_tools:
-                    tools.append(tool.to_dict())
-        
-        return tools
-    
-    @with_context(tenant=True, agent=True)
-    @handle_errors(error_type="service", log_traceback=True)
-    async def process_chat(
-        self,
-        agent: Agent,
-        chat_request: ChatRequest,
-        tenant_id: str,
-        ctx: Optional[Context] = None
-    ) -> ChatResponse:
-        """
-        Procesa una solicitud de chat con un agente.
-        
-        Args:
-            agent: Agente para procesar el chat
-            chat_request: Solicitud de chat
-            tenant_id: ID del tenant
-            ctx: Contexto de la operación
-            
-        Returns:
-            ChatResponse: Respuesta del chat
-        """
-        # Asegurar que estamos inicializados
-        await self.initialize()
-        
-        # Obtener ID de conversación o crear uno nuevo
-        conversation_id = chat_request.conversation_id
-        if not conversation_id:
-            conversation_id = str(uuid.uuid4())
-        
-        # Almacenar mensaje del usuario
-        user_message = ConversationMessage(
-            message_id=str(uuid.uuid4()),
-            conversation_id=conversation_id,
-            agent_id=agent.agent_id,
-            tenant_id=tenant_id,
-            role=MessageRole.USER,
-            content=chat_request.message,
-            timestamp=datetime.utcnow(),
-            metadata=chat_request.metadata
-        )
-        
-        # Almacenar en la base de datos si está configurado
-        if self.settings.store_conversations:
-            await self._store_message(user_message)
-        
-        # Obtener configuración del modelo LLM
-        model_name = agent.config.model
-        temperature = agent.config.temperature
-        max_tokens = agent.config.max_tokens or 800
-        
-        # Determinar collection_ids
-        collection_ids = chat_request.collection_ids or agent.collection_ids
-        
-        # Obtener historial de conversación
-        conversation_history = []
-        if agent.config.context_window > 0:
-            history = await self._get_conversation_history(
-                conversation_id=conversation_id,
-                limit=agent.config.context_window
-            )
-            conversation_history.extend(history)
-        
-        # Añadir mensaje actual al historial
-        conversation_history.append(user_message)
-        
-        # Convertir historial a formato LangChain
-        lc_messages = []
-        for msg in conversation_history:
-            if msg.role == MessageRole.USER:
-                lc_messages.append({
-                    "role": "user",
-                    "content": msg.content
-                })
-            elif msg.role == MessageRole.ASSISTANT:
-                lc_messages.append({
-                    "role": "assistant",
-                    "content": msg.content
-                })
-        
-        # Convertir a objetos de mensaje LangChain
-        langchain_messages = convert_to_langchain_messages(lc_messages)
-        
-        # Obtener herramientas disponibles
-        tools = []
-        if agent.config.functions_enabled:
-            # Obtener herramientas desde los metadatos del agente o usar valores por defecto
-            available_tools = agent.metadata.get("available_tools", [])
-            if not available_tools and hasattr(agent, "available_tools"):
-                available_tools = agent.available_tools or []
-            
-            # Obtener detalles de las herramientas desde el registro
-            tools = self.tool_registry.get_tools_for_agent(available_tools)
-            
-            # Si el agente tiene collection_ids, añadir herramientas RAG específicas para cada colección
-            if collection_ids:
-                for collection_id in collection_ids:
-                    rag_tools = await self.tool_registry.get_tools_for_collection(
-                        collection_id=collection_id,
-                        tenant_id=tenant_id
-                    )
-                    tools.extend(rag_tools)
-        
-        # Procesar mensaje a través de LangChain
-        try:
-            # Obtener el modelo LLM
-            llm = get_langchain_chat_model(
-                model_name=model_name,
-                temperature=temperature,
-                max_tokens=max_tokens
-            )
-            
-            # Si no hay herramientas disponibles o no están habilitadas
-            if not tools or not agent.config.functions_enabled:
-                # Crear prompt con sistema y mensajes
-                prompt = agent.config.system_prompt + "\n\n"
-                
-                # Preparar mensajes para el LLM
-                messages = [{"role": "system", "content": agent.config.system_prompt}]
-                
-                # Añadir historial de conversación
-                for msg in conversation_history:
-                    role = "user" if msg.role == MessageRole.USER else "assistant"
-                    messages.append({"role": role, "content": msg.content})
-                
-                # Generar respuesta
-                start_time = time.time()
-                llm_response = await llm.ainvoke(messages)
-                response_text = llm_response.content
-                
-                # Obtener uso de tokens desde la respuesta si está disponible
-                tokens = 0
-                if hasattr(llm_response, "usage") and llm_response.usage:
-                    tokens = llm_response.usage.total_tokens
-                
-                # Preparar metadatos
-                metadata = {
-                    "model": model_name,
-                    "temperature": temperature,
-                    "max_tokens": max_tokens,
-                    "execution_time": time.time() - start_time,
-                    "total_tokens": tokens,
-                }
-            else:
-                # Crear un agente con las herramientas
-                agent_executor = create_langchain_agent(
-                    llm=llm,
-                    tools=tools,
-                    system_prompt=agent.config.system_prompt
-                )
-                
-                # Configurar cada herramienta con el contexto
-                for tool in tools:
-                    if hasattr(tool, "tenant_id"):
-                        tool.tenant_id = tenant_id
-                    if hasattr(tool, "agent_id"):
-                        tool.agent_id = agent.agent_id
-                    if hasattr(tool, "conversation_id"):
-                        tool.conversation_id = conversation_id
-                    if hasattr(tool, "ctx"):
-                        tool.ctx = ctx
-                
-                # Ejecutar el agente
-                start_time = time.time()
-                result = await run_agent_with_tools(
-                    agent_executor=agent_executor,
-                    user_input=chat_request.message,
-                    chat_history=langchain_messages,
-                    tenant_id=tenant_id,
-                    agent_id=agent.agent_id,
-                    conversation_id=conversation_id,
-                    ctx=ctx
-                )
-                
-                # Extraer respuesta y metadatos
-                response_text = result["output"]
-                execution_time = time.time() - start_time
-                
-                # Convertir las llamadas a herramientas a un formato más detallado
-                tool_calls = []
-                for tool_call in result.get("tool_calls", []):
-                    tool_calls.append({
-                        "tool": tool_call.get("tool", ""),
-                        "input": tool_call.get("tool_input", {}),
-                        "output": tool_call.get("output", "")
-                    })
-                
-                # Estimar tokens utilizados basado en la longitud del contenido
-                # Esto es una aproximación, el conteo real dependerá del tokenizador
-                input_tokens = len(chat_request.message) // 4
-                output_tokens = len(response_text) // 4
-                tool_tokens = sum(len(str(call)) // 4 for call in tool_calls)
-                total_tokens = input_tokens + output_tokens + tool_tokens
-                
-                # Preparar metadatos
-                metadata = {
-                    "model": model_name,
-                    "temperature": temperature,
-                    "max_tokens": max_tokens,
-                    "execution_time": execution_time,
-                    "total_tokens": total_tokens,
-                    "input_tokens": input_tokens,
-                    "output_tokens": output_tokens,
-                    "tool_tokens": tool_tokens,
-                    "tool_calls": tool_calls,
-                    "tools_used": len(tool_calls)
-                }
-            
-            # Tracking de tokens
-            await track_token_usage(
-                tenant_id=tenant_id,
-                tokens=metadata.get("total_tokens", 0),
-                model=model_name,
-                agent_id=agent.agent_id,
-                conversation_id=conversation_id,
-                token_type=TOKEN_TYPE_LLM,
-                operation=OPERATION_AGENT_CHAT,
-                metadata={
-                    "agent_type": agent.type,
-                    "collection_ids": collection_ids,
-                    "tools_used": metadata.get("tools_used", 0)
-                }
-            )
-            
-            # Crear mensaje de respuesta
-            assistant_message = ConversationMessage(
-                message_id=str(uuid.uuid4()),
-                conversation_id=conversation_id,
-                agent_id=agent.agent_id,
-                tenant_id=tenant_id,
-                role=MessageRole.ASSISTANT,
-                content=response_text,
-                timestamp=datetime.utcnow(),
-                metadata=metadata
-            )
-            
-            # Almacenar en la base de datos si está configurado
-            if self.settings.store_conversations:
-                await self._store_message(assistant_message)
-            
-            # Extraer fuentes si están disponibles
-            sources = []
-            if "tool_calls" in metadata:
-                for call in metadata["tool_calls"]:
-                    if call["tool"].startswith("rag_query"):
-                        # Buscar fuentes en la salida de rag_query
-                        output = call["output"]
-                        if isinstance(output, str) and "Fuentes:" in output:
-                            sources_section = output.split("Fuentes:")[1].strip()
-                            # Procesar fuentes (formato simplificado)
-                            for line in sources_section.split("\n"):
-                                if line.strip() and "." in line:
-                                    sources.append({"document_name": line.strip()})
-            
-            # Retornar ChatResponse
-            return ChatResponse(
-                message=response_text,
-                conversation_id=conversation_id,
-                agent_id=agent.agent_id,
-                metadata=metadata,
-                sources=sources,
-                tools_used=metadata.get("tool_calls")
-            )
-            
-        except Exception as e:
-            logger.error(f"Error processing chat: {str(e)}", exc_info=True)
-            raise ServiceError(f"Error processing chat: {str(e)}")
-    
-    @with_context(tenant=True, agent=True)
-    @handle_errors(error_type="service", log_traceback=True)
-    async def process_internal_query(
-        self,
-        agent: Agent,
-        operation: str,
-        parameters: Dict[str, Any],
-        tenant_id: str,
-        ctx: Optional[Context] = None
-    ) -> Dict[str, Any]:
-        """
-        Procesa una consulta interna desde otro servicio.
-        
-        Args:
-            agent: Agente para procesar la consulta
-            operation: Operación a realizar
-            parameters: Parámetros de operación
-            tenant_id: ID del tenant
-            ctx: Contexto de la operación
-            
-        Returns:
-            Dict[str, Any]: Resultado de la operación
-        """
-        # Manejar diferentes operaciones
-        if operation == "query":
-            # Crear un mensaje de consulta
-            query = parameters.get("query", "")
-            if not query:
-                raise ServiceError("Query parameter is required")
-                
-            # Procesar como una solicitud de chat
-            chat_request = ChatRequest(
-                message=query,
-                agent_id=agent.agent_id,
-                collection_ids=parameters.get("collection_ids", agent.collection_ids),
-                metadata={"internal": True, "operation": "query"}
-            )
-            
-            # Procesar el chat
-            response = await self.process_chat(
-                agent=agent,
-                chat_request=chat_request,
-                tenant_id=tenant_id,
-                ctx=ctx
-            )
-            
-            return {
-                "response": response.message,
-                "sources": response.sources,
-                "metadata": response.metadata
-            }
-        
-        elif operation == "execute_tool":
-            # Ejecución directa de herramienta
-            tool_name = parameters.get("tool", "")
-            tool_params = parameters.get("parameters", {})
-            
-            if not tool_name:
-                raise ServiceError("Tool parameter is required")
-                
-            # Ejecutar herramienta
-            result = await self.tool_registry.execute_tool(
-                tool_id=tool_name,
-                parameters=tool_params,
-                tenant_id=tenant_id,
-                agent_id=agent.agent_id,
-                ctx=ctx
-            )
-            
-            return {
-                "success": result.success,
-                "data": result.data,
-                "error": result.error,
-                "execution_time": result.execution_time,
-                "metadata": result.metadata
-            }
-        
-        else:
-            raise ServiceError(f"Unknown operation: {operation}")
-    
-    async def _store_message(self, message: ConversationMessage) -> bool:
-        """
-        Almacena un mensaje en la base de datos.
-        
-        Args:
-            message: Mensaje para almacenar
-            
-        Returns:
-            bool: True si fue exitoso
-        """
-        try:
-            supabase = get_supabase_client()
-            
-            # Convertir mensaje a dict
-            message_dict = message.dict()
-            
-            # Insertar mensaje
-            result = await supabase.table(TABLE_CONVERSATION_MESSAGES).insert(message_dict).execute()
-            
-            if not result.data:
-                logger.warning(f"Failed to store message: {message.message_id}")
-                return False
-                
-            return True
-        except Exception as e:
-            logger.error(f"Error storing message: {str(e)}")
-            return False
-    
-    async def _get_conversation_history(
-        self, 
-        conversation_id: str, 
-        limit: int = 10
-    ) -> List[ConversationMessage]:
-        """
-        Obtiene el historial de conversación de la base de datos.
-        
-        Args:
-            conversation_id: ID de la conversación
-            limit: Máximo número de mensajes a recuperar
-            
-        Returns:
-            List[ConversationMessage]: Mensajes de la conversación
-        """
-        try:
-            supabase = get_supabase_client()
-            
-            # Consultar mensajes
-            result = await supabase.table(TABLE_CONVERSATION_MESSAGES) \
-                .select("*") \
-                .eq("conversation_id", conversation_id) \
-                .order("timestamp", desc=False) \
-                .limit(limit) \
-                .execute()
-                
-            if not result.data:
-                return []
-                
-            # Convertir a objetos ConversationMessage
-            messages = [ConversationMessage(**msg) for msg in result.data]
-            
-            return messages
-        except Exception as e:
-            logger.error(f"Error retrieving conversation history: {str(e)}")
-            return []
+# Fin de la implementación de LangChainAgentService
