@@ -27,11 +27,26 @@ Este documento presenta el plan organizado de implementación para el sistema No
 - [x] Optimizar patrón Cache-Aside para datos persistentes
 
 #### Mejoras Identificadas para Caché
-- [ ] Estandarizar formato de claves de caché en todo el servicio (eliminar inconsistencias)
-- [ ] Optimizar TTLs basados en patrones de uso reales
-- [ ] Implementar invalidación en cascada para cachés relacionadas
+- [x] Estandarizar formato de claves de caché en todo el servicio (eliminar inconsistencias)
+   - [x] Auditar uso actual de claves vs. patrón estandarizado en common/cache/manager.py
+   - [x] Refactorizar llamadas directas a CacheManager por get_with_cache_aside
+   - [x] Documentar patrón de claves implementado
+- [x] Migrar a TTLs centralizados definidos en common/core/constants.py
+   - [x] Reemplazar valores hardcodeados por constantes TTL_SHORT, TTL_STANDARD, TTL_EXTENDED
+   - [x] Verificar que los tipos de datos nuevos sigan DEFAULT_TTL_MAPPING
+   - [x] Unificar mecanismo de extensión de TTL para objetos frecuentes
+- [x] Implementar invalidación en cascada para cachés relacionadas
+   - [x] Identificar dependencias entre objetos cacheados (ej: agente -> herramientas -> memoria)
+   - [x] Crear método centralizado de invalidación que maneje las dependencias
+   - [x] Integrar con sistema de tracking para monitorear patrones de invalidación
 - [x] Añadir monitoreo de tamaño de objetos en caché
+   - [x] Implementar estimación de tamaño en _track_cache_size
+   - [x] Configurar umbrales de alerta para objetos grandes
+   - [x] Integrar con sistema centralizado de métricas
 - [ ] Implementar pre-calentamiento de caché para recursos frecuentemente accedidos
+   - [ ] Diseñar mecanismo de identificación de recursos frecuentes basado en métricas
+   - [ ] Implementar carga asincrónica de objetos frecuentes
+   - [ ] Agregar soporte para invalidación coordinada entre instancias
 
 ### 3. Estrategia de Colecciones [04_COLLECTION_STRATEGY.md]
 - [ ] Implementar `CollectionStrategy` para selección inteligente de fuentes

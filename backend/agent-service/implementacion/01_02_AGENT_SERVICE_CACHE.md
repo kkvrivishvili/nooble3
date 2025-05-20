@@ -20,6 +20,26 @@
 
 Esta fase complementa la implementación del núcleo del Agent Service, profundizando específicamente en la estrategia de caché optimizada para flujos de conversación, configuraciones de agentes y memoria persistente. El objetivo es mejorar el rendimiento, reducir la carga en la base de datos y garantizar una experiencia fluida incluso con alta demanda. La implementación incluye soporte para el editor visual de frontend, workflows complejos y sistemas de logging detallado.
 
+### Integración con Sistema Centralizado de Caché
+
+El Agent Service debe integrarse completamente con la implementación centralizada en `common/cache` y `common/core/constants.py`, siguiendo estos principios:
+
+1. **Usar TTLs estandarizados** definidos en `common/core/constants.py`:
+   ```python
+   from common.core.constants import TTL_SHORT, TTL_STANDARD, TTL_EXTENDED, TTL_PERMANENT
+   ```
+
+2. **Respetar el mapeo de TTLs por tipo de dato** definido en `DEFAULT_TTL_MAPPING` para mantener consistencia:
+   ```python
+   # Valores ya configurados centralmente
+   "embedding": TTL_EXTENDED,         # 24 horas
+   "vector_store": TTL_STANDARD,      # 1 hora
+   "query_result": TTL_SHORT,         # 5 minutos
+   "agent_config": TTL_STANDARD,      # 1 hora
+   ```
+
+3. **Utilizar exclusivamente la función `get_with_cache_aside`** para implementar el patrón Cache-Aside, evitando reimplementaciones.
+
 ## 1.2.1 Estrategia de Caché para Agent Service
 
 ### Escenarios para Uso del Patrón Cache-Aside

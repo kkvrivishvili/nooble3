@@ -36,10 +36,11 @@ Esta fase se centra en la implementación del núcleo del Agent Service, que sir
 
 - **Separación de responsabilidades**: Agent Service es un orquestador, no un proveedor de modelos
 - **Propagación de contexto**: Mantener tenant_id, agent_id, conversation_id en todas las operaciones
-- **Optimización de caché**: Uso correcto de patrones Cache-Aside vs operaciones directas
+- **Optimización de caché**: Uso correcto de patrones Cache-Aside centralizados vs operaciones directas
 - **Soporte para editor visual**: Preparado para integrarse con el frontend de configuración
 - **Flujos complejos simplificados**: Interfaz simple para flujos de trabajo complejos
 - **Logging detallado**: Sistema de logs estructurados para depuración del código
+- **Integración con sistemas centralizados**: Uso consistente de configuraciones, manejo de errores, contexto y tracking
 
 ## 1.1 Implementación de LangChainAgentService
 
