@@ -1,8 +1,24 @@
 # Fase 1.2: Implementación de Caché en Agent Service
 
+## Índice del documento
+
+1. [Visión General](#visión-general)
+2. [Estrategia de Caché para Agent Service](#121-estrategia-de-caché-para-agent-service)
+   - [Escenarios para Uso del Patrón Cache-Aside](#escenarios-para-uso-del-patrón-cache-aside)
+   - [Jerarquía de Claves y Contexto](#jerarquía-de-claves-y-contexto)
+   - [TTLs Recomendados por Tipo de Datos](#ttls-recomendados-por-tipo-de-datos)
+3. [Memoria de Conversación con Caché Optimizada](#122-implementación-de-memoria-de-conversación-con-caché-optimizada) 
+4. [Gestión del Estado de Ejecución](#123-gestión-del-estado-de-ejecución)
+5. [Caché para Workflows Complejos](#124-caché-para-workflows-complejos)
+6. [Optimización de Herramientas y Editor Visual](#125-optimización-de-herramientas-y-editor-visual)
+7. [Métricas de Rendimiento y Depuración](#126-métricas-de-rendimiento-y-depuración)
+8. [Patrones Recomendados y Errores Comunes](#patrones-recomendados-y-errores-comunes)
+   - [Patrones Recomendados](#patrones-recomendados)
+   - [Errores Comunes a Evitar](#errores-comunes-a-evitar)
+
 ## Visión General
 
-Esta fase complementa la implementación del núcleo del Agent Service, profundizando específicamente en la estrategia de caché optimizada para flujos de conversación, configuraciones de agentes y memoria persistente. El objetivo es mejorar el rendimiento, reducir la carga en la base de datos y garantizar una experiencia fluida incluso con alta demanda.
+Esta fase complementa la implementación del núcleo del Agent Service, profundizando específicamente en la estrategia de caché optimizada para flujos de conversación, configuraciones de agentes y memoria persistente. El objetivo es mejorar el rendimiento, reducir la carga en la base de datos y garantizar una experiencia fluida incluso con alta demanda. La implementación incluye soporte para el editor visual de frontend, workflows complejos y sistemas de logging detallado.
 
 ## 1.2.1 Estrategia de Caché para Agent Service
 
@@ -231,260 +247,251 @@ class AgentExecutionStateManager:
         )
 ```
 
-## 1.2.4 Técnicas de Invalidación Eficiente
+## 1.2.4 Caché para Workflows Complejos
 
-La invalidación selectiva es crucial para mantener la coherencia del caché:
+La implementación de workflows complejos requiere un sistema de caché especializado que pueda gestionar estados intermedios, transiciones y configuraciones de flujo. El `AgentWorkflowManager` utiliza este sistema para proporcionar una experiencia fluida incluso con flujos de trabajo multi-paso.
 
 ```python
-@handle_errors(error_type="service", log_traceback=True)
-async def invalidate_agent_resources(
-    tenant_id: str,
-    agent_id: str,
-    invalidate_conversations: bool = False
-) -> Dict[str, int]:
-    """
-    Invalida recursos relacionados con un agente en múltiples niveles.
-    
-    Args:
-        tenant_id: ID del tenant
-        agent_id: ID del agente
-        invalidate_conversations: Si se deben invalidar también conversaciones
-        
-    Returns:
-        Dict con conteo de recursos invalidados
-    """
-    invalidation_count = {
-        "agent_config": 0,
-        "agent_tools": 0,
-        "conversations": 0,
-        "messages": 0
-    }
-    
-    # 1. Invalidar configuración del agente
-    await CacheManager.delete(
-        data_type="agent_config",
-        resource_id=agent_id,
-        tenant_id=tenant_id
+async def cache_workflow_state(workflow_id: str, state: Dict[str, Any], tenant_id: str, ctx: Context = None) -> None:
+    """Almacena el estado actual de un workflow en caché."""
+    await CacheManager.set(
+        data_type="workflow_state",
+        resource_id=workflow_id,
+        value=state,
+        tenant_id=tenant_id,
+        agent_id=ctx.get_agent_id() if ctx else None,
+        conversation_id=ctx.get_conversation_id() if ctx else None,
+        ttl=CacheManager.ttl_extended  # 24 horas para workflows de larga duración
     )
-    invalidation_count["agent_config"] = 1
-    
-    # 2. Invalidar herramientas del agente
-    await CacheManager.delete(
-        data_type="agent_tools",
-        resource_id=agent_id,
-        tenant_id=tenant_id
+
+async def get_workflow_state(workflow_id: str, tenant_id: str, ctx: Context = None) -> Dict[str, Any]:
+    """Recupera el estado de un workflow usando el patrón Cache-Aside."""
+    state, metrics = await get_with_cache_aside(
+        data_type="workflow_state",
+        resource_id=workflow_id,
+        tenant_id=tenant_id,
+        fetch_from_db_func=fetch_workflow_from_db,
+        generate_func=create_default_workflow_state,
+        agent_id=ctx.get_agent_id() if ctx else None,
+        conversation_id=ctx.get_conversation_id() if ctx else None,
+        ttl=CacheManager.ttl_extended
     )
-    invalidation_count["agent_tools"] = 1
-    
-    # 3. Si se solicita, invalidar conversaciones relacionadas
-    if invalidate_conversations:
-        # Obtener IDs de conversaciones relacionadas
-        conversation_ids = await get_agent_conversation_ids(tenant_id, agent_id)
-        
-        for conversation_id in conversation_ids:
-            # Invalidar memoria de conversación
-            await CacheManager.delete(
-                data_type="conversation_memory",
-                resource_id=conversation_id,
-                tenant_id=tenant_id
-            )
-            invalidation_count["conversations"] += 1
-            
-            # Invalidar lista de mensajes (usando método de instancia)
-            deleted = await CacheManager.get_instance().delete(
-                key=f"{tenant_id}:{conversation_id}:messages",
-                tenant_id=tenant_id
-            )
-            if deleted:
-                invalidation_count["messages"] += 1
-    
-    return invalidation_count
+    return state
+
+async def cache_workflow_definition(workflow_id: str, definition: Dict[str, Any], tenant_id: str) -> None:
+    """Almacena la definición completa de un workflow en caché."""
+    await CacheManager.set(
+        data_type="workflow_definition",
+        resource_id=workflow_id,
+        value=definition,
+        tenant_id=tenant_id,
+        ttl=CacheManager.ttl_standard  # 1 hora
+    )
 ```
 
-## 1.2.5 Métricas de Caché para Optimización Continua
+### Estrategia de Caché para Workflows
 
-Para monitorear y optimizar el rendimiento de la caché:
+Los workflows complejos se benefician de una estrategia de caché en múltiples niveles:
+
+1. **Definición del Workflow**: Caché de la estructura completa del workflow (nodos, transiciones, condiciones)
+2. **Estado del Workflow**: Caché del estado actual de ejecución, incluyendo nodo actual y variables
+3. **Resultados Intermedios**: Caché de resultados de pasos previos para evitar recálculos
+4. **Historial de Ejecución**: Caché temporal del historial para análisis y depuración
+
+Este enfoque permite que los workflows complejos se ejecuten de manera eficiente incluso cuando abarcan múltiples interacciones de usuario o llamadas asíncronas a servicios externos.
+
+## 1.2.5 Optimización de Herramientas y Editor Visual
+
+El Agent Service necesita dar soporte a un editor visual en el frontend que permita a los usuarios construir agentes con una interfaz gráfica. La estrategia de caché para esta funcionalidad se centra en la rápida disponibilidad de configuraciones y herramientas.
 
 ```python
-async def track_agent_cache_metrics(
-    tenant_id: str,
-    agent_id: Optional[str],
-    data_type: str,
-    cache_hit: bool,
-    operation: str,
-    latency_ms: float
-):
-    """Registra métricas de rendimiento de caché para el Agent Service."""
-    metric_name = "cache_hit" if cache_hit else "cache_miss"
-    
-    # Usar el sistema centralizado de métricas
-    await track_performance_metric(
-        metric_type=f"agent_service_{metric_name}",
-        value=1,  # Incrementar contador
+async def get_agent_configuration_for_editor(agent_id: str, tenant_id: str, ctx: Context = None) -> Dict[str, Any]:
+    """Obtiene la configuración completa de un agente optimizada para el editor visual."""
+    config, metrics = await get_with_cache_aside(
+        data_type="agent_editor_config",
+        resource_id=agent_id,
+        tenant_id=tenant_id,
+        fetch_from_db_func=fetch_agent_editor_config_from_db,
+        generate_func=None,
+        ttl=CacheManager.ttl_short  # 5 minutos para reflejar cambios rápidamente
+    )
+    return config
+
+async def get_available_tools_for_tenant(tenant_id: str) -> List[Dict[str, Any]]:
+    """Obtiene todas las herramientas disponibles para un tenant, considerando su tier."""
+    tools, metrics = await get_with_cache_aside(
+        data_type="available_tools",
+        resource_id="all",
+        tenant_id=tenant_id,
+        fetch_from_db_func=fetch_tools_from_tier_config,
+        generate_func=None,
+        ttl=CacheManager.ttl_standard  # 1 hora
+    )
+    return tools
+
+async def cache_toolset_configuration(agent_id: str, toolset: Dict[str, Any], tenant_id: str) -> None:
+    """Almacena la configuración de herramientas seleccionada desde el editor visual."""
+    await CacheManager.set(
+        data_type="agent_toolset",
+        resource_id=agent_id,
+        value=toolset,
+        tenant_id=tenant_id,
+        ttl=CacheManager.ttl_standard  # 1 hora
+    )
+```
+
+### Optimizaciones para el Editor Visual
+
+El editor visual requiere respuestas rápidas para proporcionar una experiencia fluida al usuario:
+
+1. **Precargar Componentes**: Caché de componentes del editor (herramientas, plantillas, conectores)
+2. **Validación Instantánea**: Caché de reglas de validación para feedback inmediato
+3. **Vista Previa en Tiempo Real**: Almacenamiento temporal de configuraciones en progreso
+4. **Historial de Versiones**: Caché de versiones previas para funcionalidad de deshacer/rehacer
+
+## 1.2.6 Métricas de Rendimiento y Depuración
+
+Un sistema de métricas robusto es esencial para monitorear el rendimiento de la caché y detectar problemas. El Agent Service implementa un sistema de seguimiento detallado.
+
+```python
+async def track_cache_metrics(data_type: str, tenant_id: str, operation: str, hit: bool, latency_ms: float) -> None:
+    """Registra métricas de operaciones de caché para análisis de rendimiento."""
+    await CacheManager.get_instance().increment_counter(
+        counter_type="cache_operation",
+        amount=1,
+        resource_id=f"{data_type}:{operation}:{hit}",
         tenant_id=tenant_id,
         metadata={
-            "agent_id": agent_id,
             "data_type": data_type,
             "operation": operation,
+            "hit": hit,
             "latency_ms": latency_ms
+        }
+    )
+
+async def log_cache_event(data_type: str, event_type: str, details: Dict[str, Any], tenant_id: str) -> None:
+    """Registra eventos importantes de caché para depuración y auditoría."""
+    # Integración con sistema de logging para depuración avanzada
+    logger.info(
+        f"Cache event: {event_type}",
+        extra={
+            "tenant_id": tenant_id,
+            "data_type": data_type,
+            "event_type": event_type,
+            "details": details,
+            "timestamp": datetime.now().isoformat()
         }
     )
 ```
 
-## 1.2.6 Actualización de `_get_conversation_memory` en LangChainAgentService
+### Dashboard de Monitoreo de Caché
 
-El método original debe refactorizarse para usar apropiadamente Cache-Aside:
+El sistema incluye un dashboard de monitoreo que visualiza:
 
-```python
-async def _get_conversation_memory(self, tenant_id: str, conversation_id: str, ctx: Context = None) -> Any:
-    """Obtiene la memoria de conversación para un agente.
-    
-    Args:
-        tenant_id: ID del tenant
-        conversation_id: ID de la conversación
-        ctx: Contexto opcional
-        
-    Returns:
-        Objeto de memoria de conversación
-    """
-    # CORRECTO: Usar Cache-Aside para memoria persistente
-    memory_dict, metrics = await get_with_cache_aside(
-        data_type="conversation_memory",
-        resource_id=conversation_id,
-        tenant_id=tenant_id,
-        fetch_from_db_func=self._fetch_conversation_memory_from_db,
-        generate_func=self._create_empty_conversation_memory,
-        ttl=CacheManager.ttl_extended  # 24 horas para persistencia adecuada
-    )
-    
-    # Convertir diccionario a objeto de memoria si es necesario
-    if isinstance(memory_dict, dict):
-        return self._dict_to_memory_object(memory_dict)
-    
-    return memory_dict
-```
+1. **Tasa de Aciertos/Fallos**: Distribución por tipo de datos y tenant
+2. **Latencia de Operaciones**: Tiempos de respuesta para diferentes fuentes de datos (caché vs DB)
+3. **Tamaño de Caché**: Uso de memoria por tipo de datos y tenant
+4. **Invalidaciones**: Frecuencia y distribución de invalidaciones de caché
 
-## 1.2.7 Integración con Sistema de Colas (Fase 7)
+Esta información permite optimizar TTLs, priorizar datos para precarga y detectar patrones de uso ineficientes.
 
-Esta implementación de caché está diseñada para integrarse con el sistema de colas de la Fase 7:
+## Patrones Recomendados y Errores Comunes
 
-```python
-# En trabajo encolado, usar el estado en caché para compartir progreso
-async def process_agent_job(job_id: str, params: Dict[str, Any], tenant_id: str):
-    """Procesa un trabajo de ejecución de agente desde la cola."""
-    # Actualizar estado inicial
-    await CacheManager.set(
-        data_type="agent_execution_state",
-        resource_id=job_id,
-        value={"status": "processing", "progress": 0},
-        tenant_id=tenant_id,
-        ttl=CacheManager.ttl_short
-    )
-    
-    try:
-        # Procesar trabajo...
-        
-        # Actualizar progreso periódicamente
-        await CacheManager.set(
-            data_type="agent_execution_state",
-            resource_id=job_id,
-            value={"status": "processing", "progress": 50},
-            tenant_id=tenant_id,
-            ttl=CacheManager.ttl_short
-        )
-        
-        # Estado final
-        await CacheManager.set(
-            data_type="agent_execution_state",
-            resource_id=job_id,
-            value={
-                "status": "completed",
-                "progress": 100,
-                "result": result_data,
-                "completed_at": datetime.now().isoformat()
-            },
-            tenant_id=tenant_id,
-            ttl=CacheManager.ttl_standard  # TTL más largo para resultados completados
-        )
-        
-    except Exception as e:
-        # Estado de error
-        await CacheManager.set(
-            data_type="agent_execution_state",
-            resource_id=job_id,
-            value={"status": "error", "error": str(e)},
-            tenant_id=tenant_id,
-            ttl=CacheManager.ttl_standard
-        )
-```
+### Patrones Recomendados
 
-## 1.2.8 Implementación para Caché de Herramientas de Agente
-
-La carga de herramientas puede optimizarse mediante caché:
-
-```python
-async def _load_agent_tools(self, tenant_id: str, agent_id: str, tool_names: List[str], ctx: Context = None):
-    """Carga herramientas para un agente con soporte de caché."""
-    # Clave de caché específica para esta combinación de herramientas
-    tool_config_key = hashlib.md5(f"{agent_id}:{','.join(sorted(tool_names))}".encode()).hexdigest()
-    
-    # Intentar recuperar configuración de herramientas de caché
-    # CORRECTO: Usar Cache-Aside para configuraciones de herramientas
-    tools_config, metrics = await get_with_cache_aside(
-        data_type="agent_tools_config",
-        resource_id=tool_config_key,
-        tenant_id=tenant_id,
-        fetch_from_db_func=lambda: self._fetch_tools_config_from_db(tenant_id, agent_id, tool_names),
-        generate_func=None,  # No generamos config, solo la recuperamos
-        ttl=CacheManager.ttl_standard
-    )
-    
-    # Inicializar herramientas con la configuración
-    tools = []
-    for tool_name, config in tools_config.items():
-        if tool_name in self.tool_registry:
-            tool_class = self.tool_registry[tool_name]
-            tools.append(tool_class(config=config, ctx=ctx))
-    
-    return tools
-```
-
-## 1.2.9 Buenas Prácticas y Errores Comunes a Evitar
-
-### Errores Comunes
-
-1. ❌ **No usar `rpush` como método estático de CacheManager**:
+1. **Uso de get_with_cache_aside para lógica completa de caché**
    ```python
-   # INCORRECTO
-   await CacheManager.rpush(list_name, value, tenant_id)
+   result, metrics = await get_with_cache_aside(
+       data_type="agent_config",
+       resource_id=agent_id,
+       tenant_id=tenant_id,
+       fetch_from_db_func=fetch_config_from_db,
+       generate_func=None,  # Sin generación automática para configuraciones
+       ttl=CacheManager.ttl_standard
+   )
+   ```
+
+2. **Invalidación explícita cuando los datos cambian**
+   ```python
+   # Después de actualizar la configuración en la base de datos
+   await CacheManager.invalidate(
+       tenant_id=tenant_id,
+       data_type="agent_config",
+       resource_id=agent_id
+   )
+   ```
+
+3. **Uso de TTLs adecuados por tipo de datos**
+   ```python
+   # Datos que raramente cambian
+   await CacheManager.set(data_type="embedding", ..., ttl=CacheManager.ttl_extended)
    
-   # CORRECTO 
+   # Configuraciones que pueden cambiar
+   await CacheManager.set(data_type="agent_config", ..., ttl=CacheManager.ttl_standard)
+   
+   # Resultados de consultas temporales
+   await CacheManager.set(data_type="query_result", ..., ttl=CacheManager.ttl_short)
+   ```
+
+4. **Estandarización de metadatos con helper centralizado**
+   ```python
+   standardized_metadata = standardize_llama_metadata(
+       metadata=original_metadata,
+       tenant_id=tenant_id,
+       agent_id=agent_id,
+       conversation_id=conversation_id
+   )
+   ```
+
+### Errores Comunes a Evitar
+
+1. ❌ **Uso incorrecto de métodos estáticos vs de instancia**
+   ```python
+   # INCORRECTO: Intentar usar rpush como método estático
+   await CacheManager.rpush(list_name, value, tenant_id)  # Error
+   
+   # CORRECTO: Usar rpush como método de instancia
    await CacheManager.get_instance().rpush(list_name, value, tenant_id)
    ```
 
-2. ❌ **No mezclar niveles incorrectos de la jerarquía de caché**:
+2. ❌ **Reimplementación manual del patrón Cache-Aside**
    ```python
-   # INCORRECTO (mezclando tenant_id y agent_id en resource_id)
-   await CacheManager.set("config", f"{tenant_id}_{agent_id}", value)
-   
-   # CORRECTO (usando parámetros separados)
-   await CacheManager.set("agent_config", agent_id, value, tenant_id=tenant_id)
+   # INCORRECTO: Implementar manualmente el patrón
+   value = await CacheManager.get(data_type, resource_id, tenant_id)
+   if not value:
+       value = await fetch_from_db(resource_id)
+       if value:
+           await CacheManager.set(data_type, resource_id, value, tenant_id)
    ```
 
-3. ❌ **No usar Cache-Aside para datos que vienen del frontend**:
+3. ❌ **Omisión del tenant_id en operaciones de caché**
    ```python
-   # INCORRECTO
-   config, _ = await get_with_cache_aside("config", id, tenant_id, 
-                                       lambda: frontend_provided_config)
+   # INCORRECTO: Omitir tenant_id
+   await CacheManager.get(data_type, resource_id)  # Sin tenant_id
+   ```
+
+4. ❌ **Uso de TTLs hardcodeados en lugar de constantes**
+   ```python
+   # INCORRECTO: Hardcodear TTL
+   await CacheManager.set(data_type, resource_id, value, tenant_id, ttl=3600)
    
-   # CORRECTO
-   await CacheManager.set("config", id, frontend_provided_config, tenant_id)
+   # CORRECTO: Usar constantes estandarizadas
+   await CacheManager.set(data_type, resource_id, value, tenant_id, ttl=CacheManager.ttl_standard)
+   ```
+
+5. ❌ **Omisión de tracking de métricas**
+   ```python
+   # INCORRECTO: No realizar seguimiento de métricas importantes
+   # Implementar operaciones de caché sin registro de métricas
+   
+   # CORRECTO: Integrar con el sistema de métricas
+   result, metrics = await get_with_cache_aside(...) 
+   # metrics contiene valores como cache_hit, latency_ms, etc.
    ```
 
 ### Buenas Prácticas
 
 1. ✅ **Tener en cuenta la naturaleza de los datos para TTL**:
-   - Usar `ttl_extended` (24h) para memoria, embeddings y elementos costosos
    - Usar `ttl_standard` (1h) para configuraciones y metadatos
    - Usar `ttl_short` (5min) para estados temporales y resultados de consultas
 
