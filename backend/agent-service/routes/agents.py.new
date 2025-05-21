@@ -386,10 +386,10 @@ async def list_conversations(
     """
     tenant_id = ctx.get_tenant_id()
     
-    # Create agent service instance
-    agent_service = AgentService()
+    # Obtener instancia del servicio de agentes
+    agent_service = LangChainAgentService()
     
-    # Check if agent exists and belongs to the tenant
+    # Verificar si el agente existe y pertenece al tenant
     existing_agent = await agent_service.get_agent_by_id(agent_id, tenant_id)
     
     if not existing_agent:
@@ -428,10 +428,10 @@ async def get_conversation(
     """
     tenant_id = ctx.get_tenant_id()
     
-    # Create agent service instance
-    agent_service = AgentService()
+    # Obtener instancia del servicio de agentes
+    agent_service = LangChainAgentService()
     
-    # Check if agent exists and belongs to the tenant
+    # Verificar si el agente existe y pertenece al tenant
     existing_agent = await agent_service.get_agent_by_id(agent_id, tenant_id)
     
     if not existing_agent:
@@ -451,10 +451,10 @@ async def get_conversation(
     
     return {
         "success": True,
-        "message": "Conversation messages retrieved successfully",
+        "message": "Conversation retrieved successfully",
         "data": {
-            "agent_id": agent_id,
             "conversation_id": conversation_id,
+            "agent_id": agent_id,
             "messages": messages
         }
     }

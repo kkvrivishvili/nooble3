@@ -9,6 +9,7 @@ import time
 import sys
 import json
 import hashlib
+import uuid
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 
@@ -224,13 +225,15 @@ class ConversationMemoryManager:
                     }
                 )
             
-            # Registrar métrica de tamaño para análisis de rendimiento
-            await track_performance_metric(
-                metric_type="cache_object_size",
-                value=size_bytes,
+            # Registrar métrica de tamaño para análisis de rendimiento usando track_cache_metrics
+            await track_cache_metrics(
+                data_type=data_type,
                 tenant_id=tenant_id,
+                operation="size",
+                hit=True,
+                latency_ms=0,
                 metadata={
-                    "data_type": data_type,
+                    "size_bytes": size_bytes,
                     "size_kb": round(size_bytes / 1024, 2)
                 }
             )
@@ -299,6 +302,8 @@ class ConversationMemoryManager:
                 
             # Registrar métricas
             latency_ms = (time.time() - start_time) * 1000
+            logger.info(f"Memoria persistida en BD: {conversation_id}", 
+                       extra={"tenant_id": tenant_id, "conversation_id": conversation_id})
             logger.info(
                 f"Memory persisted to DB: {conversation_id}",
                 extra={
@@ -581,52 +586,4 @@ class ConversationMemoryManager:
             logger.warning(f"Error reconstruyendo caché de mensajes: {str(e)}",
                          extra={"tenant_id": tenant_id, "conversation_id": conversation_id, "error": str(e)})
     
-    @handle_errors(error_type="service", log_traceback=True)
-    async def _persist_memory_to_db(self, tenant_id: str, conversation_id: str, memory_dict: Dict[str, Any]) -> None:
-        """
-        Persiste memoria a la base de datos.
-        
-        Args:
-            tenant_id: ID del tenant
-            conversation_id: ID de la conversación
-            memory_dict: Diccionario con memoria a persistir
-        """
-        try:
-            table_name = self.settings.TABLES["conversation_memories"]
-            supabase = await get_supabase_client()
-            
-            # Preparar registro para BD
-            record = {
-                "tenant_id": tenant_id,
-                "conversation_id": conversation_id,
-                "messages": memory_dict.get("messages", []),
-                "metadata": memory_dict.get("metadata", {}),
-                "updated_at": datetime.now().isoformat()
-            }
-            
-            # Verificar si existe o es nuevo
-            result = (await supabase.table(table_name)
-                     .select("conversation_id")
-                     .eq("tenant_id", tenant_id)
-                     .eq("conversation_id", conversation_id)
-                     .execute())
-                     
-            if result.data and len(result.data) > 0:
-                # Actualizar existente
-                await supabase.table(table_name)\
-                    .update(record)\
-                    .eq("tenant_id", tenant_id)\
-                    .eq("conversation_id", conversation_id)\
-                    .execute()
-            else:
-                # Insertar nuevo
-                record["created_at"] = datetime.now().isoformat()
-                await supabase.table(table_name).insert(record).execute()
-                
-            logger.info(f"Memoria persistida en BD: {conversation_id}", 
-                       extra={"tenant_id": tenant_id, "conversation_id": conversation_id})
-                       
-        except Exception as e:
-            # Log del error pero no re-levantar la excepción para no interrumpir el flujo
-            logger.error(f"Error persistiendo memoria en BD: {str(e)}", 
-                        extra={"tenant_id": tenant_id, "conversation_id": conversation_id, "error": str(e)})
+

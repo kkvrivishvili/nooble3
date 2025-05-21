@@ -1040,6 +1040,42 @@ class LangChainAgentService:
         return True
         
     @handle_errors(error_type="service", log_traceback=True)
+    @with_context(tenant=True, agent=True, conversation=True)
+    async def process_chat(self, agent: Agent, chat_request: ChatRequest, tenant_id: str = None, ctx: Context = None) -> ChatResponse:
+        """
+        Procesa una solicitud de chat con un agente.
+        
+        Este método sirve como punto de entrada principal para el chat con agentes
+        y asegura la compatibilidad con las rutas existentes.
+        
+        Args:
+            agent: Objeto Agent con la información del agente
+            chat_request: Solicitud de chat con mensaje y metadata
+            tenant_id: ID del tenant (opcional, será obtenido del contexto si no se proporciona)
+            ctx: Contexto de la operación
+            
+        Returns:
+            ChatResponse: Respuesta del chat con mensaje, metadatos y fuentes
+        """
+        # Asegurar que el tenant_id esté disponible (del parámetro o del contexto)
+        tenant_id = tenant_id or ctx.get_tenant_id()
+        
+        # Asegurar que los IDs de conversación y agente estén en el contexto
+        if ctx and not ctx.get_agent_id():
+            ctx.set_agent_id(agent.agent_id)
+            
+        if ctx and not ctx.get_conversation_id() and chat_request.conversation_id:
+            ctx.set_conversation_id(chat_request.conversation_id)
+        
+        # Si hay colecciones específicas, configurar el contexto
+        if chat_request.collection_ids and len(chat_request.collection_ids) > 0:
+            # Si hay varias colecciones, usar la primera para el contexto principal
+            ctx.set_collection_id(chat_request.collection_ids[0])
+        
+        # Delegar la ejecución real al método execute_agent
+        return await self.execute_agent(agent, chat_request, ctx)
+            
+    @handle_errors(error_type="service", log_traceback=True)
     @with_context(tenant=True, agent=True)
     async def get_agent_metrics(self, agent_id: str, period: str = "day", ctx: Context = None) -> Dict[str, Any]:
         """
