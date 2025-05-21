@@ -312,15 +312,30 @@ async def chat_with_agent(
     if collection_ids:
         # Validar las colecciones accesibles para este tenant
         validated_collections = []
+        service_registry = ServiceRegistry()
+        
         for collection_id in collection_ids:
-            # Aquí se podría usar CollectionStrategyConfig en el futuro
-            # para seleccionar las mejores colecciones automáticamente
-            is_valid = await agent_service.validate_collection_access(
-                collection_id=collection_id,
-                tenant_id=tenant_id
-            )
-            if is_valid:
-                validated_collections.append(collection_id)
+            try:
+                # Usar directamente ServiceRegistry para llamar al query-service
+                # que es quien debe tener la responsabilidad de validar el acceso
+                response = await service_registry.call_query_service(
+                    endpoint=f"internal/collections/{collection_id}/access",
+                    method="GET",
+                    tenant_id=tenant_id,
+                    ctx=ctx,
+                    operation_type="collection_access"
+                )
+                
+                # Procesar respuesta
+                has_access = response.get("data", {}).get("has_access", False)
+                
+                if has_access:
+                    validated_collections.append(collection_id)
+                    
+            except Exception as e:
+                logger.warning(f"Error verificando acceso a colección {collection_id} para tenant {tenant_id}: {str(e)}")
+                # En caso de error, omitir esta colección por seguridad
+                continue
         
         # Actualizar la solicitud con las colecciones validadas
         chat_request.collection_ids = validated_collections

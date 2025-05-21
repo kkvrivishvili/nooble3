@@ -3,6 +3,7 @@ Internal routes for service-to-service communication.
 """
 
 import logging
+import time
 from typing import Dict, List, Optional, Any
 
 from fastapi import APIRouter, Depends, Body, HTTPException
@@ -13,6 +14,7 @@ from common.errors import handle_errors
 from common.models.base import BaseResponse
 
 from services import LangChainAgentService
+from services.service_registry import ServiceRegistry
 from tools.base import ToolResult
 from tools.registry import ToolRegistry
 
@@ -171,13 +173,67 @@ async def register_tool(
 
 
 @router.post("/agent-health", response_model=InternalAgentResponse)
-@handle_errors(error_type="simple", log_traceback=False)
-async def agent_health():
+@handle_errors(error_type="service", log_traceback=True)
+async def agent_health(
+    agent_service: LangChainAgentService = Depends(),
+):
     """
     Internal health check endpoint for service registry.
+    Verifica la salud del servicio de agentes y sus dependencias críticas.
+    
+    Returns:
+        InternalAgentResponse: Respuesta con el estado del servicio y sus dependencias
     """
+    start_time = time.time()
+    dependencies = []
+    service_registry = ServiceRegistry()
+    
+    # Verificar servicios dependientes críticos: query y embedding
+    critical_services = ["query", "embedding"]
+    all_healthy = True
+    
+    for service_name in critical_services:
+        try:
+            service_status = await service_registry.check_service_health(service_name)
+            service_healthy = service_status.get("status") == "available"
+            
+            dependencies.append({
+                "name": service_name,
+                "status": "healthy" if service_healthy else "degraded",
+                "message": service_status.get("message", ""),
+                "latency_ms": round((time.time() - start_time) * 1000, 2)
+            })
+            
+            if not service_healthy:
+                all_healthy = False
+                
+        except Exception as e:
+            dependencies.append({
+                "name": service_name,
+                "status": "unavailable",
+                "message": str(e),
+                "latency_ms": round((time.time() - start_time) * 1000, 2)
+            })
+            all_healthy = False
+    
+    # Verificar herramientas disponibles
+    try:
+        tool_count = len(agent_service.tool_registry.available_tools)
+        tool_status = "healthy" if tool_count > 0 else "degraded"
+    except Exception as e:
+        tool_status = "unavailable"
+        tool_count = 0
+    
     return InternalAgentResponse(
-        success=True,
-        message="Agent service is healthy",
-        data={"status": "ok"}
+        success=all_healthy,
+        message="Agent service is healthy" if all_healthy else "Agent service is degraded",
+        data={
+            "status": "ok" if all_healthy else "degraded",
+            "dependencies": dependencies,
+            "tools": {
+                "status": tool_status,
+                "count": tool_count
+            },
+            "latency_ms": round((time.time() - start_time) * 1000, 2)
+        }
     )

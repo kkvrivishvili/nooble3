@@ -385,84 +385,132 @@ class ServiceRegistry:
             service_name: Nombre del servicio a verificar
             
         Returns:
-            Dict[str, str]: Estado del servicio
+            Dict[str, str]: Estado del servicio con formato {status, message}
         """
-        if service_name not in self.service_urls:
-            return {"status": "unavailable", "message": f"Servicio {service_name} no configurado"}
+        try:
+            # Obtener configuración del servicio utilizando el registry
+            service_config = self.registry.get_service_config(service_name)
+        except ValueError:
+            return {"status": "unavailable", "message": f"Servicio {service_name} no registrado"}
             
-        base_url = self.service_urls[service_name]
-        url = f"{base_url}/health"
+        # Construir URL para health check usando la configuración del servicio
+        url = f"{service_config.base_url}/{service_config.health_check_endpoint.lstrip('/')}"    
         
         try:
-            # Usar health_check como tipo de operación para timeout corto
-            response = await call_service(
+            # Crear headers básicos con identificación de health check
+            headers = {"x-service-check": "true"}
+            
+            # Usar método centralizado con timeout corto
+            response = await self._make_actual_call(
                 url=url,
                 method="GET",
+                data=None,
+                params=None,
+                headers=headers,
                 operation_type="health_check"
             )
             
+            # Actualizar los registros de estado de salud
+            self._last_health_check[service_name] = datetime.utcnow()
+            
+            # Evaluar respuesta y actualizar contadores
             if response.get("status") == "ok":
+                self._failed_health_checks[service_name] = 0
                 return {"status": "available", "message": "Servicio disponible"}
             else:
-                return {"status": "degraded", "message": "Servicio responde pero con degradación"}
+                self._failed_health_checks[service_name] += 1
+                return {
+                    "status": "degraded", 
+                    "message": f"Servicio degradado. Fallos consecutivos: {self._failed_health_checks[service_name]}"
+                }
         except Exception as e:
-            logger.warning(f"Error verificando servicio {service_name}: {str(e)}")
-            return {"status": "unavailable", "message": f"Error: {str(e)}"}
+            # Actualizar contador de fallos en caso de error
+            self._last_health_check[service_name] = datetime.utcnow()
+            self._failed_health_checks[service_name] = self._failed_health_checks.get(service_name, 0) + 1
+            
+            failures = self._failed_health_checks[service_name]
+            logger.warning(f"Error verificando servicio {service_name} (Fallo #{failures}): {str(e)}")
+            
+            return {
+                "status": "unavailable", 
+                "message": f"Error: {str(e)}. Fallos consecutivos: {failures}"
+            }
     
     @handle_errors(error_type="service", log_traceback=True)
     async def get_collections(
         self, 
         tenant_id: str,
         ctx: Optional[Context] = None
-    ) -> Dict[str, Any]:
+    ) -> List[CollectionMetadata]:
         """
-        Obtiene las colecciones disponibles para un tenant.
+        Obtiene las colecciones disponibles para un tenant utilizando modelos estandarizados.
         
         Args:
             tenant_id: ID del tenant
             ctx: Contexto de la operación
             
         Returns:
-            Dict[str, Any]: Lista de colecciones
+            List[CollectionMetadata]: Lista de colecciones tipadas
         """
         # Clave de caché para resultados
         cache_key = f"collections:{tenant_id}"
         
-        # Verificar caché primero
-        cached_collections = await CacheManager.get(
-            data_type="collections",
-            resource_id=cache_key,
-            tenant_id=tenant_id
-        )
-        
-        if cached_collections:
-            return cached_collections
-            
-        # Si no está en caché, obtener de query service
-        try:
+        # Utilizar patrón Cache-Aside estandarizado
+        async def fetch_collections():
             response = await self.call_query_service(
                 endpoint="collections",
                 method="GET",
                 tenant_id=tenant_id,
                 ctx=ctx,
-                operation_type="default"
+                operation_type="collection_list"
             )
             
-            # Guardar en caché por un tiempo limitado
-            if response.get("success", False):
-                await CacheManager.set(
-                    data_type="collections",
-                    resource_id=cache_key,
-                    value=response,
-                    tenant_id=tenant_id,
-                    ttl=CacheManager.ttl_standard  # 1 hora
-                )
+            if not response.get("success", False):
+                error_msg = response.get("error", {}).get("message", "Unknown error")
+                logger.error(f"Error obteniendo colecciones: {error_msg}")
+                raise ServiceError("CollectionFetchError", error_msg)
                 
-            return response
+            # Convertir datos a modelo tipado CollectionMetadata
+            raw_collections = response.get("data", {}).get("collections", [])
+            collections = []
+            
+            for raw_collection in raw_collections:
+                try:
+                    collection = CollectionMetadata(
+                        collection_id=raw_collection.get("id"),
+                        tenant_id=tenant_id,
+                        name=raw_collection.get("name", "Colección sin nombre"),
+                        description=raw_collection.get("description"),
+                        collection_type=CollectionType(raw_collection.get("type", "document")),
+                        document_count=raw_collection.get("document_count", 0),
+                        chunk_count=raw_collection.get("chunk_count", 0),
+                        created_at=raw_collection.get("created_at"),
+                        updated_at=raw_collection.get("updated_at"),
+                        embedding_model=raw_collection.get("embedding_model", "text-embedding-3-small"),
+                        embedding_model_type=raw_collection.get("embedding_model_type", "openai"),
+                        embedding_dimensions=raw_collection.get("embedding_dimensions", 1536),
+                        is_public=raw_collection.get("is_public", False),
+                        tags=raw_collection.get("tags"),
+                        metadata=raw_collection.get("metadata")
+                    )
+                    collections.append(collection)
+                except Exception as e:
+                    logger.warning(f"Error procesando colección {raw_collection.get('id')}: {str(e)}")
+            
+            return collections
+        
+        # Usar patrón Cache-Aside para obtener las colecciones
+        try:
+            collections = await CacheManager.get_with_cache_aside(
+                data_type="collections",
+                resource_id=cache_key,
+                fetch_function=fetch_collections,
+                tenant_id=tenant_id,
+                ttl=CacheManager.ttl_short  # 5 minutos
+            )
+            
+            return collections
         except Exception as e:
-            logger.error(f"Error obteniendo colecciones: {str(e)}")
-            return {
-                "success": False,
-                "message": f"Error obteniendo colecciones: {str(e)}",
-                "collections": []
-            }
+            logger.error(f"Error obteniendo colecciones para tenant {tenant_id}: {str(e)}")
+            # Retornar lista vacía en lugar de fallar completamente
+            return []

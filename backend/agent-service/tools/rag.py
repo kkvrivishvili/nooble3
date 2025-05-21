@@ -42,8 +42,133 @@ class RAGQueryTool(BaseTool):
     metadata_fields: Optional[List[str]] = None
     cached_responses: bool = True
     
+    # Variables para tracking interno
+    _execution_metadata: Optional[ToolExecutionMetadata] = None
+    
     class Config:
         arbitrary_types_allowed = True
+        
+    @handle_errors(error_type="service", log_traceback=True)
+    async def execute(
+        self, 
+        parameters: Dict[str, Any],
+        tenant_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        ctx: Optional[Context] = None
+    ) -> ToolResult:
+        """
+        Ejecuta la herramienta con parámetros estandarizados.
+        
+        Args:
+            parameters: Parámetros para la herramienta
+            tenant_id: ID del tenant
+            agent_id: ID del agente 
+            conversation_id: ID de la conversación
+            ctx: Contexto de la operación
+            
+        Returns:
+            ToolResult: Resultado de la ejecución con datos tipados
+        """
+        # Asignar contexto
+        self.tenant_id = tenant_id or (ctx.get_tenant_id(False) if ctx else None)
+        self.agent_id = agent_id
+        self.conversation_id = conversation_id
+        self.ctx = ctx
+        
+        # Extraer parámetros para la consulta
+        query = parameters.get("query")
+        if not query:
+            return ToolResult(
+                success=False,
+                error="Se requiere un parámetro 'query' para la consulta RAG",
+                execution_time=0.0,
+                metadata={
+                    "tool_name": self.name,
+                    "collection_id": self.collection_id
+                }
+            )
+            
+        # Resto de parámetros opcionales
+        similarity_top_k = parameters.get("similarity_top_k", None)
+        threshold = parameters.get("threshold", None)
+        include_sources = parameters.get("include_sources", None)
+        
+        # Iniciar tracking de ejecución
+        start_time = time.time()
+        execution_id = str(uuid.uuid4())
+        
+        self._execution_metadata = ToolExecutionMetadata(
+            tool_name=self.name,
+            execution_id=execution_id,
+            tenant_id=self.tenant_id,
+            agent_id=self.agent_id,
+            conversation_id=self.conversation_id,
+            operation=OPERATION_AGENT_RAG,
+            start_time=start_time,
+            parameters={
+                "query": query,
+                "collection_id": self.collection_id,
+                "top_k": similarity_top_k or self.similarity_top_k,
+                "threshold": threshold or self.threshold
+            }
+        )
+        
+        # Ejecutar la herramienta
+        try:
+            result = await self._arun(
+                query=query,
+                similarity_top_k=similarity_top_k,
+                threshold=threshold,
+                include_sources=include_sources
+            )
+            
+            # Calcular tiempo de ejecución
+            execution_time = time.time() - start_time
+            
+            # Actualizar metadatos de ejecución
+            self._execution_metadata.end_time = time.time()
+            self._execution_metadata.success = True
+            self._execution_metadata.execution_time = execution_time
+            
+            # Construir ToolResult
+            return ToolResult(
+                success=True,
+                data=result,
+                execution_time=execution_time,
+                metadata={
+                    "tool_name": self.name,
+                    "collection_id": self.collection_id,
+                    "execution_id": execution_id,
+                    "similarity_top_k": similarity_top_k or self.similarity_top_k,
+                    "threshold": threshold or self.threshold,
+                    "token_usage": self._execution_metadata.token_usage
+                }
+            )
+        except Exception as e:
+            # Calcular tiempo de ejecución
+            execution_time = time.time() - start_time
+            
+            # Actualizar metadatos de ejecución
+            if self._execution_metadata:
+                self._execution_metadata.end_time = time.time()
+                self._execution_metadata.success = False
+                self._execution_metadata.error = str(e)
+                self._execution_metadata.execution_time = execution_time
+            
+            logger.error(f"Error ejecutando RAGQueryTool: {str(e)}")
+            
+            # Construir ToolResult con error
+            return ToolResult(
+                success=False,
+                error=str(e),
+                execution_time=execution_time,
+                metadata={
+                    "tool_name": self.name,
+                    "collection_id": self.collection_id,
+                    "execution_id": execution_id
+                }
+            )
     
     @handle_errors(error_type="service", log_traceback=True)
     async def _arun(

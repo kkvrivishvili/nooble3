@@ -49,6 +49,18 @@ DEFAULT_MAX_TOOLS_PER_AGENT = 5
 DEFAULT_MAX_NODES_PER_FLOW = 20
 DEFAULT_CONVERSATION_HISTORY_SIZE = 10
 
+# Token Types
+TOKEN_TYPE_LLM = "llm"
+TOKEN_TYPE_EMBEDDING = "embedding"
+TOKEN_TYPE_TOKENIZATION = "tokenization"
+
+# Operation Types
+OPERATION_AGENT_CHAT = "agent_chat"
+OPERATION_AGENT_RAG = "agent_rag"
+OPERATION_AGENT_FLOW = "agent_flow"
+OPERATION_AGENT_TOOL = "agent_tool"
+OPERATION_AGENT_MULTI = "agent_multi"
+
 # Table names
 TABLE_AGENTS = "agents"
 TABLE_TOOLS = "tools"
