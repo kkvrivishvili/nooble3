@@ -25,11 +25,21 @@ Este documento proporciona una referencia detallada de los modelos de datos util
    - [FlowExecution](#flowexecution)
    - [FlowExecutionState](#flowexecutionstate)
 
-4. [Ejemplos de API](#ejemplos-de-api)
+4. [Modelos de Sistema Multi-Agente](#modelos-de-sistema-multi-agente)
+   - [AgentOrchestratorConfig](#agentorchestratorconfig)
+   - [MultiAgentExecutionRequest](#multiagentexecutionrequest)
+   - [MultiAgentExecutionResponse](#multiagentexecutionresponse)
+   - [AgentTeamConfig](#agentteamconfig)
+   - [SpecializedAgentTemplate](#specializedagenttemplate)
+   - [AgentWorkflowConfig](#agentworkflowconfig)
+   - [AgentRole](#agentrole)
+
+5. [Ejemplos de API](#ejemplos-de-api)
    - [Crear un Agente](#ejemplo-crear-un-agente)
    - [Actualizar un Agente](#ejemplo-actualizar-un-agente)
    - [Chatear con un Agente](#ejemplo-chatear-con-un-agente)
    - [Listar Conversaciones](#ejemplo-listar-conversaciones)
+   - [Ejecutar Sistema Multi-Agente](#ejemplo-ejecutar-sistema-multi-agente)
 
 ---
 
@@ -253,6 +263,124 @@ Modelo para una ejecución de flujo.
 | `metadata` | object | No | Metadatos adicionales de la ejecución |
 
 ---
+
+## Modelos de Sistema Multi-Agente
+
+### AgentOrchestratorConfig
+
+Configuración para el orquestador de agentes múltiples.
+
+| Campo | Tipo | Requerido | Descripción |
+|-------|------|-----------|-------------|
+| `execution_type` | string | Sí | Tipo de ejecución: "sequential", "parallel" o "workflow" |
+| `agent_ids` | array[string] | Sí | Lista de IDs de agentes a ejecutar |
+| `wait_for_completion` | boolean | No (default: true) | Si se debe esperar a que todos los agentes completen su ejecución |
+| `timeout` | integer | No (default: 300) | Tiempo máximo de espera en segundos |
+| `metadata` | object | No | Metadatos adicionales para la ejecución |
+| `workflow_id` | string | No | ID del flujo de trabajo (requerido para execution_type="workflow") |
+
+### MultiAgentExecutionRequest
+
+Modelo para solicitar la ejecución de múltiples agentes.
+
+| Campo | Tipo | Requerido | Descripción |
+|-------|------|-----------|-------------|
+| `input` | string | Sí | Texto de entrada para iniciar la ejecución |
+| `orchestrator_config` | AgentOrchestratorConfig | Sí | Configuración del orquestador |
+| `conversation_id` | string | No | ID de conversación para continuar una conversación existente |
+| `user_id` | string | No | ID del usuario, si aplica |
+| `collection_ids` | array[string] | No | IDs de colecciones para RAG (sobreescribe las del agente) |
+| `metadata` | object | No | Metadatos adicionales de la solicitud |
+
+#### MultiAgentExecutionResponse
+
+Modelo para la respuesta de una ejecución multi-agente.
+
+| Campo | Tipo | Requerido | Descripción |
+|-------|------|-----------|-------------|
+| `success` | boolean | Sí | Si la operación fue exitosa |
+| `final_output` | string | Sí | Resultado final de la ejecución |
+| `execution_results` | object | Sí | Resultados detallados de cada agente |
+| `metadata` | object | Sí | Metadatos de la ejecución |
+| `conversation_id` | string | Sí | ID de la conversación |
+| `error` | string | No | Mensaje de error (si success=false) |
+| `is_async` | boolean | No | Si la operación es asíncrona |
+| `async_job_id` | string | No | ID del trabajo asíncrono (si is_async=true) |
+
+### AgentTeamConfig
+
+Configuración para un equipo de agentes.
+
+| Campo | Tipo | Requerido | Descripción |
+|-------|------|-----------|-------------|
+| `supervisor_config` | object | Sí | Configuración del agente supervisor |
+| `agent_configs` | object | Sí | Configuraciones de los agentes miembros del equipo |
+| `team_name` | string | No (default: "Equipo de agentes") | Nombre del equipo |
+| `team_description` | string | No | Descripción del equipo |
+| `metadata` | object | No | Metadatos adicionales |
+
+El campo `supervisor_config` contiene:
+
+| Campo | Tipo | Requerido | Descripción |
+|-------|------|-----------|-------------|
+| `llm_model` | string | Sí | Modelo LLM a utilizar para el supervisor |
+| `system_prompt` | string | Sí | Prompt de sistema para el supervisor |
+| `name` | string | No (default: "Supervisor") | Nombre del supervisor |
+| `description` | string | No | Descripción del supervisor |
+| `temperature` | float | No (default: 0.2) | Temperatura para respuestas del supervisor |
+
+El campo `agent_configs` es un diccionario donde las claves son los IDs de los agentes y los valores contienen:
+
+| Campo | Tipo | Requerido | Descripción |
+|-------|------|-----------|-------------|
+| `llm_model` | string | Sí | Modelo LLM a utilizar para el agente |
+| `system_prompt` | string | Sí | Prompt de sistema para el agente |
+| `name` | string | No | Nombre descriptivo del agente |
+| `description` | string | No | Descripción del agente |
+| `tools_config` | object | No | Configuración de herramientas para el agente |
+| `max_iterations` | integer | No (default: 5) | Número máximo de iteraciones para el agente |
+| `default_collection_id` | string | No | ID de colección por defecto para RAG |
+| `embedding_model` | string | No | Modelo de embedding a utilizar |
+
+### SpecializedAgentTemplate
+
+Modelo para plantillas de agentes especializados predefinidos.
+
+| Campo | Tipo | Requerido | Descripción |
+|-------|------|-----------|-------------|
+| `template_id` | string | Sí | Identificador de la plantilla (e.g., "researcher", "writer", "analyst") |
+| `name` | string | No | Nombre personalizado para el agente (si no se proporciona, se usa el del template) |
+| `description` | string | No | Descripción personalizada (si no se proporciona, se usa la del template) |
+| `overrides` | object | No | Parámetros que sobreescriben la configuración por defecto |
+| `collection_ids` | array[string] | No | IDs de colecciones para RAG |
+| `metadata` | object | No | Metadatos adicionales |
+
+### AgentWorkflowConfig
+
+Configuración para un flujo de trabajo de agentes.
+
+| Campo | Tipo | Requerido | Descripción |
+|-------|------|-----------|-------------|
+| `workflow_id` | string | Sí | ID único del flujo de trabajo |
+| `name` | string | Sí | Nombre descriptivo del flujo de trabajo |
+| `description` | string | No | Descripción del flujo de trabajo |
+| `execution_graph` | object | Sí | Grafo de ejecución que define el flujo entre agentes |
+| `metadata` | object | No | Metadatos adicionales |
+
+### AgentRole
+
+Enumeración que define roles específicos para agentes especializados.
+
+| Valor | Descripción |
+|-------|-------------|
+| `researcher` | Especializado en búsqueda y análisis de información |
+| `writer` | Experto en redacción y generación de contenido |
+| `analyst` | Enfocado en análisis de datos y estadísticas |
+| `critic` | Especializado en evaluación y crítica de contenido |
+| `creative` | Experto en soluciones creativas e ideas originales |
+| `planner` | Enfocado en planificación y organización |
+| `code_assistant` | Especializado en programación y código |
+| `custom` | Rol personalizado definido por el usuario |
 
 ## Ejemplos de API
 
