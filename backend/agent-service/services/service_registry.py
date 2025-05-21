@@ -175,12 +175,21 @@ class ServiceRegistry:
             # Usar patrón Cache-Aside para obtener respuesta
             start_time = time.time()
             try:
-                response = await CacheManager.get_with_cache_aside(
+                # Usar la función importada get_with_cache_aside según los estándares
+                from common.cache import get_with_cache_aside
+                
+                # Función async para fetch desde servicios
+                async def fetch_from_service():
+                    return await self._make_actual_call(url, method, data, params, headers, operation_type)
+                
+                response, metrics = await get_with_cache_aside(
                     data_type="service_response",
                     resource_id=cache_key,
-                    fetch_function=lambda: self._make_actual_call(url, method, data, params, headers, operation_type),
                     tenant_id=tenant_id,
-                    ttl=cache_ttl or CacheManager.ttl_short
+                    fetch_from_db_func=None,  # No hay DB fetch en este caso
+                    generate_func=fetch_from_service,
+                    ttl=cache_ttl or CacheManager.ttl_short,
+                    idempotency_key=idempotency_key  # Usar para evitar doble conteo
                 )
                 
                 # Registrar latencia

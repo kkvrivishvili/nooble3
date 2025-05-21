@@ -387,7 +387,7 @@ async def list_conversations(
     tenant_id = ctx.get_tenant_id()
     
     # Create agent service instance
-    agent_service = AgentService()
+    agent_service = LangChainAgentService()
     
     # Check if agent exists and belongs to the tenant
     existing_agent = await agent_service.get_agent_by_id(agent_id, tenant_id)
@@ -429,7 +429,7 @@ async def get_conversation(
     tenant_id = ctx.get_tenant_id()
     
     # Create agent service instance
-    agent_service = AgentService()
+    agent_service = LangChainAgentService()
     
     # Check if agent exists and belongs to the tenant
     existing_agent = await agent_service.get_agent_by_id(agent_id, tenant_id)

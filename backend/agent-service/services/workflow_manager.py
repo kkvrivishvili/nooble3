@@ -16,6 +16,8 @@ from common.errors.handlers import handle_errors, ServiceError
 from common.config import get_settings
 from common.tracking import track_cache_metrics
 from common.cache.helpers import standardize_llama_metadata
+from common.db.supabase import get_supabase_client
+from common.db.tables import get_table_name
 
 logger = logging.getLogger(__name__)
 
@@ -424,8 +426,65 @@ class AgentWorkflowManager:
         # No hay más pasos viables
         return None
     
+    @handle_errors(error_type="service", log_traceback=True)
+    async def _persist_workflow_state_to_db(self, tenant_id: str, workflow_id: str, state: Dict[str, Any]) -> None:
+        """
+        Persiste el estado del workflow en la base de datos.
+        
+        Args:
+            tenant_id: ID del tenant
+            workflow_id: ID del workflow
+            state: Estado del workflow a persistir
+        """
+        try:
+            # Usar formato estandarizado para nombres de tablas
+            workflow_table = get_table_name("workflows")
+            state_table = get_table_name("workflow_states")
+            supabase = get_supabase_client()
+            
+            # Buscar si ya existe un registro de estado
+            result = await supabase.table(state_table)\
+                .select("id")\
+                .eq("tenant_id", tenant_id)\
+                .eq("workflow_id", workflow_id)\
+                .execute()
+                
+            # Preparar datos para inserción/actualización
+            state_data = {
+                "tenant_id": tenant_id,
+                "workflow_id": workflow_id,
+                "state": state,
+                "updated_at": datetime.now().isoformat()
+            }
+            
+            # Crear o actualizar
+            if result.data and len(result.data) > 0:
+                # Actualizar registro existente
+                await supabase.table(state_table)\
+                    .update(state_data)\
+                    .eq("tenant_id", tenant_id)\
+                    .eq("workflow_id", workflow_id)\
+                    .execute()
+            else:
+                # Crear nuevo registro
+                state_data["id"] = str(uuid.uuid4())
+                state_data["created_at"] = datetime.now().isoformat()
+                await supabase.table(state_table).insert(state_data).execute()
+                
+            logger.info(f"Estado de workflow persistido: {workflow_id}", 
+                      extra={"tenant_id": tenant_id, "workflow_id": workflow_id})
+                      
+        except Exception as e:
+            # Log del error pero no interrumpir el flujo principal
+            logger.error(f"Error persistiendo estado de workflow: {str(e)}", 
+                       extra={"tenant_id": tenant_id, "workflow_id": workflow_id, "error": str(e)})
+            # No relanzar la excepción para evitar interrumpir el flujo
+    
     def _calculate_progress(self, definition: Dict[str, Any], state: Dict[str, Any]) -> float:
-        """Calcula el progreso del workflow (0-100)."""
+        """Calcula el progreso actual del workflow como porcentaje (0-100)."""
+        if state.get("status") == "completed":
+            return 100.0
+            
         total_steps = len(definition.get("steps", []))
         if total_steps == 0:
             return 100.0

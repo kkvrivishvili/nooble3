@@ -8,6 +8,7 @@ información relevante utilizando modelos estandarizados.
 
 import logging
 import time
+import uuid
 from typing import Dict, Any, List, Optional, Union
 
 from common.context import Context, with_context
@@ -71,7 +72,15 @@ class RAGQueryTool(BaseTool):
             ToolResult: Resultado de la ejecución con datos tipados
         """
         # Asignar contexto
-        self.tenant_id = tenant_id or (ctx.get_tenant_id(False) if ctx else None)
+        self.tenant_id = tenant_id or (ctx.get_tenant_id(validate=True) if ctx else None)
+        if not self.tenant_id:
+            return ToolResult(
+                success=False,
+                error="Se requiere tenant_id para ejecutar herramientas RAG",
+                execution_time=0.0,
+                metadata={"tool_name": self.name}
+            )
+            
         self.agent_id = agent_id
         self.conversation_id = conversation_id
         self.ctx = ctx
