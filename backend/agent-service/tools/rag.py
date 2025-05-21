@@ -19,6 +19,9 @@ from common.cache import CacheManager
 from config import get_settings
 from config.constants import TOKEN_TYPE_LLM, OPERATION_AGENT_RAG
 
+# Constantes adicionales para tracking
+OPERATION_AGENT_RAG_SEARCH = "agent_rag_search"
+
 from services.service_registry import ServiceRegistry
 from tools.base import BaseTool, ToolResult
 from models import (
@@ -283,21 +286,26 @@ class RAGQueryTool(BaseTool):
             
             # Realizar tracking de tokens
             if output_data.token_usage and "total_tokens" in output_data.token_usage:
+                # Generar idempotency_key para evitar doble conteo
+                idempotency_key = f"rag:{self.tenant_id}:{self.agent_id}:{self.conversation_id}:{hash(query)}:{input_data.top_k}"
+                
+                # Usar el patrón estandarizado de tracking de tokens
                 await track_token_usage(
                     tenant_id=self.tenant_id,
                     tokens=output_data.token_usage.get("total_tokens", 0),
                     model=output_data.model,
-                    agent_id=self.agent_id,
-                    conversation_id=self.conversation_id,
-                    collection_id=self.collection_id,
-                    token_type=TOKEN_TYPE_LLM,
+                    token_type=TOKEN_TYPE_LLM,  # Tipo de token estandarizado
                     operation=OPERATION_AGENT_RAG,
                     metadata={
+                        "agent_id": self.agent_id,
+                        "conversation_id": self.conversation_id,
+                        "collection_id": self.collection_id,
                         "query": query,
                         "similarity_top_k": input_data.top_k,
                         "sources_count": len(output_data.sources),
                         "execution_time": execution_metadata.end_time - execution_metadata.start_time
-                    }
+                    },
+                    idempotency_key=idempotency_key  # Añadido para evitar duplicación
                 )
                 
             # Formatear fuentes para la respuesta
@@ -428,6 +436,31 @@ class RAGSearchTool(BaseTool):
             # Actualizar metadatos de ejecución
             execution_metadata.end_time = time.time()
             execution_metadata.success = True
+            execution_metadata.token_usage = data.get("token_usage", {})
+            
+            # Realizar tracking de tokens si hay información
+            if data.get("token_usage") and "total_tokens" in data.get("token_usage", {}):
+                # Generar idempotency_key para evitar doble conteo
+                idempotency_key = f"rag_search:{self.tenant_id}:{self.agent_id}:{self.conversation_id}:{hash(query)}:{input_data.top_k}"
+                
+                # Usar el patrón estandarizado de tracking de tokens
+                await track_token_usage(
+                    tenant_id=self.tenant_id,
+                    tokens=data["token_usage"].get("total_tokens", 0),
+                    model=data.get("model", "unknown"),
+                    token_type=TOKEN_TYPE_LLM,  # Tipo de token estandarizado
+                    operation=OPERATION_AGENT_RAG_SEARCH,
+                    metadata={
+                        "agent_id": self.agent_id,
+                        "conversation_id": self.conversation_id,
+                        "collection_id": self.collection_id,
+                        "query": query,
+                        "limit": input_data.top_k,
+                        "results_count": len(sources),
+                        "execution_time": execution_metadata.end_time - execution_metadata.start_time
+                    },
+                    idempotency_key=idempotency_key  # Añadido para evitar duplicación
+                )
             
             # No hay resultados
             if not sources:

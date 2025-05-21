@@ -599,7 +599,7 @@ class AgentWorkflowManager:
             logger.error(f"Error persistiendo workflow en BD: {str(e)}", 
                         extra={"tenant_id": tenant_id, "workflow_id": workflow_id, "error": str(e)})
     
-    @handle_errors(error_type="service", log_traceback=True)
+    @handle_errors(error_type="database", log_traceback=True)
     async def _persist_workflow_state_to_db(self, tenant_id: str, workflow_id: str, state: Dict[str, Any]) -> None:
         """Persiste el estado actualizado del workflow en la base de datos."""
         try:

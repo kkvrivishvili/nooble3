@@ -16,7 +16,7 @@ from typing import Dict, Any, Optional, List, Callable, Awaitable, Union, TypeVa
 from common.context import Context, with_context
 from common.errors import handle_errors, ServiceError, HTTPServiceError
 from common.utils.http import call_service
-from common.cache import CacheManager
+from common.cache import CacheManager, get_with_cache_aside
 from common.tracking import track_operation_latency
 
 from config import get_settings
@@ -510,12 +510,15 @@ class ServiceRegistry:
         
         # Usar patrón Cache-Aside para obtener las colecciones
         try:
-            collections = await CacheManager.get_with_cache_aside(
+            # Usar el patrón Cache-Aside estandarizado
+            collections, metrics = await get_with_cache_aside(
                 data_type="collections",
                 resource_id=cache_key,
-                fetch_function=fetch_collections,
                 tenant_id=tenant_id,
-                ttl=CacheManager.ttl_short  # 5 minutos
+                fetch_from_db_func=None,
+                generate_func=fetch_collections,
+                ttl=CacheManager.ttl_short,  # 5 minutos
+                idempotency_key=f"collections:{tenant_id}:{cache_key}"
             )
             
             return collections

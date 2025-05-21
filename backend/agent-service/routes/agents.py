@@ -262,14 +262,16 @@ async def chat_with_agent(
     tenant_id = ctx.get_tenant_id()
     user_id = ctx.get_user_id(False)  # Opcional
     
-    # Validar agente utilizando caché con patrón Cache-Aside
+    # Validar agente utilizando caché con patrón Cache-Aside estandarizado
     cache_key = f"agent:{agent_id}:{tenant_id}"
-    agent = await CacheManager.get_with_cache_aside(
+    agent, metrics = await get_with_cache_aside(
         data_type="agent",
         resource_id=cache_key,
-        fetch_function=lambda: agent_service.get_agent_by_id(agent_id, tenant_id),
         tenant_id=tenant_id,
-        ttl=CacheManager.ttl_standard
+        fetch_from_db_func=None,
+        generate_func=lambda: agent_service.get_agent_by_id(agent_id, tenant_id),
+        ttl=CacheManager.ttl_standard,
+        idempotency_key=f"agent_validate:{tenant_id}:{agent_id}:{user_id or 'anonymous'}"
     )
     
     if not agent:
