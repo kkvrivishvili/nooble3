@@ -1,5 +1,5 @@
 """
-Punto de entrada para el servicio de embeddings.
+Punto de entrada del servicio de embeddings.
 """
 
 import logging
@@ -8,112 +8,38 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-# Utilidades comunes para todos los servicios
-from common.errors import setup_error_handling, handle_errors
+from common.errors import setup_error_handling
 from common.utils.logging import init_logging
-from common.context import Context, with_context
 from common.db.supabase import init_supabase
-from common.cache import get_with_cache_aside
-from common.swagger import configure_swagger_ui
-from common.utils.rate_limiting import setup_rate_limiting
-from common.config.tiers import is_development_environment
-
-# Configuración centralizada
 from config.settings import get_settings
-from config.constants import TIMEOUTS
-from routes import register_routes
 
-# Configuración
 settings = get_settings()
-logger = logging.getLogger("embedding_service")
-init_logging(settings.log_level, service_name="embedding-service")
+logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Gestiona el ciclo de vida de la aplicación."""
-    try:
-        logger.info(f"Inicializando servicio de {settings.service_name}")
-        
-        # Inicializar Supabase
-        await init_supabase()
-        
-        # Verificar conexión al sistema de caché unificado usando el patrón centralizado
-        try:
-            # Usamos una función simple que siempre retorna None como fetch_from_db_func para test
-            async def noop_fetch(resource_id, tenant_id, ctx=None):
-                return None
-                
-            result, metrics = await get_with_cache_aside(
-                data_type="system", 
-                resource_id="health_check",
-                tenant_id=settings.default_tenant_id,
-                fetch_from_db_func=noop_fetch
-            )
-            logger.info("Conexión a Cache establecida correctamente")
-        except Exception as e:
-            logger.warning(f"Cache no disponible: {e}")
-            logger.warning("Servicio funcionará sin caché")
-        
-        # Establecer contexto de servicio estándar
-        async with Context(tenant_id=settings.default_tenant_id):
-            # Cargar configuraciones específicas del servicio
-            try:
-                if settings.load_config_from_supabase:
-                    # Cargar configuraciones...
-                    logger.info(f"Configuraciones cargadas para {settings.service_name}")
-            except Exception as config_err:
-                logger.error(f"Error cargando configuraciones: {config_err}")
-        
-        logger.info(f"Servicio {settings.service_name} inicializado correctamente")
-        yield
-    except Exception as e:
-        logger.error(f"Error al inicializar el servicio: {str(e)}")
-        # No ejecutamos yield aquí para evitar iniciar la aplicación en estado inconsistente
-        # La aplicación se detendrá si hay errores críticos de inicialización
-    finally:
-        # Limpieza de recursos
-        logger.info(f"Servicio {settings.service_name} detenido correctamente")
+    logger.info(f"Iniciando {settings.service_name}")
+    
+    # Inicializar Supabase (para tracking)
+    await init_supabase()
+    
+    yield
+    
+    logger.info(f"{settings.service_name} detenido")
 
-# Inicializar la aplicación FastAPI
+# Crear aplicación
 app = FastAPI(
-    title="Linktree AI - Embedding Service",
-    description="""
-    Servicio encargado de generar embeddings vectoriales para texto.
-    
-    ## Funcionalidad
-    - Generación de embeddings unitarios y por lotes
-    - Soporte para modelos de embeddings de OpenAI
-    - Aislamiento multi-tenant con caché por tenant
-    
-    ## Dependencias
-    - Redis: Para caché de embeddings
-    - Supabase: Para almacenamiento de configuración
-    - OpenAI API: Para generación de embeddings
-    """,
+    title="Embedding Service",
+    description="Servicio para generación de embeddings con OpenAI",
     version=settings.service_version,
-    docs_url="/docs",
-    redoc_url="/redoc",
-    openapi_url="/openapi.json",
     lifespan=lifespan
-)
-
-# Configurar Swagger UI
-configure_swagger_ui(
-    app=app,
-    service_name="Embedding Service",
-    service_description="API para generación de embeddings vectoriales de alta calidad para texto",
-    version=settings.service_version,
-    tags=[
-        {"name": "Embeddings", "description": "Operaciones de generación de embeddings"},
-        {"name": "Models", "description": "Gestión de modelos de embeddings"},
-        {"name": "Health", "description": "Verificación de salud del servicio"}
-    ]
 )
 
 # Configurar CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -122,11 +48,16 @@ app.add_middleware(
 # Configurar manejo de errores
 setup_error_handling(app)
 
-# Configurar rate limiting
-setup_rate_limiting(app)
-
 # Registrar rutas
-register_routes(app)
+from routes.embeddings import router as embeddings_router
+app.include_router(embeddings_router, prefix="/api/v1", tags=["Embeddings"])
+
+# Registrar health checks estándar
+from common.helpers.health import register_health_routes
+register_health_routes(app)
+
+# Configurar logging
+init_logging(settings.log_level, service_name="embedding-service")
 
 if __name__ == "__main__":
     import uvicorn

@@ -1,132 +1,68 @@
 """
-Configuración principal del servicio de embeddings.
-
-Este módulo extiende la configuración base del sistema con configuraciones
-específicas del servicio de embeddings y centraliza la obtención de
-la configuración en un solo lugar.
+Configuración del servicio de embeddings.
+Solo configuraciones esenciales para OpenAI.
 """
 
-from typing import Dict, Any, Optional, List
-from pydantic import Field, validator
-
-from common.config import get_service_settings as get_base_settings
+from typing import Dict
+from pydantic import Field
 from common.config import Settings as BaseSettings
+from common.config import get_service_settings as get_base_settings
 from common.models import HealthResponse
 
-from .constants import (
-    EMBEDDING_DIMENSIONS,
-    DEFAULT_EMBEDDING_DIMENSION,
-    QUALITY_THRESHOLDS,
-    CACHE_EFFICIENCY_THRESHOLDS,
-    TIMEOUTS
-)
+# Constantes de OpenAI - Modelos disponibles y sus propiedades
+OPENAI_MODELS = {
+    "text-embedding-3-small": {
+        "dimensions": 1536,
+        "max_tokens": 8191
+    },
+    "text-embedding-3-large": {
+        "dimensions": 3072,
+        "max_tokens": 8191
+    },
+    "text-embedding-ada-002": {
+        "dimensions": 1536,
+        "max_tokens": 8191
+    }
+}
 
 class EmbeddingServiceSettings(BaseSettings):
-    """
-    Configuración específica para el servicio de embeddings.
-    Extiende la configuración base con parámetros específicos del servicio.
-    """
-    # Parámetros específicos del servicio
-    embedding_quality_thresholds: Dict[str, Any] = Field(
-        default_factory=lambda: QUALITY_THRESHOLDS,
-        description="Umbrales para verificar la calidad de los embeddings"
+    """Configuración mínima para el servicio de embeddings."""
+    
+    # OpenAI
+    openai_api_key: str = Field(..., description="API Key para OpenAI")
+    default_embedding_model: str = Field(
+        "text-embedding-3-small",
+        description="Modelo de embedding predeterminado"
     )
     
-    cache_efficiency_thresholds: Dict[str, Any] = Field(
-        default_factory=lambda: CACHE_EFFICIENCY_THRESHOLDS,
-        description="Umbrales para determinar la eficiencia de caché"
+    # Límites operacionales
+    max_batch_size: int = Field(
+        100,
+        description="Número máximo de textos por batch"
+    )
+    max_text_length: int = Field(
+        8000,
+        description="Longitud máxima de texto en caracteres"
     )
     
-    # Configuración de timeouts y límites
-    
-    timeouts: Dict[str, float] = Field(
-        default_factory=lambda: TIMEOUTS,
-        description="Timeouts para diferentes operaciones"
+    # Timeouts
+    openai_timeout_seconds: int = Field(
+        30,
+        description="Timeout para llamadas a OpenAI"
     )
     
-    embedding_dimensions: Dict[str, int] = Field(
-        default_factory=lambda: EMBEDDING_DIMENSIONS,
-        description="Dimensiones de embedding por modelo"
-    )
-    
+    # Dimensión predeterminada
     default_embedding_dimension: int = Field(
-        DEFAULT_EMBEDDING_DIMENSION,
+        1536,
         description="Dimensión predeterminada cuando no se conoce el modelo"
     )
     
-    # Parámetros de rendimiento y batch processing
-    max_batch_size: int = Field(
-        10,
-        description="Tamaño máximo de lote para procesar embeddings"
-    )
-    
-    max_tokens_per_batch: int = Field(
-        50000,
-        description="Número máximo de tokens por lote"
-    )
-    
-    max_token_length_per_text: int = Field(
-        8000,
-        description="Longitud máxima en tokens para un texto individual"
-    )
-    
-    allow_batch_processing: bool = Field(
-        True,
-        description="Si se permite el procesamiento por lotes"
-    )
-    
-    max_input_length: int = Field(
-        32000,
-        description="Longitud máxima de entrada en caracteres"
-    )
-    
-    # Parámetro para RAG - consultas de similitud
-    max_similarity_top_k: int = Field(
-        4,
-        description="Número máximo de documentos similares a recuperar en consultas RAG"
-    )
-    
-    # TTL para caché de embeddings
+    # TTL para caché de embeddings (simplificado)
     embedding_cache_ttl: int = Field(
         604800,  # 7 días por defecto
         description="Tiempo de vida de los embeddings en caché (segundos)"
     )
     
-    # Habilitar/deshabilitar caché
-    embedding_cache_enabled: bool = Field(
-        True,
-        description="Habilitar o deshabilitar la caché de embeddings"
-    )
-    
-    # Modelos de embeddings predeterminados
-    default_embedding_model: str = Field(
-        "text-embedding-3-small",
-        description="Modelo de embedding predeterminado para OpenAI"
-    )
-
-    # OpenAI API Key para embeddings (requerido)
-    openai_api_key: str = Field(
-        ...,  # Campo requerido, sin valor predeterminado
-        description="API Key para OpenAI (requerida para el funcionamiento del servicio)"
-    )
-    
-    # Nota: OpenAI es actualmente el único proveedor de embeddings soportado
-
-    # Tamaño de lote para procesamiento por API
-    embedding_batch_size: int = Field(
-        128,
-        description="Tamaño predeterminado de lote para procesamiento de embeddings"
-    )
-    
-    # Validadores para asegurar integridad de la configuración
-    @validator("embedding_dimensions")
-    def validate_embedding_dimensions(cls, v):
-        """Verifica que las dimensiones de embedding sean valores positivos"""
-        for model, dim in v.items():
-            if dim <= 0:
-                raise ValueError(f"La dimensión para el modelo {model} debe ser positiva")
-        return v
-
     class Config:
         """Configuración de la clase de configuración"""
         validate_assignment = True
@@ -136,9 +72,6 @@ class EmbeddingServiceSettings(BaseSettings):
 def get_settings() -> EmbeddingServiceSettings:
     """
     Obtiene la configuración específica para el servicio de embeddings.
-    
-    Esta función extiende la configuración base con parámetros específicos
-    del servicio de embeddings.
     
     Returns:
         EmbeddingServiceSettings: Configuración para el servicio de embeddings
