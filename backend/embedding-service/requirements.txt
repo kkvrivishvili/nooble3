@@ -1,29 +1,18 @@
-# Dependencias principales
+# Core
 fastapi==0.115.12
 uvicorn==0.34.0
 pydantic==2.10.6
-pydantic-settings==2.8.1
-python-multipart==0.0.20
-httpx==0.28.1
+aiohttp==3.9.5
+
+# OpenAI
 openai==1.69.0
-tiktoken==0.9.0
-# Nota: groq se utiliza exclusivamente en el servicio de query, no en este servicio
-
-# LlamaIndex y componentes relacionados
-llama-index-core==0.12.26          # Nucleo de LlamaIndex para RAG
-llama-index-embeddings-openai==0.3.0   # Integración con embeddings de OpenAI
-llama-index-vector-stores-supabase==0.3.0  # Soporte para vectores en Supabase
-# Nota: Mantenemos versiones específicas para evitar conflictos de compatibilidad
-
-# Almacenamiento y caché
-redis==5.0.0  # Compatible con Redis 7.4.3
-supabase==2.15.0
 
 # Utilidades
 python-dotenv==1.0.1
-tenacity==9.0.0
+python-multipart==0.0.20
 
 # Testing
 pytest==8.3.5
+httpx==0.28.1
 
 # Nota: La biblioteca común se instalará usando PYTHONPATH

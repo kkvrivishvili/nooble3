@@ -56,11 +56,11 @@ uvicorn main:app --host 0.0.0.0 --port 8001
 
 El servicio utiliza variables de entorno para la configuración:
 
-- `OPENAI_API_KEY`: Clave de API para OpenAI (requerida)
-- `DEFAULT_EMBEDDING_MODEL`: Modelo predeterminado (default: "text-embedding-3-small")
-- `MAX_BATCH_SIZE`: Tamaño máximo de lote (default: 100)
-- `MAX_TEXT_LENGTH`: Longitud máxima de texto (default: 8000)
-- `OPENAI_TIMEOUT_SECONDS`: Timeout para llamadas a OpenAI (default: 30)
+- `EMBEDDING_OPENAI_API_KEY`: Clave de API para OpenAI (requerida)
+- `EMBEDDING_DEFAULT_EMBEDDING_MODEL`: Modelo predeterminado (default: "text-embedding-3-small")
+- `EMBEDDING_MAX_BATCH_SIZE`: Tamaño máximo de lote (default: 100)
+- `EMBEDDING_MAX_TEXT_LENGTH`: Longitud máxima de texto (default: 8000)
+- `EMBEDDING_OPENAI_TIMEOUT_SECONDS`: Timeout para llamadas a OpenAI (default: 30)
 
 ## API
 
