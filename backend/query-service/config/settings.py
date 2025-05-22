@@ -1,50 +1,60 @@
 """
-Configuraciones específicas para el servicio de consultas.
-
-Este módulo implementa la configuración específica del servicio de consultas
-utilizando el sistema centralizado de configuración, separando las configuraciones
-específicas del servicio de las configuraciones globales.
+Configuración simplificada del Query Service.
 """
 
-from typing import Dict, Any, Optional, List
-from pydantic import Field, BaseModel
+from typing import Dict, Optional
+from pydantic import Field
+from common.config import Settings as BaseSettings
+from common.config import get_service_settings as get_base_settings
 
-from common.config import get_service_settings
-from common.models import HealthResponse
-from common.context import Context
+# Modelos Groq disponibles en producción
+GROQ_MODELS = {
+    "llama-4-scout-17bx16e": {
+        "description": "Llama 4 Scout - Balanceado para uso general",
+        "context_window": 32768,
+        "max_tokens": 8192,
+        "speed": 460
+    },
+    "llama-4-maverick-17bx128e": {
+        "description": "Llama 4 Maverick - Alto rendimiento",
+        "context_window": 32768,
+        "max_tokens": 8192,
+        "speed": 240
+    },
+    "llama-3.1-8b-instant-128k": {
+        "description": "Llama 3.1 8B - Respuesta rápida, contexto extendido",
+        "context_window": 131072,
+        "max_tokens": 8192,
+        "speed": 750
+    }
+}
 
-def get_settings():
-    """
-    Obtiene la configuración específica para el servicio de consultas.
-    
-    Esta función utiliza get_service_settings() centralizada que ya incluye
-    todas las configuraciones específicas para el servicio de consultas.
-    
-    Returns:
-        Settings: Configuración para el servicio de consultas
-    """
-    # Usar la función centralizada que ya incluye las configuraciones específicas
-    return get_service_settings("query-service")
+class QueryServiceSettings(BaseSettings):
+    """Configuración específica para Query Service."""
 
-def get_health_status() -> HealthResponse:
-    """
-    Obtiene el estado de salud del servicio de consultas.
-    
-    Returns:
-        HealthResponse: Estado de salud del servicio
-    """
-    settings = get_settings()
-    
-    return HealthResponse(
-        service=settings.service_name,
-        version=settings.service_version,
-        status="healthy",
-        timestamp=None  # Se generará automáticamente
+    # Groq
+    groq_api_key: str = Field(..., description="API Key para Groq")
+    default_groq_model: str = Field(
+        "llama-3.1-8b-instant-128k",
+        description="Modelo Groq predeterminado"
     )
 
-# Nota: La función get_collection_config se ha eliminado ya que no se utilizaba
-# y hemos migrado a un sistema de configuración centralizada en common/
+    # RAG Configuration
+    default_similarity_top_k: int = Field(4, description="Documentos a recuperar")
+    max_similarity_top_k: int = Field(10, description="Máximo de documentos")
+    similarity_threshold: float = Field(0.7, description="Umbral de similitud")
 
-# Si se necesita obtener configuraciones específicas para colecciones,
-# utilizar el nuevo sistema de configuración centralizada que proporciona
-# métodos estandarizados para todos los servicios.
+    # LLM Configuration
+    llm_temperature: float = Field(0.7, description="Temperatura LLM")
+    llm_max_tokens: int = Field(4096, description="Tokens máximos de respuesta")
+
+    # Timeouts
+    groq_timeout_seconds: int = Field(30, description="Timeout para Groq API")
+    vector_search_timeout: int = Field(10, description="Timeout búsqueda vectorial")
+
+def get_settings() -> QueryServiceSettings:
+    """Obtiene configuración del servicio."""
+    base_settings = get_base_settings("query-service")
+    return QueryServiceSettings(**base_settings.dict())
+
+

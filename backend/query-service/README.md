@@ -1,43 +1,49 @@
-# Servicio de Consultas (Query Service)
+# Query Service (Refactorizado)
 
-Microservicio especializado para realizar consultas basadas en documentos utilizando modelos LLM de Groq, diseñado como parte del ecosistema Nooble.
+Microservicio especializado para procesamiento RAG (Retrieval Augmented Generation) optimizado para trabajar exclusivamente con modelos LLM de Groq. Esta versión es una refactorización simplificada que elimina dependencias innecesarias y optimiza el flujo de trabajo.
 
 ## Descripción General
 
-El servicio de consultas proporciona una interfaz unificada para interactuar con documentos y colecciones mediante consultas en lenguaje natural. Utiliza modelos LLM de Groq para generar respuestas contextuales basadas en documentos almacenados en colecciones vectoriales.
+El Query Service procesa consultas RAG recibiendo embeddings pre-calculados desde el Agent Service. Realiza búsquedas vectoriales eficientes en Supabase y utiliza Groq para generar respuestas contextuales basadas en los documentos recuperados.
 
 ### Características Principales
 
-- Consultas en lenguaje natural sobre colecciones de documentos
-- Generación de respuestas contextuales usando modelos avanzados de Groq
-- Soporte para streaming de respuestas
-- Manejo optimizado de contexto y relevancia
-- Integración con servicio de embeddings para recuperación semántica
-- Monitoreo de uso de tokens y rendimiento
+- Procesamiento RAG simplificado y eficiente
+- Integración optimizada con Groq como único proveedor LLM
+- Manejo inteligente de fallbacks cuando no hay resultados relevantes
+- Sistema centralizado de manejo de errores
+- Tracking de tokens a través de las respuestas de Groq
 
-## Arquitectura
+## Arquitectura Simplificada
 
-El servicio sigue una arquitectura de microservicios con las siguientes capas:
+El servicio sigue una arquitectura minimalista con las siguientes capas:
 
-1. **Capa de API (routes)**: Endpoints para consultas, gestión de colecciones y monitoreo
-2. **Capa de Servicio (services)**: Lógica de negocio para consultas y generación de respuestas
-3. **Capa de Proveedor (provider)**: Integración con modelos LLM de Groq
-4. **Capa de Configuración (config)**: Ajustes y constantes del servicio
+1. **API (routes)**: Endpoints internos para el Agent Service
+2. **Servicios (services)**: Procesador de consultas y búsqueda vectorial
+3. **Proveedor (provider)**: Cliente Groq optimizado
+4. **Modelos (models)**: Estructuras de datos para consultas y respuestas
+5. **Configuración (config)**: Ajustes simplificados
 
 ## Endpoints Principales
 
-### Consultas sobre Colecciones
+### Consultas RAG Internas
 
 ```
-POST /api/query/collection/{collection_id}
+POST /api/v1/internal/query
 ```
 
 **Parámetros:**
+- `tenant_id` (string): ID del tenant
 - `query` (string): Consulta en lenguaje natural
-- `model` (string, opcional): Modelo LLM a utilizar
-- `temperature` (float, opcional): Temperatura para generación (0.0-1.0)
-- `similarity_top_k` (int, opcional): Número de fragmentos similares a recuperar
-- `response_mode` (string, opcional): Modo de respuesta (compact, refine, tree_summarize)
+- `query_embedding` (array): Vector de embedding pre-calculado
+- `collection_id` (string): ID de la colección a consultar
+- `agent_id` (string, opcional): ID del agente
+- `conversation_id` (string, opcional): ID de la conversación
+- `similarity_top_k` (int, opcional): Número de documentos a recuperar (default: 4)
+- `llm_model` (string, opcional): Modelo Groq específico
+- `agent_description` (string, opcional): Descripción del agente para respuestas fallback
+- `fallback_behavior` (string, opcional): Estrategia para casos sin resultados relevantes
+- `relevance_threshold` (float, opcional): Umbral para determinar documentos relevantes
 
 **Respuesta:**
 ```json
@@ -45,29 +51,103 @@ POST /api/query/collection/{collection_id}
   "success": true,
   "message": "Consulta procesada correctamente",
   "data": {
-    "response": "Lorem ipsum dolor sit amet...",
-    "context": {
-      "sources": [
-        {
-          "document_id": "doc123",
-          "chunk_id": "chunk456",
-          "content": "Fragmento relevante del documento",
-          "similarity": 0.92
-        }
-      ]
-    }
+    "query": "¿Cuál es la política de devoluciones?",
+    "response": "Según la información proporcionada, las devoluciones...",
+    "sources": [
+      {
+        "content": "Fragmento del documento relevante...",
+        "metadata": { "doc_id": "abc123", "title": "Políticas" },
+        "similarity": 0.89
+      }
+    ]
   },
   "metadata": {
     "model": "llama3-70b-8192",
-    "provider": "groq",
+    "found_documents": 8,
+    "used_documents": 4,
+    "source_quality": "high", 
+    "processing_time": 0.543,
+    "total_time": 0.672,
     "token_usage": {
       "prompt_tokens": 256,
       "completion_tokens": 128,
       "total_tokens": 384
-    },
-    "latency_ms": 235
+    }
   }
 }
+```
+
+### Búsqueda de Documentos
+
+```
+POST /api/v1/internal/search
+```
+
+**Parámetros:**
+- `tenant_id` (string): ID del tenant
+- `query_embedding` (array): Vector de embedding pre-calculado
+- `collection_id` (string): ID de la colección
+- `limit` (int, opcional): Número máximo de resultados (default: 5)
+- `similarity_threshold` (float, opcional): Umbral de similitud (default: 0.7)
+
+**Respuesta:**
+```json
+{
+  "success": true,
+  "message": "Búsqueda completada",
+  "data": {
+    "documents": [
+      {
+        "id": "doc123",
+        "content": "Contenido del documento...",
+        "metadata": { "source": "manual.pdf", "page": 5 },
+        "similarity": 0.92
+      }
+    ]
+  },
+  "metadata": {
+    "total_time": 0.123,
+    "threshold": 0.7
+  }
+}
+```
+
+## Estrategias de Fallback
+
+El servicio implementa manejo inteligente de casos donde la búsqueda vectorial no produce resultados relevantes:
+
+1. **Con documentos relevantes**: Utiliza el flujo RAG tradicional
+2. **Con documentos poco relevantes**: Combina contexto parcial con conocimiento del agente
+3. **Sin documentos**: Genera respuesta basada en la descripción del agente
+
+## Estructura de Archivos
+
+```
+/query-service
+├── config/                # Configuraciones simplificadas
+├── models/                # Estructuras de datos
+├── provider/              # Cliente Groq
+├── routes/                # Endpoints de API
+├── services/              # Lógica de negocio
+├── main.py                # Punto de entrada
+└── requirements.txt       # Dependencias optimizadas
+```
+
+## Dependencias Principales
+
+- FastAPI: Framework web
+- Groq: Cliente para modelos LLM
+- Supabase: Almacenamiento vectorial
+- Redis: Caché opcional
+
+## Configuración y Despliegue
+
+1. Instalar dependencias: `pip install -r requirements.txt`
+2. Configurar variables de entorno:
+   - `GROQ_API_KEY`: Clave API de Groq
+   - `SUPABASE_URL`: URL de la instancia Supabase
+   - `SUPABASE_KEY`: Clave de servicio Supabase
+3. Iniciar servicio: `uvicorn main:app --host 0.0.0.0 --port 8002`
 ```
 
 ### Streaming de Respuestas

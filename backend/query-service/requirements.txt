@@ -1,29 +1,20 @@
-# Dependencias principales
+# Core
 fastapi==0.115.12
 uvicorn==0.34.0
 pydantic==2.10.6
-pydantic-settings==2.8.1
-python-multipart==0.0.20
-httpx==0.28.1
-openai==1.69.0
-tiktoken==0.9.0
-groq==0.4.1  # API de Groq para modelos Llama 3
 
-# LlamaIndex para RAG
-llama-index==0.12.26
-llama-index-core==0.12.26
-llama-index-embeddings-openai==0.3.0
-llama-index-vector-stores-supabase==0.3.0
+# Groq
+groq==0.12.0  # Verificar última versión
 
-# Almacenamiento y caché
-redis==5.0.0  # Compatible con Redis 7.4.3
+# Storage
 supabase==2.15.0
+redis==5.0.0
 
-# Utilidades
+# Utils
 python-dotenv==1.0.1
 tenacity==9.0.0
+aiohttp==3.9.5
 
 # Testing
 pytest==8.3.5
-
-# Nota: La biblioteca común se instalará usando PYTHONPATH
+httpx==0.28.1
