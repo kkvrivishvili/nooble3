@@ -16,7 +16,7 @@ from common.db.supabase import init_supabase
 from common.cache import get_with_cache_aside
 from common.swagger import configure_swagger_ui
 from common.utils.rate_limiting import setup_rate_limiting
-from common.config.tiers import is_development_environment, should_use_mock_config
+from common.config.tiers import is_development_environment
 
 # Configuración centralizada
 from config.settings import get_settings
@@ -68,7 +68,8 @@ async def lifespan(app: FastAPI):
         yield
     except Exception as e:
         logger.error(f"Error al inicializar el servicio: {str(e)}")
-        yield
+        # No ejecutamos yield aquí para evitar iniciar la aplicación en estado inconsistente
+        # La aplicación se detendrá si hay errores críticos de inicialización
     finally:
         # Limpieza de recursos
         logger.info(f"Servicio {settings.service_name} detenido correctamente")

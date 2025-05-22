@@ -59,12 +59,7 @@ embedding_cache_misses: int = 0            # Contador de misses en cache
 MAX_LATENCY_SAMPLES = METRICS_CONFIG['max_latency_samples']  # Máximo número de muestras para cálculo de latencia
 LAST_API_RATE_CHECK = time.time() - TIME_INTERVALS["rate_limit_expiry"]   # Última vez que se verificó el rate limit
 
-# Umbrales para health checks
-CACHE_EFFICIENCY_THRESHOLDS = {
-    "min_requests": 10,  # Mínimo número de requests para considerar métricas válidas
-    "good_hit_ratio": 0.7,  # 70% o más de hit ratio es bueno
-    "degraded_hit_ratio": 0.4,  # Entre 40% y 70% es degradado
-}
+# Se utiliza CACHE_EFFICIENCY_THRESHOLDS importado desde config.constants
 
 @router.get("/health", response_model=None, 
            summary="Estado básico del servicio",

@@ -35,33 +35,38 @@ from utils.token_counters import count_embedding_tokens as count_tokens
 
 # Importar configuración centralizada
 from config.settings import get_settings
-from config.constants import EMBEDDING_DIMENSIONS, DEFAULT_EMBEDDING_DIMENSION, TIMEOUTS
+from config.constants import EMBEDDING_DIMENSIONS, DEFAULT_EMBEDDING_DIMENSION, TIMEOUTS, OPENAI_EMBEDDING_MODELS
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-# Constantes para modelos de OpenAI
-# Referencia actualizada: https://platform.openai.com/docs/models/embeddings
-OPENAI_EMBEDDING_MODELS = {
-    "text-embedding-3-small": {
-        "dimensions": 1536,
-        "max_tokens": 8191,        # Límite de tokens por solicitud
-        "max_batch_size": 2048,     # Máximo número de textos por lote
-        "input_cost": 0.00002,      # Costo por 1K tokens de entrada ($0.00002/1K tokens)
-        "tiers": ["free", "standard", "pro", "business", "enterprise"],
-        "description": "Modelo de embeddings para uso general con excelente balance rendimiento/costo"
-    },
-    "text-embedding-3-large": {
-        "dimensions": 3072,
-        "max_tokens": 8191,        # Límite de tokens por solicitud
-        "max_batch_size": 2048,     # Máximo número de textos por lote
-        "input_cost": 0.00013,      # Costo por 1K tokens de entrada ($0.00013/1K tokens)
-        "tiers": ["pro", "business", "enterprise"],
-        "description": "Modelo de alta precisión para tareas complejas que requieren máxima fidelidad"
+# Utilizamos OPENAI_EMBEDDING_MODELS importado de config.constants para centralizar la configuración
+# Ver constants.py para la definición completa de los modelos soportados
+
+# Función auxiliar para generar embeddings de ceros para textos vacíos
+def get_zero_embedding(dimensions: int = DEFAULT_EMBEDDING_DIMENSION, with_metadata: bool = True):
+    """
+    Genera un vector de ceros para textos vacíos o no válidos.
+    
+    Args:
+        dimensions: Número de dimensiones del vector (por defecto: DEFAULT_EMBEDDING_DIMENSION)
+        with_metadata: Si se debe incluir metadatos estándar
+        
+    Returns:
+        Tuple o List: Vector de ceros con o sin metadatos según el parámetro with_metadata
+    """
+    zero_vector = [0.0] * dimensions
+    
+    if not with_metadata:
+        return zero_vector
+    
+    return zero_vector, {
+        "model": "zero-vector",
+        "usage": {"total_tokens": 0, "prompt_tokens": 0},
+        "latency": 0,
+        "source": "generation",
+        "input_tokens": 0
     }
-    # El modelo text-embedding-ada-002 ha sido eliminado de la implementación activa
-    # pero se mantiene compatibilidad con dimensiones en constants.py
-}
 
 # Errores específicos para OpenAI que siguen el estándar del proyecto
 class OpenAIEmbeddingError(ServiceError):
@@ -182,15 +187,9 @@ async def get_openai_embedding(
     # Por defecto, dimensiones para text-embedding-3-small
     dimensions = OPENAI_EMBEDDING_MODELS.get(model, {}).get("dimensions", DEFAULT_EMBEDDING_DIMENSION)
     
-    # Si el texto está vacío, devolver vector de ceros
+    # Si el texto está vacío, devolver vector de ceros usando la función auxiliar
     if not text or text.strip() == "":
-        return [0.0] * dimensions, {
-            "model": model,
-            "usage": {"total_tokens": 0, "prompt_tokens": 0},
-            "latency": 0,
-            "source": "generation",
-            "input_tokens": 0
-        }
+        return get_zero_embedding(dimensions=dimensions)
     
     # Obtener configuración de OpenAI
     api_key_to_use, endpoint = await get_openai_config(tenant_id or "default", model)
@@ -449,7 +448,7 @@ class OpenAIEmbeddingProvider:
         
         # Si el texto está vacío, devolver vector de ceros inmediatamente (optimización)
         if not text or text.strip() == "":
-            return [0.0] * self.dimensions
+            return get_zero_embedding(dimensions=self.dimensions, with_metadata=False)
         
         # Generar clave de caché para el embedding siguiendo el estándar del proyecto
         from common.cache import generate_resource_id_hash

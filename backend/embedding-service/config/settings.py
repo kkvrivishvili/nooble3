@@ -104,17 +104,13 @@ class EmbeddingServiceSettings(BaseSettings):
         description="Modelo de embedding predeterminado para OpenAI"
     )
 
-    # OpenAI API Key para embeddings
+    # OpenAI API Key para embeddings (requerido)
     openai_api_key: str = Field(
-        "",
-        description="API Key para OpenAI"
+        ...,  # Campo requerido, sin valor predeterminado
+        description="API Key para OpenAI (requerida para el funcionamiento del servicio)"
     )
     
-    # Configuración para el proveedor de embeddings
-    use_openai: bool = Field(
-        True,
-        description="Si se debe usar OpenAI como proveedor de embeddings"
-    )
+    # Nota: OpenAI es actualmente el único proveedor de embeddings soportado
 
     # Tamaño de lote para procesamiento por API
     embedding_batch_size: int = Field(

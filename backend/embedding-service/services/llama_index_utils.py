@@ -11,10 +11,14 @@ asegurando compatibilidad con el servicio de ingestión y otros servicios.
 # Cualquier modificación debe mantener este estándar y evitar lógica de caché personalizada.
 """
 
-import logging
+import os
 import time
-import aiohttp
-from typing import List, Dict, Any, Optional, Tuple
+import logging
+import hashlib
+from typing import List, Dict, Any, Optional, Tuple, Union
+
+# Importar modelos locales
+from models import EmbeddingTaskConfig, ConversationContext, EmbeddingTaskType
 
 # Importación de configuración centralizada
 from config.constants import (
@@ -84,32 +88,12 @@ def select_best_embedding_model(tier: str, tenant_id: Optional[str] = None) -> s
     Returns:
         str: Nombre del mejor modelo de embedding disponible para el tier
     """
-    # Obtener modelos disponibles para el tier
+    # Obtener modelos disponibles para el tier usando la función centralizada
     available_models = get_available_embedding_models(tier, tenant_id)
     
-    # Definir preferencias de modelo por tier
-    tier_model_preferences = {
-        "free": "text-embedding-3-small",        # Modelo económico para tier gratuito
-        "pro": "text-embedding-3-large",        # Modelo avanzado para tier pro
-        "business": "text-embedding-3-large",   # Modelo premium para business
-        "enterprise": "text-embedding-3-large"   # Modelo premium para enterprise
-    }
-    
-    # Seleccionar el modelo preferido para el tier si está disponible
-    preferred_model = tier_model_preferences.get(tier, "text-embedding-3-small")
-    
-    if preferred_model in available_models:
-        return preferred_model
-    
-    # Si el modelo preferido no está disponible, usar el mejor disponible
-    if "text-embedding-3-large" in available_models:
-        return "text-embedding-3-large"
-    
-    if "text-embedding-3-small" in available_models:
-        return "text-embedding-3-small"
-    
-    # Usar el primer modelo disponible como fallback
-    if available_models:
+    # Los modelos ya vienen ordenados por preferencia según el tier desde la función centralizada
+    # El primer modelo en la lista es el preferido para este tier
+    if available_models:  
         return available_models[0]
     
     # Si no hay modelos disponibles, usar el default
@@ -139,6 +123,9 @@ async def generate_embeddings_with_llama_index(
     model_name: str = None,
     collection_id: str = None,
     chunk_id: List[str] = None,
+    task_config: Optional[EmbeddingTaskConfig] = None,
+    conversation_context: Optional[ConversationContext] = None,
+    metadata: Optional[List[Dict[str, Any]]] = None,
     ctx: Context = None
 ) -> Tuple[List[List[float]], Dict[str, Any]]:
     """
@@ -147,10 +134,24 @@ async def generate_embeddings_with_llama_index(
     Implementa el patrón Cache-Aside optimizado utilizando la implementación
     centralizada para asegurar consistencia entre servicios.
     
+    Esta función ahora soporta configuración específica de tarea y contexto de
+    conversación para mejorar la calidad de los embeddings generados.
+    
     Args:
         texts: Lista de textos para generar embeddings
         tenant_id: ID del tenant
         model_name: Nombre del modelo de embedding
+        collection_id: ID de la colección para especificidad en caché
+        chunk_id: Lista de IDs de chunks para especificidad en caché
+        task_config: Configuración específica para la tarea de embedding
+        conversation_context: Contexto de la conversación para enriquecer embeddings
+        agent_id: ID del agente para seguimiento y caché
+        conversation_id: ID de la conversación para seguimiento y caché
+        normalize: Si se deben normalizar los embeddings (para compatibilidad directa)
+        truncate_strategy: Estrategia de truncado para textos largos (para compatibilidad directa)
+        truncate_to_n_tokens: Número de tokens a los que truncar (para compatibilidad directa)
+        task_type: Tipo de tarea para el embedding (para compatibilidad directa)
+        metadata: Lista opcional de metadatos para cada texto
         ctx: Contexto de la operación
         
     Returns:
@@ -164,6 +165,7 @@ async def generate_embeddings_with_llama_index(
         "total_texts": len(texts),
         "cached": 0,
         "db_retrieved": 0,
+        "dimensions": DEFAULT_EMBEDDING_DIMENSION,
         "generated": 0
     }
     
@@ -217,13 +219,50 @@ async def generate_embeddings_with_llama_index(
     else:
         chunk_id = [None] * len(texts)
     
+    # Extraer configuración de tarea
+    normalize = True  # Valor por defecto
+    task_type = None
+    truncate_strategy = None
+    truncate_to_n_tokens = None
+    
+    # Si hay task_config, extraer sus valores
+    if task_config:
+        normalize = task_config.normalize
+        task_type = task_config.task_type
+        truncate_strategy = task_config.truncate_strategy
+        truncate_to_n_tokens = task_config.truncate_to_n_tokens
+    
     # CRÍTICO: Estandarizar metadatos base para todo el lote
     # La estandarización garantiza compatibilidad total con el sistema de caché centralizado
     # y mantiene consistencia con los otros servicios (ingestion, query) para facilitar
     # la trazabilidad de chunks/documentos y optimizar cache hits
     try:
+        # Preparar metadatos base con información de la tarea y contexto
+        task_metadata = {
+            "normalize": normalize
+        }
+        
+        # Añadir configuración de tarea si está disponible
+        if task_type:
+            task_metadata["task_type"] = str(task_type)
+        if truncate_strategy:
+            task_metadata["truncate_strategy"] = truncate_strategy
+        if truncate_to_n_tokens:
+            task_metadata["truncate_to_n_tokens"] = truncate_to_n_tokens
+        
+        # Añadir información de contexto de conversación si está disponible
+        if conversation_context:
+            if conversation_context.conversation_id:
+                task_metadata["conversation_id"] = conversation_context.conversation_id
+            if conversation_context.agent_id:
+                task_metadata["agent_id"] = conversation_context.agent_id
+            if conversation_context.query_history and len(conversation_context.query_history) > 0:
+                task_metadata["has_query_history"] = True
+                task_metadata["query_history_length"] = len(conversation_context.query_history)
+        
+        # Estandarizar metadatos usando la función centralizada
         base_metadata = standardize_llama_metadata(
-            metadata={},
+            metadata=task_metadata,
             tenant_id=tenant_id,  # Campo obligatorio para multitenancy
             collection_id=collection_id,  # Para búsqueda jerárquica en caché
             ctx=ctx  # Contexto para valores por defecto
@@ -235,7 +274,8 @@ async def generate_embeddings_with_llama_index(
         # Crear metadatos mínimos para no fallar completamente
         base_metadata = {
             "tenant_id": tenant_id,
-            "created_at": int(time.time())
+            "created_at": int(time.time()),
+            "normalize": normalize
         }
         if collection_id:
             base_metadata["collection_id"] = collection_id

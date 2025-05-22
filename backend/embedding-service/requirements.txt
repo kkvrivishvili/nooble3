@@ -7,14 +7,13 @@ python-multipart==0.0.20
 httpx==0.28.1
 openai==1.69.0
 tiktoken==0.9.0
-groq==0.4.1  # API de Groq para modelos Llama 3
+# Nota: groq se utiliza exclusivamente en el servicio de query, no en este servicio
 
-# LlamaIndex para funcionalidad de embeddings
-llama-index-core==0.12.26
-llama-index-embeddings-openai==0.3.0
-llama-index-embeddings-ollama==0.6.0
-llama-index-vector-stores-supabase==0.3.0
-# Nota: Versiones específicas para evitar conflictos
+# LlamaIndex y componentes relacionados
+llama-index-core==0.12.26          # Nucleo de LlamaIndex para RAG
+llama-index-embeddings-openai==0.3.0   # Integración con embeddings de OpenAI
+llama-index-vector-stores-supabase==0.3.0  # Soporte para vectores en Supabase
+# Nota: Mantenemos versiones específicas para evitar conflictos de compatibilidad
 
 # Almacenamiento y caché
 redis==5.0.0  # Compatible con Redis 7.4.3

@@ -14,7 +14,7 @@ con soporte de caché y contexto multitenancy.
 
 import logging
 import asyncio
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Union
 
 from common.config.tiers import get_available_embedding_models
 from common.errors import (
@@ -45,6 +45,9 @@ from config.constants import (
     DEFAULT_EMBEDDING_DIMENSION,
     TIMEOUTS
 )
+
+# Importar modelos locales
+from models import EmbeddingTaskConfig, ConversationContext
 from config.settings import get_settings
 
 # Importar la nueva implementación compatible con el servicio de ingestión
@@ -201,17 +204,30 @@ class CachedEmbeddingProvider:
         collection_id: Optional[str] = None,
         document_id: Optional[str] = None,
         chunk_ids: Optional[List[str]] = None,
+        task_config: Optional[EmbeddingTaskConfig] = None,
+        conversation_context: Optional[ConversationContext] = None,
+        metadata: Optional[List[Dict[str, Any]]] = None,
         ctx: Context = None
     ) -> Tuple[List[List[float]], Dict[str, Any]]:
         """
         Genera embeddings para una lista de textos con soporte de caché.
         
+        Genera embeddings para una lista de textos utilizando el patrón Cache-Aside optimizado.
+        
+        Esta función es el punto central para la generación de embeddings en el sistema.
+        Soporta parámetros mínimos necesarios para generar embeddings eficientemente,
+        mientras que aspectos como manejo de conversaciones y agentes quedan
+        responsabilidad de los servicios que consumen estos embeddings.
+        
         Args:
             texts: Lista de textos para generar embeddings
             tenant_id: ID del tenant
-            collection_id: ID de la colección (para mejorar especificidad en caché)
-            document_id: ID del documento (para mejorar especificidad en caché)
-            chunk_ids: Lista opcional de IDs de chunks (para mejorar especificidad en caché)
+            collection_id: ID de la colección (para caché y tracking)
+            document_id: ID del documento (para caché)
+            chunk_ids: Lista opcional de IDs de chunks (para caché)
+            task_config: Configuración específica para la tarea de embedding (tipo, normalización, etc.)
+            conversation_context: Contexto básico de conversación (solo IDs para tracking)
+            metadata: Metadatos para los textos (opcional)
             ctx: Contexto proporcionado por el decorador with_context
             
         Returns:
@@ -277,15 +293,42 @@ class CachedEmbeddingProvider:
                 api_key=self.api_key
             )
             
-            # Usar directamente el proveedor de OpenAI para documentos
-            embeddings = await provider.embed_documents(
-                texts=texts,
-                tenant_id=tenant_id,
-                collection_id=collection_id,
-                document_id=document_id,
-                chunk_ids=chunk_ids,
-                ctx=ctx
-            )
+            # 2. Extraer solo parámetros esenciales para la configuración de embedding
+            embedding_params = {
+                "texts": texts,
+                "tenant_id": tenant_id,
+                "collection_id": collection_id,
+                "document_id": document_id,
+                "chunk_ids": chunk_ids,
+                "ctx": ctx
+            }
+            
+            # 3. Añadir parámetros de configuración de tarea si existen
+            if task_config:
+                # Pasar solo parámetros básicos de configuración
+                if hasattr(task_config, 'normalize') and task_config.normalize is not None:
+                    embedding_params["normalize"] = task_config.normalize
+                if hasattr(task_config, 'task_type') and task_config.task_type:
+                    embedding_params["task_type"] = task_config.task_type
+                if hasattr(task_config, 'truncate_strategy') and task_config.truncate_strategy:
+                    embedding_params["truncate_strategy"] = task_config.truncate_strategy
+                if hasattr(task_config, 'truncate_to_n_tokens') and task_config.truncate_to_n_tokens:
+                    embedding_params["truncate_to_n_tokens"] = task_config.truncate_to_n_tokens
+                if hasattr(task_config, 'dimension_preference') and task_config.dimension_preference:
+                    embedding_params["dimension_preference"] = task_config.dimension_preference
+            
+            # 4. Añadir IDs para tracking (sin pasar el objeto conversation_context completo)
+            if agent_id:
+                embedding_params["agent_id"] = agent_id
+            if conversation_id:
+                embedding_params["conversation_id"] = conversation_id
+            
+            # 5. Añadir metadatos si se proporcionaron
+            if metadata:
+                embedding_params["metadata"] = metadata
+            
+            # 6. Generar embeddings pasando solo parámetros esenciales
+            embeddings = await provider.embed_documents(**embedding_params)
             
             # Crear metadatos básicos
             start_time = time.time()
@@ -296,20 +339,75 @@ class CachedEmbeddingProvider:
             
             elapsed_time = time.time() - start_time
             
-            metadata = {
+            # Preparar metadatos de configuración de tarea si existe
+            task_metadata = {}
+            if task_config:
+                task_metadata = {
+                    "task_type": task_config.task_type,
+                    "normalize": task_config.normalize,
+                    "similarity_threshold": task_config.similarity_threshold
+                }
+                
+                if task_config.truncate_strategy:
+                    task_metadata["truncate_strategy"] = task_config.truncate_strategy
+                if task_config.truncate_to_n_tokens:
+                    task_metadata["truncate_to_n_tokens"] = task_config.truncate_to_n_tokens
+            
+            # 1. Extraer solo lo necesario del contexto de conversación (IDs para tracking)
+            agent_id = None
+            conversation_id = None
+            if conversation_context:
+                agent_id = conversation_context.agent_id
+                conversation_id = conversation_context.conversation_id
+            elif ctx:
+                agent_id = ctx.get_agent_id() if hasattr(ctx, 'get_agent_id') else None
+                conversation_id = ctx.get_conversation_id() if hasattr(ctx, 'get_conversation_id') else None
+            
+            # Preparar metadatos de contexto mínimos para tracking
+            context_metadata = {}
+            if conversation_context:
+                context_metadata = {
+                    "has_conversation_context": True
+                }
+                # Solo incluir información básica para tracking (no contenido de consultas)
+                if conversation_id:
+                    context_metadata["conversation_id"] = conversation_id
+                if agent_id:
+                    context_metadata["agent_id"] = agent_id
+            
+            # Construir metadatos completos pero simplificados
+            result_metadata = {
                 "model": model_to_use,
+                "cached_count": cached_count,
+                "total_tokens": total_tokens,
+                "dimensions": dimensions,
+                "processing_time": processing_time,
+                **context_metadata
+            }
+            
+            # Añadir metadatos de tarea si existen
+            task_metadata = {}
+            if task_config:
+                if hasattr(task_config, 'task_type') and task_config.task_type:
+                    task_metadata["task_type"] = str(task_config.task_type)
+                if hasattr(task_config, 'normalize') and task_config.normalize is not None:
+                    task_metadata["normalize"] = task_config.normalize
+                result_metadata["task"] = task_metadata
+            
+            # Completar metadatos con información de uso y rendimiento
+            result_metadata.update({
                 "usage": {
                     "total_tokens": total_tokens,
                     "prompt_tokens": total_tokens
                 },
-                "latency": elapsed_time,
+                "latency": processing_time,  # Usamos processing_time en lugar de elapsed_time
                 "source": "batch",
                 "num_texts": len(texts),
                 "provider": "openai"
-            }
+            })
             
             # Retornar embeddings y metadatos
-            return embeddings, metadata
+            return embeddings, result_metadata
         except Exception as e:
             # Mejorar manejo de errores con más contexto
             logger.error(f"Error al generar embeddings en batch: {str(e)}", 

@@ -2,16 +2,20 @@
 Modelos de datos específicos para el servicio de embeddings.
 """
 
-# Importar desde common.models para mantener compatibilidad
-from common.models import (
+# Importamos todos los modelos desde el módulo local
+from .embeddings import (
     EmbeddingRequest, EmbeddingResponse,
     BatchEmbeddingRequest, BatchEmbeddingResponse, 
-    FailedEmbeddingItem, InternalEmbeddingResponse, TextItem
+    FailedEmbeddingItem, InternalEmbeddingResponse, TextItem,
+    EmbeddingTaskType, EmbeddingTaskConfig, ConversationContext,
+    EnhancedEmbeddingRequest, EnhancedEmbeddingResponse
 )
 
 # Re-exportar clases importantes
 __all__ = [
     'EmbeddingRequest', 'EmbeddingResponse',
     'BatchEmbeddingRequest', 'BatchEmbeddingResponse',
-    'FailedEmbeddingItem', 'InternalEmbeddingResponse', 'TextItem'
+    'FailedEmbeddingItem', 'InternalEmbeddingResponse', 'TextItem',
+    'EmbeddingTaskType', 'EmbeddingTaskConfig', 'ConversationContext',
+    'EnhancedEmbeddingRequest', 'EnhancedEmbeddingResponse'
 ]
