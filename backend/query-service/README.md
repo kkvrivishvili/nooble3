@@ -1,6 +1,7 @@
-# Query Service (Refactorizado)
+# Query Service
 
-Microservicio especializado para procesamiento RAG (Retrieval Augmented Generation) optimizado para trabajar exclusivamente con modelos LLM de Groq. Esta versión representa una refactorización completa que elimina dependencias innecesarias, simplifica la arquitectura y mejora la mantenibilidad del código.
+## Descripción
+Microservicio especializado para procesamiento RAG (Retrieval Augmented Generation) optimizado para trabajar exclusivamente con modelos LLM de Groq. Este servicio fundamental se encarga de procesar consultas usando técnicas de RAG y búsquedas vectoriales para proporcionar respuestas contextuales.
 
 ## Descripción General
 
@@ -357,12 +358,10 @@ La implementación se encuentra en `services/query_processor.py` y utiliza difer
 2. La disponibilidad de documentos relevantes
 3. La comparación de puntuaciones de similitud con el umbral configurado
 
-## Estructura de Archivos
-
-El servicio sigue una estructura de directorios clara y modular:
+## Estructura
 
 ```
-/query-service
+query-service/
 ├── config/                # Configuraciones del servicio
 │   ├── __init__.py         # Exportación de configuraciones
 │   └── settings.py         # Definiciones de configuración
@@ -375,16 +374,158 @@ El servicio sigue una estructura de directorios clara y modular:
 ├── routes/                # Endpoints API
 │   ├── __init__.py         # Exportación de rutas
 │   ├── collections.py      # Operaciones sobre colecciones
-│   └── internal.py         # Endpoints internos para Agent Service
-├── services/              # Lógica de negocio
-│   ├── __init__.py         # Exportación de servicios
-│   ├── query_processor.py  # Procesador de consultas RAG
-│   └── vector_store.py     # Interfaz con almacenamiento vectorial
-├── utils/                 # Utilidades comunes
-│   └── __init__.py         # Exportación de utilidades
-├── main.py                # Punto de entrada de la aplicación
-├── requirements.txt       # Dependencias del proyecto
-└── README.md              # Documentación del servicio
+│   └── internal.py         # Endpoints internos para Agent Orchestrator
+
+## Sistema de Cola de Trabajo
+
+El Query Service implementa un sistema simple de cola de trabajo basado en Redis Queue (RQ) para manejar procesamiento asíncrono de consultas RAG, especialmente útil cuando involucran grandes conjuntos de documentos o requieren procesamientos complejos.
+
+### Implementación Simple de Cola:
+
+```python
+# queue/job_manager.py
+import uuid
+from redis import Redis
+from rq import Queue
+
+# Configuración de Redis y cola única
+redis_conn = Redis(
+    host=os.getenv('REDIS_HOST', 'redis'),
+    port=int(os.getenv('REDIS_PORT', 6379)),
+    db=int(os.getenv('REDIS_DB', 0))
+)
+query_queue = Queue('query_tasks', connection=redis_conn)
+
+# Registro de jobs en proceso
+job_registry = {}
+
+async def enqueue_query_task(query_text, tenant_id, agent_id=None, collection_id=None, metadata=None):
+    """Encola una consulta RAG para procesamiento asíncrono"""
+    from services.query_engine import process_query
+    
+    job_id = str(uuid.uuid4())
+    job_data = {
+        "query": query_text,
+        "tenant_id": tenant_id,
+        "agent_id": agent_id,
+        "collection_id": collection_id,
+        "metadata": metadata or {}
+    }
+    
+    # Registrar job
+    job_registry[job_id] = {"status": "pending"}
+    
+    # Encolar tarea
+    job = query_queue.enqueue(
+        process_query,
+        job_data,
+        job_id=job_id,
+        result_ttl=3600,  # Mantener resultado 1 hora
+        job_timeout="10m"  # Timeouts para tareas largas
+    )
+    
+    # Registrar metadata para callbacks
+    job.meta['job_id'] = job_id
+    job.meta['tenant_id'] = tenant_id
+    job.meta['agent_id'] = agent_id
+    job.save_meta()
+    
+    return {"job_id": job_id, "status": "processing"}
+```
+
+### Worker Simplificado:
+
+```python
+# queue/worker.py
+import os
+from redis import Redis
+from rq import Worker, Queue, Connection
+from websocket.notifier import notify_job_completed
+
+def process_result(job, connection, result, exception=None):
+    """Maneja el resultado de un trabajo y notifica al orquestador"""
+    job_id = job.meta.get('job_id')
+    tenant_id = job.meta.get('tenant_id')
+    agent_id = job.meta.get('agent_id')
+    
+    if exception is None and job_id:
+        # Notificar éxito vía WebSocket
+        notify_job_completed(job_id, result, tenant_id, agent_id)
+
+# Configuración de Redis
+redis_conn = Redis(
+    host=os.getenv('REDIS_HOST', 'redis'),
+    port=int(os.getenv('REDIS_PORT', 6379)),
+    db=int(os.getenv('REDIS_DB', 0))
+)
+
+def run_worker():
+    with Connection(redis_conn):
+        worker = Worker(['query_tasks'], exception_handlers=[process_result])
+        worker.work(with_scheduler=True)
+
+if __name__ == '__main__':
+    run_worker()
+```
+
+### Integración con WebSocket para Notificaciones:
+
+```python
+# websocket/notifier.py
+import asyncio
+import websockets
+import json
+
+ORCHESTRATOR_WS_URL = "ws://agent-orchestrator:8000/ws/task_updates"
+
+async def notify_job_completed(job_id, result, tenant_id, agent_id=None):
+    """Notifica al orquestador que una consulta ha sido completada"""
+    try:
+        async with websockets.connect(ORCHESTRATOR_WS_URL) as websocket:
+            notification = {
+                "event": "job_completed",
+                "service": "query",
+                "job_id": job_id,
+                "tenant_id": tenant_id,
+                "agent_id": agent_id,
+                "result": result
+            }
+            await websocket.send(json.dumps(notification))
+    except Exception as e:
+        print(f"Error al notificar via WebSocket: {e}")
+```
+
+### Adición al requirements.txt:
+```
+rq==1.15.1
+redis>=4.5.1
+websockets>=10.0
+```
+
+### Flujo de Uso:
+
+1. **Inicio de Tarea**: El Agent Orchestrator envía una solicitud a `/internal/async_query`
+2. **Respuesta Inmediata**: El servicio responde con un `job_id` y comienza el procesamiento en segundo plano
+3. **Notificación de Finalización**: Al completar, el servicio notifica vía WebSocket al orquestador
+4. **Manejo de Errores**: En caso de fallo, se envía notificación con detalles del error
+
+```python
+# routes/internal.py
+from queue.producer import enqueue_rag_query
+from fastapi import APIRouter, BackgroundTasks
+
+router = APIRouter()
+
+@router.post("/api/v1/internal/async_query")
+async def process_async_query(query_request: QueryRequest):
+    # Encolar la tarea
+    job = enqueue_rag_query(query_request.dict())
+    
+    return {
+        "success": True,
+        "message": "Consulta encolada para procesamiento asíncrono",
+        "job_id": job.id
+    }
 ```
 
 ## Dependencias Principales

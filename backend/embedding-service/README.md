@@ -1,8 +1,7 @@
 # Embedding Service
 
 ## Descripción
-
-Embedding Service es un microservicio optimizado que proporciona capacidades de generación de embeddings vectoriales para el sistema RAG (Retrieval Augmented Generation). El servicio está diseñado siguiendo principios de simplicidad y eficiencia, exponiendo una API interna para uso exclusivo de otros servicios del sistema.
+Microservicio optimizado que proporciona capacidades de generación de embeddings vectoriales para el sistema RAG (Retrieval Augmented Generation), utilizando exclusivamente modelos de OpenAI. Este servicio es fundamental para transformar texto en representaciones numéricas que permiten la búsqueda semántica en el sistema.
 
 ## Características
 
@@ -30,13 +29,33 @@ EnhancedEmbeddingResponse
 Agent Service → Query Service
 ```
 
-### Componentes Principales
+## Estructura
 
-- **models/embeddings.py**: Definición de modelos de request/response
-- **provider/openai.py**: Implementación del proveedor de OpenAI
-- **routes/embeddings.py**: Endpoint único de API
-- **config/settings.py**: Configuraciones centralizadas
-- **main.py**: Punto de entrada de la aplicación FastAPI
+```
+embedding-service/
+├── models/
+│   ├── __init__.py
+│   └── embeddings.py          # EmbeddingRequest, EmbeddingResponse
+├── provider/
+│   ├── __init__.py
+│   └── openai.py              # Implementación del proveedor de OpenAI
+├── routes/
+│   ├── __init__.py
+│   ├── embeddings.py          # Endpoint único de API
+│   └── health.py              # Health check
+├── config/
+│   ├── __init__.py
+│   └── settings.py            # Configuraciones centralizadas
+├── queue/                   # Sistema de cola de trabajo (para implementar)
+│   ├── __init__.py             # Inicialización del módulo
+│   ├── worker.py               # Configuración de workers
+│   ├── producer.py             # Métodos para encolar tareas
+│   └── tasks.py                # Definición de tareas asíncronas
+├── main.py                 # Punto de entrada de la aplicación FastAPI
+├── requirements.txt
+├── Dockerfile
+└── README.md
+```
 
 ## Instalación
 
@@ -61,6 +80,147 @@ El servicio utiliza variables de entorno para la configuración:
 - `EMBEDDING_MAX_BATCH_SIZE`: Tamaño máximo de lote (default: 100)
 - `EMBEDDING_MAX_TEXT_LENGTH`: Longitud máxima de texto (default: 8000)
 - `EMBEDDING_OPENAI_TIMEOUT_SECONDS`: Timeout para llamadas a OpenAI (default: 30)
+
+## Funciones Clave
+1. Generación de embeddings de alta calidad utilizando modelos de OpenAI
+2. Procesamiento por lotes de textos para optimizar rendimiento
+3. Tracking de uso de tokens por tenant y operación
+4. Validación y normalización de textos para embeddings
+
+## Sistema de Cola de Trabajo
+
+Para manejar de manera eficiente las solicitudes de embeddings por lotes, especialmente para operaciones de ingestado de documentos, el Embedding Service implementa un sistema simple de cola de trabajo basado en Redis Queue (RQ).
+
+### Implementación Simple:
+
+```python
+# queue/job_manager.py
+import uuid
+from redis import Redis
+from rq import Queue
+
+# Configuración de Redis y cola única
+redis_conn = Redis(host=os.getenv('REDIS_HOST', 'redis'), 
+                  port=int(os.getenv('REDIS_PORT', 6379)), 
+                  db=int(os.getenv('REDIS_DB', 0)))
+embedding_queue = Queue('embedding_tasks', connection=redis_conn)
+
+# Registro simple de trabajos
+job_registry = {}
+
+def enqueue_embedding_task(texts, tenant_id, collection_id=None, metadata=None):
+    """Encola una tarea de generación de embeddings y devuelve un job_id"""
+    from provider.openai import generate_embeddings
+    
+    job_id = str(uuid.uuid4())
+    job_data = {
+        "texts": texts,
+        "tenant_id": tenant_id,
+        "collection_id": collection_id,
+        "metadata": metadata or {}
+    }
+    
+    # Registrar trabajo
+    job_registry[job_id] = {"status": "pending"}
+    
+    # Encolar tarea
+    job = embedding_queue.enqueue(
+        generate_embeddings,
+        job_data,
+        job_id=job_id,
+        result_ttl=3600  # Mantener resultado 1 hora
+    )
+    
+    # Callback cuando finalice (empleando meta)
+    job.meta['job_id'] = job_id
+    job.meta['tenant_id'] = tenant_id
+    job.save_meta()
+    
+    return {"job_id": job_id}
+```
+
+### Worker Simple:
+
+```python
+# queue/worker.py
+import os
+from redis import Redis
+from rq import Worker, Queue, Connection
+from websocket.notifier import notify_job_completed
+
+def process_result(job, connection, result, exception=None):
+    """Maneja el resultado del trabajo y notifica al orquestador"""
+    job_id = job.meta.get('job_id')
+    tenant_id = job.meta.get('tenant_id')
+    
+    if exception is None and job_id:
+        # Notificar éxito vía WebSocket
+        notify_job_completed(job_id, result, tenant_id)
+
+# Configuración del worker
+redis_conn = Redis(
+    host=os.getenv('REDIS_HOST', 'redis'),
+    port=int(os.getenv('REDIS_PORT', 6379)),
+    db=int(os.getenv('REDIS_DB', 0))
+)
+
+def run_worker():
+    with Connection(redis_conn):
+        worker = Worker(['embedding_tasks'], exception_handlers=[process_result])
+        worker.work(with_scheduler=True)
+
+if __name__ == '__main__':
+    run_worker()
+```
+
+### Integración con WebSocket para Notificaciones:
+
+```python
+# websocket/notifier.py
+import asyncio
+import websockets
+import json
+
+ORCHESTRATOR_WS_URL = "ws://agent-orchestrator:8000/ws/task_updates"
+
+async def notify_job_completed(job_id, result, tenant_id):
+    """Notifica al orquestador que un trabajo ha terminado"""
+    try:
+        async with websockets.connect(ORCHESTRATOR_WS_URL) as websocket:
+            notification = {
+                "event": "job_completed",
+                "service": "embedding",
+                "job_id": job_id,
+                "tenant_id": tenant_id,
+                "result": result
+            }
+            await websocket.send(json.dumps(notification))
+    except Exception as e:
+        print(f"Error al notificar via WebSocket: {e}")
+```
+
+### Adición al requirements.txt:
+```
+rq==1.15.1
+redis>=4.5.1
+websockets>=10.0
+```
+
+## Comunicación
+- **HTTP**: API REST para iniciar tareas (endpoints síncronos y asíncronos)
+- **WebSocket**: Notificaciones en tiempo real al Agent Orchestrator cuando se completan tareas asíncronas
+- **Comunicación Centralizada**: Toda comunicación pasa a través del Agent Orchestrator Service
+
+## Integración con otros Servicios
+El Embedding Service se comunica **principalmente** con:
+
+1. **Agent Orchestrator Service**: Como punto de entrada principal para solicitudes de embeddings.
+2. **Ingestion Service**: Única excepción que puede comunicarse directamente para procesar documentos durante la ingestión.
+
+Aspectos clave de la integración:
+- No se comunica directamente con Query Service (esta comunicación es gestionada por el orquestador)
+- Mantiene un tracking centralizado de uso de tokens OpenAI
+- Opera exclusivamente con modelos de embeddings de OpenAI para mantener consistencia
 
 ## API
 
