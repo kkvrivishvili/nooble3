@@ -150,12 +150,14 @@ El flujo de trabajo para procesar consultas RAG sigue estos pasos:
 |             COLAS DE QUERY               |
 +------------------------------------------+
 |                                          |
-| query_tasks:{tenant_id}                  | → Cola principal de tareas
-| query_results:{tenant_id}:{task_id}      | → Resultados temporales
-| query_streaming:{tenant_id}:{session_id} | → Respuestas streaming
+| query.tasks.{tenant_id}                  | → Cola principal de tareas
+| query.results.{tenant_id}.{task_id}      | → Resultados temporales
+| query.stream.{tenant_id}.{session_id}    | → Respuestas streaming
 |                                          |
 +------------------------------------------+
 ```
+
+> **Nota**: Los nombres de colas siguen la convención estándar `{service}.{tipo}.{tenant_id}[.{id_adicional}]` para mantener consistencia a través de todo el ecosistema de microservicios.
 
 ### Características Clave
 
@@ -302,12 +304,20 @@ Procesa una consulta RAG completa, buscando documentos relevantes y generando un
 - **Reconexión automática**: Mecanismo de backoff exponencial para conexiones robustas 
 - **Autenticación por token**: Comunicación segura entre servicios
 
-### Eventos Específicos del Query Service
+### Eventos WebSocket del Query Service
 
-- `query_completed`: Consulta procesada completamente
+#### Eventos Estandarizados (Para comunicación con el Orchestrator)
+
+- `task_status_update`: Actualiza el estado de procesamiento (por ejemplo: "iniciando búsqueda de contexto")
+- `task_completed`: Consulta procesada completamente
+- `task_failed`: Error en el procesamiento de la consulta
+
+#### Eventos Específicos (Internos y streaming)
+
 - `query_streaming_token`: Nuevo token generado en modo streaming
-- `query_failed`: Error en el procesamiento de la consulta
 - `source_quality_metrics`: Métricas sobre la calidad de las fuentes encontradas
+
+> **Importante**: Los eventos estandarizados siguen el formato común definido por el Agent Orchestrator Service para mantener consistencia en todo el ecosistema de microservicios.
 
 ### Implementación WebSocket para Notificaciones:
 

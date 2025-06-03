@@ -38,7 +38,12 @@ Cliente → Orchestrator → Workflow Engine (define flujo) → Agent Execution 
 Cliente → Orchestrator → Workflow Engine (evalúa condiciones) → [Ramificación condicional] → Servicios correspondientes → Workflow Engine (sincroniza) → Respuesta
 ```
 
-> 🔍 **Rol del Workflow Engine**: Definir, ejecutar y coordinar flujos de trabajo complejos con nodos, condiciones y transiciones para modelar procesos de negocio personalizados.
+### 3. Ejecución con Herramientas
+```
+Cliente → Orchestrator → Workflow Engine → Tool Registry (descubrimiento) → Tool Registry (ejecución) → Workflow Engine (procesa resultado) → Respuesta
+```
+
+> 🔍 **Rol del Workflow Engine**: Definir, ejecutar y coordinar flujos de trabajo complejos con nodos, condiciones y transiciones para modelar procesos de negocio personalizados. Cuando se requieren herramientas, el Workflow Engine se comunica directamente con el Tool Registry Service para descubrir y ejecutar las herramientas necesarias, procesando luego sus resultados para continuar el flujo.
 
 ## Estructura
 ```
@@ -116,24 +121,29 @@ workflow-engine-service/
 ```json
 {
   "task_id": "uuid-v4",
+  "global_task_id": "global-task-uuid-orchestrator",
   "tenant_id": "tenant-identifier",
   "workflow_id": "workflow-definition-id",
   "execution_id": "execution-instance-id",
   "created_at": "ISO-timestamp",
+  "updated_at": "ISO-timestamp",
   "status": "pending|processing|completed|failed|paused",
-  "type": "workflow_start|step_execution|condition_evaluation",
+  "type": "workflow_start|step_execution|condition_evaluation|tool_request",
   "priority": 0-9,
+  "retry_count": 0,
   "metadata": {
     "agent_id": "agent-identifier",
     "session_id": "session-identifier",
     "user_id": "optional-user-id",
+    "conversation_id": "conversation-identifier",
     "source": "api|orchestrator|scheduled"
   },
   "payload": {
     "current_node": "node-identifier",
     "input_data": {},
     "execution_context": {},
-    "variables": {}
+    "variables": {},
+    "timeout_ms": 30000
   }
 }
 ```

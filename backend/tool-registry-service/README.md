@@ -146,13 +146,21 @@ tool-registry-service/
 - **Reconexión automática**: Mecanismo de backoff exponencial para mayor resiliencia
 - **Autenticación por token**: Comunicación segura entre servicios
 
-### Eventos Específicos del Tool Registry Service
+### Eventos WebSocket del Tool Registry Service
 
-- `tool_execution_started`: Inicio de ejecución de herramienta
-- `tool_execution_completed`: Finalización exitosa de herramienta
-- `tool_execution_failed`: Error en la ejecución de herramienta
-- `tool_registered`: Nueva herramienta registrada
+#### Eventos Estandarizados (Para comunicación con el Orchestrator)
+
+- `task_status_update`: Actualiza el estado de ejecución (por ejemplo: "herramienta iniciada")
+- `task_completed`: Finalización exitosa de ejecución de herramienta
+- `task_failed`: Error en la ejecución de herramienta
+
+#### Eventos Específicos (Para procesamiento interno)
+
+- `tool_registered`: Nueva herramienta registrada en el sistema
+- `tool_updated`: Configuración de herramienta actualizada
 - `tool_validation_completed`: Validación de herramienta finalizada
+
+> **Importante**: Los eventos estandarizados son usados para la comunicación con el Agent Orchestrator, mientras que los eventos específicos se utilizan para notificaciones internas o de UI.
 
 ### Implementación WebSocket para Notificaciones:
 
@@ -162,19 +170,77 @@ import asyncio
 import websockets
 import json
 import logging
+import os
 from datetime import datetime
 
 ORCHESTRATOR_WS_URL = "ws://agent-orchestrator:8000/ws/task_updates"
 
 logger = logging.getLogger(__name__)
 
-async def notify_tool_execution(task_id, tenant_id, execution_data, global_task_id=None):
-    """Notifica sobre la ejecución de una herramienta"""
-    try:
-        async with websockets.connect(ORCHESTRATOR_WS_URL) as websocket:
+class ToolRegistryNotifier:
+    def __init__(self):
+        self.service_name = "tool-registry"
+        self.orchestrator_url = ORCHESTRATOR_WS_URL
+        self.service_token = os.getenv("SERVICE_TOKEN")
+        self.reconnect_delay = 1.0  # segundos, con backoff
+        self.websocket = None
+        self.connected = False
+        
+    async def start(self):
+        """Inicia el proceso de conexión en background"""
+        asyncio.create_task(self.maintain_connection())
+        
+    async def maintain_connection(self):
+        """Mantiene la conexión WebSocket con reconexión automática"""
+        while True:
+            try:
+                if not self.connected:
+                    logger.info(f"Conectando a {self.orchestrator_url}")
+                    async with websockets.connect(self.orchestrator_url) as ws:
+                        # Autenticarse como servicio
+                        await ws.send(json.dumps({
+                            "service_token": self.service_token,
+                            "service_name": self.service_name
+                        }))
+                        
+                        # Esperar confirmación
+                        auth_response = await ws.recv()
+                        if json.loads(auth_response).get("status") != "authenticated":
+                            logger.error("Fallo en la autenticación WebSocket")
+                            raise Exception("Authentication failed")
+                        
+                        logger.info("Conexión WebSocket establecida exitosamente")
+                        self.websocket = ws
+                        self.connected = True
+                        self.reconnect_delay = 1.0  # reset backoff
+                        
+                        # Mantener conexión abierta
+                        while True:
+                            try:
+                                await ws.ping()
+                                await asyncio.sleep(30)
+                            except:
+                                logger.warning("Conexión WebSocket interrumpida")
+                                break
+                                
+                        self.connected = False
+            except Exception as e:
+                self.connected = False
+                logger.warning(f"Error en conexión WebSocket: {e}. Reintentando en {self.reconnect_delay}s")
+                # Implementar backoff exponencial
+                await asyncio.sleep(self.reconnect_delay)
+                self.reconnect_delay = min(30.0, self.reconnect_delay * 1.5)
+
+    async def notify_tool_execution_completed(self, task_id, tenant_id, execution_data, global_task_id=None):
+        """Notifica la finalización exitosa de una herramienta usando el estándar del orquestador"""
+        if not self.connected:
+            logger.warning("WebSocket no conectado. No se puede enviar notificación.")
+            return False
+            
+        try:
             notification = {
-                "event": "tool_execution_completed",
-                "service": "tool-registry",
+                "event": "task_completed",  # Evento estandarizado
+                "service": self.service_name,
                 "task_id": task_id,
                 "global_task_id": global_task_id,
                 "tenant_id": tenant_id,
@@ -186,30 +252,77 @@ async def notify_tool_execution(task_id, tenant_id, execution_data, global_task_
                     "execution_time_ms": execution_data["execution_time_ms"]
                 }
             }
-            await websocket.send(json.dumps(notification))
-    except Exception as e:
-        logger.error(f"Error al notificar ejecución de herramienta via WebSocket: {e}")
+            await self.websocket.send(json.dumps(notification))
+            logger.info(f"Ejecución de herramienta {task_id} notificada exitosamente")
+            return True
+        except Exception as e:
+            logger.error(f"Error al notificar ejecución de herramienta: {e}")
+            self.connected = False  # Marcar para reconexión
+            return False
 
-async def notify_tool_registration(task_id, tenant_id, tool_data, global_task_id=None):
-    """Notifica el registro de una nueva herramienta"""
-    try:
-        async with websockets.connect(ORCHESTRATOR_WS_URL) as websocket:
+    async def notify_tool_execution_started(self, task_id, tenant_id, tool_id, global_task_id=None):
+        """Notifica el inicio de ejecución de una herramienta"""
+        if not self.connected:
+            logger.warning("WebSocket no conectado. No se puede enviar notificación de inicio.")
+            return False
+            
+        try:
             notification = {
-                "event": "tool_registered",
-                "service": "tool-registry",
+                "event": "task_status_update",  # Evento estandarizado
+                "service": self.service_name,
                 "task_id": task_id,
                 "global_task_id": global_task_id,
                 "tenant_id": tenant_id,
                 "timestamp": datetime.utcnow().isoformat(),
                 "data": {
-                    "tool_id": tool_data["tool_id"],
-                    "tool_name": tool_data["tool_name"],
-                    "tool_type": tool_data["tool_type"]
+                    "status": "processing",
+                    "details": {
+                        "tool_id": tool_id,
+                        "message": "Ejecución de herramienta iniciada"
+                    }
                 }
             }
-            await websocket.send(json.dumps(notification))
-    except Exception as e:
-        logger.error(f"Error al notificar registro de herramienta via WebSocket: {e}")
+            await self.websocket.send(json.dumps(notification))
+            logger.debug(f"Inicio de herramienta {tool_id} para tarea {task_id} notificada")
+            return True
+        except Exception as e:
+            logger.error(f"Error al notificar inicio de herramienta: {e}")
+            self.connected = False
+            return False
+
+    async def notify_tool_execution_failed(self, task_id, tenant_id, error, tool_id=None, global_task_id=None):
+        """Notifica un error en la ejecución de una herramienta"""
+        if not self.connected:
+            logger.warning("WebSocket no conectado. No se puede enviar notificación de error.")
+            return False
+            
+        try:
+            notification = {
+                "event": "task_failed",  # Evento estandarizado
+                "service": self.service_name,
+                "task_id": task_id,
+                "global_task_id": global_task_id,
+                "tenant_id": tenant_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "data": {
+                    "error": str(error),
+                    "error_type": error.__class__.__name__ if hasattr(error, "__class__") else "Unknown",
+                    "tool_id": tool_id
+                }
+            }
+            await self.websocket.send(json.dumps(notification))
+            logger.warning(f"Error en herramienta {tool_id} para tarea {task_id} notificado")
+            return True
+        except Exception as e:
+            logger.error(f"Error al notificar fallo en herramienta: {e}")
+            self.connected = False
+            return False
+
+# Ejemplo de uso (interno)
+async def notify_internal_tool_registration(task_id, tenant_id, tool_data):
+    """Notificación interna para registro de herramientas (no usa el estándar del orquestador)"""
+    # Esta función se usa solo para notificaciones internas o UI
+    # No se comunica directamente con el orquestador usando los eventos estandarizados
 ```
 
 ## 🌐 Integración en el Ecosistema

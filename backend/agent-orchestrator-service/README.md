@@ -521,17 +521,28 @@ Los mensajes WebSocket siguen un formato estandarizado para asegurar consistenci
 
 ```python
 # websocket/notifier.py (implementación para servicios)
+import asyncio
+import websockets
+import json
+import logging
+import os
+from datetime import datetime
+
+logger = logging.getLogger(__name__)
+
 class TaskNotifier:
     def __init__(self, service_name, orchestrator_url):
         self.service_name = service_name
         self.orchestrator_url = orchestrator_url
         self.service_token = os.getenv("SERVICE_TOKEN")
         self.reconnect_delay = 1.0  # segundos, con backoff
+        self.websocket = None
         
     async def connect(self):
         """Establece conexión con orquestador con reconexión automática"""
         while True:
             try:
+                logger.info(f"Conectando a {self.orchestrator_url}")
                 async with websockets.connect(self.orchestrator_url) as ws:
                     # Autenticarse como servicio
                     await ws.send(json.dumps({
@@ -542,8 +553,10 @@ class TaskNotifier:
                     # Esperar confirmación
                     auth_response = await ws.recv()
                     if json.loads(auth_response).get("status") != "authenticated":
+                        logger.error("Fallo en la autenticación WebSocket")
                         raise Exception("Authentication failed")
                     
+                    logger.info(f"Conexión WebSocket establecida para {self.service_name}")
                     # Conexión establecida
                     self.reconnect_delay = 1.0  # reset backoff
                     self.websocket = ws
@@ -552,9 +565,87 @@ class TaskNotifier:
                     while True:
                         # Keep-alive o esperar cierre
                         await asyncio.sleep(30)
+                        await ws.ping()
                         
             except Exception as e:
+                logger.warning(f"Error en conexión WebSocket: {e}. Reintentando en {self.reconnect_delay}s")
                 # Implementar backoff exponencial
                 await asyncio.sleep(self.reconnect_delay)
                 self.reconnect_delay = min(30.0, self.reconnect_delay * 1.5)
+
+    async def notify_task_status(self, task_id, tenant_id, status, details=None, global_task_id=None):
+        """Envía notificación de actualización de estado"""
+        try:
+            if not self.websocket:
+                logger.warning("WebSocket no conectado. No se puede enviar notificación.")
+                return
+                
+            notification = {
+                "event": "task_status_update",
+                "service": self.service_name,
+                "task_id": task_id,
+                "global_task_id": global_task_id,
+                "tenant_id": tenant_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "data": {
+                    "status": status,
+                    "details": details or {}
+                }
+            }
+            
+            await self.websocket.send(json.dumps(notification))
+            logger.debug(f"Notificación enviada: {notification['event']} para tarea {task_id}")
+            
+        except Exception as e:
+            logger.error(f"Error al enviar notificación de estado: {e}")
+            # La reconexión se maneja automáticamente
+
+    async def notify_task_completion(self, task_id, tenant_id, result, global_task_id=None):
+        """Notifica la finalización exitosa de una tarea"""
+        try:
+            if not self.websocket:
+                logger.warning("WebSocket no conectado. No se puede enviar notificación.")
+                return
+                
+            notification = {
+                "event": "task_completed",
+                "service": self.service_name,
+                "task_id": task_id,
+                "global_task_id": global_task_id,
+                "tenant_id": tenant_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "data": result
+            }
+            
+            await self.websocket.send(json.dumps(notification))
+            logger.info(f"Tarea {task_id} completada y notificada")
+            
+        except Exception as e:
+            logger.error(f"Error al notificar finalización de tarea: {e}")
+            
+    async def notify_task_failure(self, task_id, tenant_id, error, global_task_id=None):
+        """Notifica el fallo de una tarea"""
+        try:
+            if not self.websocket:
+                logger.warning("WebSocket no conectado. No se puede enviar notificación.")
+                return
+                
+            notification = {
+                "event": "task_failed",
+                "service": self.service_name,
+                "task_id": task_id,
+                "global_task_id": global_task_id,
+                "tenant_id": tenant_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "data": {
+                    "error": str(error),
+                    "error_type": error.__class__.__name__ if hasattr(error, "__class__") else "Unknown"
+                }
+            }
+            
+            await self.websocket.send(json.dumps(notification))
+            logger.warning(f"Tarea {task_id} fallida y notificada: {error}")
+            
+        except Exception as e:
+            logger.error(f"Error al notificar fallo de tarea: {e}")
 ```

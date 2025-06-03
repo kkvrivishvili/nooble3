@@ -93,13 +93,15 @@ Cliente → Ingestion Service → Cola de procesamiento
 |             COLAS DE INGESTION                   |
 +--------------------------------------------------+
 |                                                  |
-| ingestion_tasks:{tenant_id}                      | → Cola principal de tareas
-| ingestion_batch:{tenant_id}:{batch_id}           | → Lotes de documentos
-| ingestion_status:{tenant_id}:{job_id}            | → Estado de procesamiento
-| ingestion_collection:{tenant_id}:{collection_id} | → Metadatos de colección 
+| ingestion.tasks.{tenant_id}                      | → Cola principal de tareas
+| ingestion.batch.{tenant_id}.{batch_id}           | → Lotes de documentos
+| ingestion.status.{tenant_id}.{job_id}            | → Estado de procesamiento
+| ingestion.collection.{tenant_id}.{collection_id} | → Metadatos de colección 
 |                                                  |
 +--------------------------------------------------+
 ```
+
+> **Nota**: Los nombres de colas siguen la convención estándar `{service}.{tipo}.{tenant_id}[.{id_adicional}]` para mantener consistencia a través de todo el ecosistema de microservicios.
 
 ### Características Clave
 
@@ -240,6 +242,142 @@ response = requests.post(
 if response.status_code == 202:
     job_id = response.json().get("job_id")
     print(f"Documento en procesamiento. Job ID: {job_id}")
+```
+
+## 🔊 Sistema de Notificaciones
+
+### WebSockets Centralizados
+
+- **Integración con orquestador**: Conexión bidireccional con Agent Orchestrator
+- **Eventos de progreso**: Actualizaciones en tiempo real del estado de ingestión
+- **Reconexión automática**: Mecanismo de backoff exponencial para mayor resiliencia
+- **Autenticación por token**: Comunicación segura entre servicios
+
+### Eventos WebSocket del Ingestion Service
+
+#### Eventos Estandarizados (Para comunicación con el Orchestrator)
+
+- `task_status_update`: Actualiza el estado de procesamiento (por ejemplo: "procesando chunk 5 de 10")
+- `task_completed`: Ingestión de documento(s) completada exitosamente
+- `task_failed`: Error en el proceso de ingestión
+
+#### Eventos Específicos (Para procesamiento interno)
+
+- `document_chunking_completed`: Documento dividido en chunks para procesamiento
+- `collection_updated`: Se ha actualizado una colección con nuevos documentos
+- `metadata_extraction_completed`: Se han extraído metadatos de documentos
+
+> **Importante**: Los eventos estandarizados siguen el formato común definido por el Agent Orchestrator Service para mantener consistencia en todo el ecosistema de microservicios.
+
+### Implementación WebSocket para Notificaciones:
+
+```python
+# websocket/notifier.py
+import asyncio
+import websockets
+import json
+import logging
+import os
+from datetime import datetime
+
+logger = logging.getLogger(__name__)
+
+class IngestionNotifier:
+    def __init__(self):
+        self.service_name = "ingestion-service"
+        self.orchestrator_url = "ws://agent-orchestrator:8000/ws/task_updates"
+        self.service_token = os.getenv("SERVICE_TOKEN")
+        self.reconnect_delay = 1.0  # segundos, con backoff
+        self.websocket = None
+        self.connected = False
+        
+    async def connect(self):
+        """Establece conexión con orquestrador con reconexión automática"""
+        while True:
+            try:
+                logger.info(f"Conectando a {self.orchestrator_url}")
+                async with websockets.connect(self.orchestrator_url) as ws:
+                    # Autenticarse como servicio
+                    await ws.send(json.dumps({
+                        "service_token": self.service_token,
+                        "service_name": self.service_name
+                    }))
+                    
+                    # Esperar confirmación
+                    auth_response = await ws.recv()
+                    if json.loads(auth_response).get("status") != "authenticated":
+                        logger.error("Fallo en la autenticación WebSocket")
+                        raise Exception("Authentication failed")
+                    
+                    logger.info(f"Conexión WebSocket establecida para {self.service_name}")
+                    # Conexión establecida
+                    self.reconnect_delay = 1.0  # reset backoff
+                    self.websocket = ws
+                    self.connected = True
+                    
+                    # Mantener conexión abierta
+                    while True:
+                        # Keep-alive o esperar cierre
+                        await asyncio.sleep(30)
+                        await ws.ping()
+                        
+            except Exception as e:
+                self.connected = False
+                logger.warning(f"Error en conexión WebSocket: {e}. Reintentando en {self.reconnect_delay}s")
+                # Implementar backoff exponencial
+                await asyncio.sleep(self.reconnect_delay)
+                self.reconnect_delay = min(30.0, self.reconnect_delay * 1.5)
+
+    async def notify_task_status(self, task_id, tenant_id, status, details=None, global_task_id=None):
+        """Envía notificación de actualización de estado"""
+        if not self.connected or not self.websocket:
+            logger.warning("WebSocket no conectado. No se puede enviar notificación.")
+            return
+            
+        try:
+            notification = {
+                "event": "task_status_update",
+                "service": self.service_name,
+                "task_id": task_id,
+                "global_task_id": global_task_id,
+                "tenant_id": tenant_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "data": {
+                    "status": status,
+                    "details": details or {}
+                }
+            }
+            
+            await self.websocket.send(json.dumps(notification))
+            logger.debug(f"Notificación enviada: {notification['event']} para tarea {task_id}")
+            
+        except Exception as e:
+            logger.error(f"Error al enviar notificación de estado: {e}")
+            self.connected = False
+            
+    async def notify_task_completion(self, task_id, tenant_id, result, global_task_id=None):
+        """Notifica la finalización exitosa de una ingestión"""
+        if not self.connected or not self.websocket:
+            logger.warning("WebSocket no conectado. No se puede enviar notificación.")
+            return
+            
+        try:
+            notification = {
+                "event": "task_completed",
+                "service": self.service_name,
+                "task_id": task_id,
+                "global_task_id": global_task_id,
+                "tenant_id": tenant_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "data": result
+            }
+            
+            await self.websocket.send(json.dumps(notification))
+            logger.info(f"Tarea {task_id} completada y notificada")
+            
+        except Exception as e:
+            logger.error(f"Error al notificar finalización de tarea: {e}")
+            self.connected = False
 ```
 
 #### Verificar Estado del Trabajo
