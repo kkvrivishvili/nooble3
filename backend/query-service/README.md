@@ -3,6 +3,29 @@
 ## Descripción
 Microservicio especializado para procesamiento RAG (Retrieval Augmented Generation) optimizado para trabajar exclusivamente con modelos LLM de Groq. Este servicio fundamental se encarga de procesar consultas usando técnicas de RAG y búsquedas vectoriales para proporcionar respuestas contextuales.
 
+## 🏗️ Ecosistema de Servicios
+
+La arquitectura se organiza en 3 niveles jerárquicos:
+
+### Nivel 1: Orquestación
+
+- **Agent Orchestrator**: Punto de entrada único, gestión de sesiones y coordinación global
+
+### Nivel 2: Servicios Funcionales
+
+- **Conversation Service**: Historial y contexto de conversaciones
+- **Workflow Engine**: Flujos de trabajo complejos multi-etapa
+- **Agent Execution**: Lógica específica del agente
+- **Tool Registry**: Registro y ejecución de herramientas
+
+### Nivel 3: Servicios de Infraestructura
+
+- **Query Service**: Procesamiento RAG y LLM
+- **Embedding Service**: Generación de embeddings vectoriales
+- **Ingestion Service**: Procesamiento de documentos
+
+> 📌 **Este documento describe el Query Service**, ubicado en el Nivel 3 como servicio de infraestructura especializado en el procesamiento RAG y generación de respuestas utilizando LLM
+
 ## Descripción General
 
 El Query Service es un componente fundamental en la arquitectura de backend de Nooble, responsable de procesar consultas utilizando técnicas de RAG (Retrieval Augmented Generation). El servicio recibe solicitudes del Agent Service, que incluyen consultas de usuario y embeddings pre-calculados, procesa estas solicitudes mediante búsquedas vectoriales en Supabase, y genera respuestas contextuales utilizando los modelos de lenguaje de Groq.
@@ -70,6 +93,20 @@ El servicio sigue una arquitectura de capas bien definida que prioriza la simpli
 └─────────────────────────────────────────────────────┘
 ```
 
+## 🔄 Flujos de Trabajo Principales
+
+### 1. Consulta Normal (Participación del Query Service)
+```
+Cliente → Orchestrator → Agent Execution → Embedding Service → Query Service → Respuesta
+```
+
+### 2. Con Herramientas
+```
+Cliente → Orchestrator → Workflow Engine → Agent Execution → Tool Registry → Query Service → Respuesta
+```
+
+> 🔍 **Rol del Query Service**: Procesar consultas RAG recuperando documentos relevantes y generando respuestas contextuales utilizando modelos LLM de Groq.
+
 ## Flujo de Procesamiento RAG
 
 El flujo de trabajo para procesar consultas RAG sigue estos pasos:
@@ -103,6 +140,56 @@ El flujo de trabajo para procesar consultas RAG sigue estos pasos:
    - Se estructura la respuesta con el texto generado y metadatos
    - Se incluyen fuentes utilizadas si se solicitó
    - Se agregan estadísticas de procesamiento
+
+## 🚦 Sistema de Colas Multi-tenant
+
+### Estructura Jerárquica de Colas del Query Service
+
+```
++------------------------------------------+
+|             COLAS DE QUERY               |
++------------------------------------------+
+|                                          |
+| query_tasks:{tenant_id}                  | → Cola principal de tareas
+| query_results:{tenant_id}:{task_id}      | → Resultados temporales
+| query_streaming:{tenant_id}:{session_id} | → Respuestas streaming
+|                                          |
++------------------------------------------+
+```
+
+### Características Clave
+
+- **Segmentación por tenant**: Completo aislamiento de datos entre tenants
+- **Gestión de prioridades**: Consultas interactivas priorizadas sobre tareas batch
+- **Respuestas streaming**: Soporte para streaming de respuestas LLM en tiempo real
+- **Caché inteligente**: Resultados frecuentes almacenados en caché para mejor rendimiento
+
+### Formato de Mensaje Estandarizado
+
+```json
+{
+  "task_id": "uuid-v4",
+  "tenant_id": "tenant-identifier",
+  "session_id": "optional-session-id",
+  "created_at": "ISO-timestamp",
+  "status": "pending|processing|completed|failed",
+  "type": "query_rag|stream_response",
+  "priority": 0-9,
+  "metadata": {
+    "agent_id": "optional-agent-id",
+    "conversation_id": "optional-conversation-id",
+    "collection_id": "collection-to-search",
+    "model": "llama3-70b-8192",
+    "source": "api|agent_execution|workflow"
+  },
+  "payload": {
+    "query": "Consulta en lenguaje natural",
+    "query_embedding": [0.123, 0.456, ...],
+    "similarity_top_k": 4,
+    "include_sources": true
+  }
+}
+```
 
 ## API de Servicio
 
@@ -199,6 +286,102 @@ Procesa una consulta RAG completa, buscando documentos relevantes y generando un
   "success": false,
   "message": "Error procesando consulta",
   "data": {},
+  "error": {
+    "code": "query_processing_error",
+    "details": "Detalles del error"
+  }
+}
+```
+
+## 🔌 Sistema de Notificaciones
+
+### WebSockets Centralizados
+
+- **Integración con orquestador**: Conexión bidireccional con Agent Orchestrator
+- **Streaming de respuestas**: Envío de tokens de respuesta en tiempo real
+- **Reconexión automática**: Mecanismo de backoff exponencial para conexiones robustas 
+- **Autenticación por token**: Comunicación segura entre servicios
+
+### Eventos Específicos del Query Service
+
+- `query_completed`: Consulta procesada completamente
+- `query_streaming_token`: Nuevo token generado en modo streaming
+- `query_failed`: Error en el procesamiento de la consulta
+- `source_quality_metrics`: Métricas sobre la calidad de las fuentes encontradas
+
+### Implementación WebSocket para Notificaciones:
+
+```python
+# websocket/notifier.py
+import asyncio
+import websockets
+import json
+import logging
+from datetime import datetime
+
+ORCHESTRATOR_WS_URL = "ws://agent-orchestrator:8000/ws/task_updates"
+MAX_RETRIES = 5
+
+logger = logging.getLogger(__name__)
+
+async def notify_query_result(task_id, tenant_id, result, global_task_id=None):
+    """Notifica al orquestador que una consulta ha sido procesada"""
+    retries = 0
+    while retries < MAX_RETRIES:
+        try:
+            async with websockets.connect(ORCHESTRATOR_WS_URL) as websocket:
+                notification = {
+                    "event": "task_completed",
+                    "service": "query",
+                    "task_id": task_id,
+                    "global_task_id": global_task_id,
+                    "tenant_id": tenant_id,
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "data": result
+                }
+                await websocket.send(json.dumps(notification))
+                return True
+        except Exception as e:
+            logger.error(f"Error al notificar resultado via WebSocket: {e}")
+            retries += 1
+            await asyncio.sleep(min(2 ** retries, 30))  # Exponential backoff
+    
+    logger.critical(f"No se pudo notificar resultado después de {MAX_RETRIES} intentos")
+    return False
+
+async def stream_response_token(task_id, tenant_id, token, is_final=False):
+    """Envía un token individual en modo streaming"""
+    try:
+        async with websockets.connect(ORCHESTRATOR_WS_URL) as websocket:
+            notification = {
+                "event": "query_streaming_token",
+                "service": "query",
+                "task_id": task_id,
+                "tenant_id": tenant_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "data": {
+                    "token": token,
+                    "is_final": is_final
+                }
+            }
+            await websocket.send(json.dumps(notification))
+    except Exception as e:
+        logger.error(f"Error al enviar token streaming: {e}")
+```
+
+## 🌐 Integración en el Ecosistema
+
+### Beneficios de la Arquitectura
+
+- **Especialización en Groq**: Optimización exclusiva para modelos LLM de Groq
+- **Escalabilidad independiente**: El servicio puede escalarse según la demanda de consultas
+- **Aislamiento de responsabilidades**: Separación clara entre generación de embeddings y procesamiento RAG
+- **Trazabilidad completa**: Seguimiento detallado del uso de tokens y tiempos de respuesta
+
+```json
+{
+  "success": false,
+  "message": "Error procesando consulta",
   "metadata": {
     "error_time": 0.123
   },

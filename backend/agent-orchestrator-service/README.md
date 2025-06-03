@@ -3,6 +3,30 @@
 ## Descripción
 Servicio central que coordina las interacciones entre el usuario y los diferentes servicios del sistema. Actúa como un punto de entrada unificado para gestionar el flujo de las solicitudes, mantener el estado de las sesiones, y orquestar la comunicación entre los múltiples microservicios de la plataforma.
 
+## 🏗️ Ecosistema de Servicios
+
+La arquitectura se organiza en 3 niveles jerárquicos:
+
+### Nivel 1: Orquestación
+
+- **Agent Orchestrator**: Punto de entrada único, gestión de sesiones y coordinación global
+
+### Nivel 2: Servicios Funcionales
+
+- **Conversation Service**: Historial y contexto de conversaciones
+- **Workflow Engine**: Flujos de trabajo complejos multi-etapa
+- **Agent Execution**: Lógica específica del agente
+- **Tool Registry**: Registro y ejecución de herramientas
+- **Agent Management**: Gestión del ciclo de vida de agentes
+
+### Nivel 3: Servicios de Infraestructura
+
+- **Query Service**: Procesamiento RAG y LLM
+- **Embedding Service**: Generación de embeddings vectoriales
+- **Ingestion Service**: Procesamiento de documentos
+
+> 📌 **Este documento describe el Agent Orchestrator Service**, ubicado en el Nivel 1 como componente central de orquestación
+
 ## Estructura
 ```
 agent-orchestrator-service/
@@ -59,10 +83,118 @@ agent-orchestrator-service/
 3. Gestión de sesiones y mantenimiento de estado
 4. Coordinación de respuestas en tiempo real
 
-## Sistema de Cola de Trabajo
-- **Tareas**: Procesamiento de solicitudes complejas, coordinación de flujos asíncronos
-- **Implementación**: Redis Queue con sistema de prioridades y retorno de resultados
-- **Procesamiento**: Manejo de solicitudes de larga duración y operaciones por lotes
+## 🚦 Sistema de Colas Multi-tenant
+
+### Mapa de Responsabilidades del Orquestador
+
+```
++----------------------------------------------------------+
+|                   AGENT ORCHESTRATOR                     |
++----------------------------------------------------------+
+| RESPONSABILIDADES PRINCIPALES:                           |
+|                                                          |
+| 1. ◆ Punto único de entrada para clientes                |
+| 2. ◆ Gestión global de sesiones y contexto               |
+| 3. ◆ Orquestación de tareas entre servicios              |
+| 4. ◆ Seguimiento del estado de tareas asíncronas         |
+| 5. ◆ Servidor WebSocket para notificaciones              |
+| 6. ◆ Aplicación de políticas de seguridad y tenancy      |
++----------------------------------------------------------+
+```
+
+### Estructura Jerárquica de Colas
+
+```
+                  +---------------------------+
+                  |    COLAS DE ORQUESTADOR   |
+                  +---------------------------+
+                               |
+         +--------------------+-----------------+
+         |                    |                 |
++----------------+  +------------------+  +---------------+
+| Nivel Sesión   |  | Nivel Tarea     |  | Nivel Sistema |
++----------------+  +------------------+  +---------------+
+|                |  |                  |  |               |
+| orchestrator:  |  | orchestrator:    |  | orchestrator: |
+| session:       |  | tasks:           |  | system:       |
+| {tenant_id}:   |  | {tenant_id}      |  | notifications |
+| {session_id}   |  |                  |  |               |
++----------------+  +------------------+  +---------------+
+```
+
+### Características Clave
+
+- **Segmentación por tenant**: Completo aislamiento de datos entre tenants
+- **IDs únicos para trazabilidad**: Correlación de tareas distribuidas
+- **Metadatos de contexto enriquecidos**: Información completa para seguimiento
+- **Tracking de estado en tiempo real**: Actualización inmediata de estados
+
+### Estructura y Tipos de Colas
+
+1. **Colas de Nivel Sesión**:
+   - `orchestrator:session:{tenant_id}:{session_id}`
+   - Propósito: Seguimiento de sesiones activas y su estado
+   - Datos: Estado de la conversación, historial, contexto activo
+
+2. **Colas de Nivel Tarea**:
+   - `orchestrator:tasks:{tenant_id}`
+   - Propósito: Tracking global de todas las tareas del tenant
+   - Estructura: Registro central de tareas distribuidas en otros servicios
+
+3. **Colas de Sistema**:
+   - `orchestrator:system:notifications`
+   - Propósito: Notificaciones internas del sistema
+
+### Formato Estandarizado de Mensajes en Cola
+
+```json
+{
+  "task_id": "uuid-v4",
+  "tenant_id": "tenant-identifier",
+  "session_id": "session-identifier",
+  "created_at": "ISO-timestamp",
+  "status": "pending|processing|completed|failed",
+  "type": "query|embedding|workflow|agent_execution",
+  "priority": 0-9,
+  "delegated_services": [
+    {
+      "service": "service-name",
+      "task_id": "service-specific-task-id"
+    }
+  ],
+  "metadata": {
+    "source": "api|scheduled|system",
+    "user_id": "optional-user-id",
+    "timeout_ms": 30000
+  },
+  "payload": {
+    // Datos específicos de la tarea
+  }
+}
+```
+
+### Flujo de Trabajo Asíncrono Detallado
+
+```
++--------+          +------------------+          +----------------+
+|        |  HTTP    |                  | Encolar   |                |
+|Cliente | -------> |Agent Orchestrator| -------> | Redis Queue    |
+|        |          |                  |          |                |
++--------+          +------------------+          +----------------+
+    ^                       |  ^                         |
+    |                       |  |                         |
+    |     WebSocket         |  |                         |
+    +-----Notificación------+  |                         |
+                               |                         |
+                               |      Workers            |
+                               | <--------------------   |
+                               |                         |
+                             +-v---------+              |
+                             |           |              |
+                             | Servicios | ------------>+
+                             |           | Notificación WebSocket
+                             +-----------+
+```
 
 ## Comunicación Asíncrona y WebSockets
 
@@ -184,3 +316,245 @@ Esta centralización garantiza:
 - Consistencia en el manejo de caché
 - Orquestación correcta de operaciones complejas
 - Trazabilidad completa de las solicitudes
+
+## Flujos de Trabajo Completos
+
+### Flujo de Conversación Normal
+
+```
+1. Cliente → Orchestrator: Nueva consulta
+2. Orchestrator → Conversation Service: Almacena mensaje y obtiene contexto
+3. Orchestrator → Agent Execution: Procesa consulta con contexto
+4. Agent Execution → Query Service: Realiza consulta RAG
+5. Query Service → Agent Execution: Devuelve resultado (WebSocket)
+6. Agent Execution → Orchestrator: Devuelve respuesta (WebSocket)
+7. Orchestrator → Conversation Service: Almacena respuesta
+8. Orchestrator → Cliente: Entrega respuesta final
+```
+
+### Flujo de Herramientas y Workflow
+
+```
+1. Cliente → Orchestrator: Solicitud que requiere herramientas
+2. Orchestrator → Workflow Engine: Identifica workflow necesario
+3. Workflow Engine → Agent Execution: Delega ejecución de etapas
+4. Agent Execution → Tool Registry: Solicita ejecución de herramientas
+5. Tool Registry → Agent Execution: Devuelve resultado de herramientas
+6. Agent Execution → Query Service: Realiza consulta LLM con resultados
+7. [Continúa como flujo normal]
+```
+
+### Flujo de Ingestión de Documentos
+
+```
+1. Cliente → Orchestrator → Workflow Engine: Inicia ingestión
+2. Workflow Engine → Ingestion Service: Procesa documento
+3. Ingestion Service → Embedding Service: Solicita embeddings para chunks
+4. Embedding Service → Ingestion Service: Devuelve embeddings (WebSocket)
+5. Ingestion Service → Workflow Engine: Notifica completado (WebSocket)
+6. Workflow Engine → Orchestrator: Notifica completado (WebSocket)
+7. Orchestrator → Cliente: Notifica completado
+```
+
+## 🔄 Flujos de Trabajo Principales
+
+### 1. Consulta Normal
+```
+Cliente → Orchestrator → Conversation → Agent Execution → Query → Respuesta
+```
+
+### 2. Con Herramientas
+```
+Cliente → Orchestrator → Workflow Engine → Agent Execution → Tool Registry → Query → Respuesta
+```
+
+### 3. Ingestión de Documentos
+```
+Cliente → Orchestrator → Ingestion Service → Embedding Service → Notificación de completado
+```
+
+## Registro Global de Tareas
+
+El Agent Orchestrator Service implementa un `GlobalTaskRegistry` que mantiene el estado de todas las tareas distribuidas:
+
+```python
+class GlobalTaskRegistry:
+    def __init__(self, redis_conn):
+        self.redis_conn = redis_conn
+        self.namespace = "orchestrator:tasks"
+    
+    async def register_task(self, global_task_id, session_id, tenant_id, 
+                          service=None, service_task_id=None):
+        """Registra una tarea global en el sistema"""
+        key = f"{self.namespace}:{tenant_id}:{global_task_id}"
+        
+        task_data = {
+            "global_task_id": global_task_id,
+            "tenant_id": tenant_id,
+            "session_id": session_id,
+            "status": "processing",
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat(),
+            "delegated_services": []
+        }
+        
+        if service and service_task_id:
+            task_data["delegated_services"].append({
+                "service": service,
+                "task_id": service_task_id
+            })
+            
+        await self.redis_conn.hmset(key, task_data)
+        await self.redis_conn.expire(key, 86400)  # 24 horas
+        
+        return task_data
+        
+    async def update_task(self, global_task_id, tenant_id, 
+                         status=None, result=None):
+        """Actualiza el estado de una tarea global"""
+        key = f"{self.namespace}:{tenant_id}:{global_task_id}"
+        
+        if not await self.redis_conn.exists(key):
+            return None
+            
+        updates = {"updated_at": datetime.utcnow().isoformat()}
+        
+        if status:
+            updates["status"] = status
+            
+        if result:
+            updates["result"] = json.dumps(result)
+            
+        await self.redis_conn.hmset(key, updates)
+        
+        # Si completado o fallido, notificar al cliente
+        if status in ["completed", "failed"]:
+            await self._notify_completion(global_task_id, tenant_id, status)
+            
+        return await self.get_task(global_task_id, tenant_id)
+        
+    async def get_task(self, global_task_id, tenant_id):
+        """Obtiene los detalles de una tarea"""
+        key = f"{self.namespace}:{tenant_id}:{global_task_id}"
+        
+        if not await self.redis_conn.exists(key):
+            return None
+            
+        return await self.redis_conn.hgetall(key)
+```
+
+## Patrones Estandarizados de Integración
+
+### Caché Centralizada
+
+El Agent Orchestrator implementa y coordina un sistema centralizado de caché:
+
+```python
+from common.cache.manager import CacheManager
+from common.cache.helpers import get_with_cache_aside
+
+# Ejemplo de uso en el orquestador
+async def get_embeddings_with_cache(texts, tenant_id, collection_id=None):
+    cache_key = f"embeddings:{tenant_id}:{hash_texts(texts)}"
+    
+    # Usar patrón Cache-Aside
+    embeddings, metrics = await get_with_cache_aside(
+        data_type="embedding",
+        resource_id=cache_key,
+        tenant_id=tenant_id,
+        fetch_from_db_func=None,  # No DB lookup
+        generate_func=lambda: embedding_service.generate_embeddings(texts, tenant_id),
+        collection_id=collection_id,
+        ttl_seconds=86400  # 24 horas
+    )
+    
+    # Registrar uso
+    await track_token_usage(
+        tenant_id=tenant_id,
+        tokens=metrics.get("tokens", 0),
+        model=metrics.get("model"),
+        token_type="embedding",
+        operation="generate",
+        metadata={"service": "orchestrator"}
+    )
+    
+    return embeddings
+```
+
+## 🔌 Sistema de Notificaciones
+
+### WebSockets Centralizados
+
+- Hub central en Agent Orchestrator
+- Conexiones bidireccionales con todos los servicios
+- Formato estandarizado de mensajes
+- Reconexión automática con backoff exponencial
+
+### Eventos Principales
+
+- `task_completed`: Tarea finalizada exitosamente
+- `task_status_update`: Actualización de progreso intermedio
+- `task_failed`: Error en el procesamiento de la tarea
+
+### Formato Estandarizado de Mensajes WebSocket
+
+Los mensajes WebSocket siguen un formato estandarizado para asegurar consistencia:
+
+```json
+{
+  "event": "task_completed|task_status_update|task_failed",
+  "service": "query|embedding|agent_execution|workflow|...",
+  "task_id": "task-uuid",
+  "global_task_id": "global-task-uuid",
+  "tenant_id": "tenant-id",
+  "timestamp": "iso-timestamp",
+  "data": {
+    // Datos específicos del evento
+  },
+  "metadata": {
+    // Metadatos adicionales específicos del servicio
+  }
+}
+```
+
+### Implementación del Cliente WebSocket
+
+```python
+# websocket/notifier.py (implementación para servicios)
+class TaskNotifier:
+    def __init__(self, service_name, orchestrator_url):
+        self.service_name = service_name
+        self.orchestrator_url = orchestrator_url
+        self.service_token = os.getenv("SERVICE_TOKEN")
+        self.reconnect_delay = 1.0  # segundos, con backoff
+        
+    async def connect(self):
+        """Establece conexión con orquestador con reconexión automática"""
+        while True:
+            try:
+                async with websockets.connect(self.orchestrator_url) as ws:
+                    # Autenticarse como servicio
+                    await ws.send(json.dumps({
+                        "service_token": self.service_token,
+                        "service_name": self.service_name
+                    }))
+                    
+                    # Esperar confirmación
+                    auth_response = await ws.recv()
+                    if json.loads(auth_response).get("status") != "authenticated":
+                        raise Exception("Authentication failed")
+                    
+                    # Conexión establecida
+                    self.reconnect_delay = 1.0  # reset backoff
+                    self.websocket = ws
+                    
+                    # Mantener conexión abierta
+                    while True:
+                        # Keep-alive o esperar cierre
+                        await asyncio.sleep(30)
+                        
+            except Exception as e:
+                # Implementar backoff exponencial
+                await asyncio.sleep(self.reconnect_delay)
+                self.reconnect_delay = min(30.0, self.reconnect_delay * 1.5)
+```

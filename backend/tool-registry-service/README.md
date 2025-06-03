@@ -3,6 +3,43 @@
 ## Descripción
 Servicio encargado del registro, validación y ejecución de herramientas (tools) que pueden ser utilizadas por los agentes. Proporciona un mecanismo central para descubrir y utilizar herramientas de forma segura y controlada.
 
+## 🏗️ Ecosistema de Servicios
+
+La arquitectura se organiza en 3 niveles jerárquicos:
+
+### Nivel 1: Orquestación
+
+- **Agent Orchestrator**: Punto de entrada único, gestión de sesiones y coordinación global
+
+### Nivel 2: Servicios Funcionales
+
+- **Conversation Service**: Historial y contexto de conversaciones
+- **Workflow Engine**: Flujos de trabajo complejos multi-etapa
+- **Agent Execution**: Lógica específica del agente
+- **Tool Registry**: Registro y ejecución de herramientas
+
+### Nivel 3: Servicios de Infraestructura
+
+- **Query Service**: Procesamiento RAG y LLM
+- **Embedding Service**: Generación de embeddings vectoriales
+- **Ingestion Service**: Procesamiento de documentos
+
+> 📌 **Este documento describe el Tool Registry Service**, ubicado en el Nivel 2 como servicio funcional encargado del registro, validación y ejecución de herramientas utilizadas por los agentes
+
+## 🔄 Flujos de Trabajo Principales
+
+### 1. Ejecución con Herramientas
+```
+Cliente → Orchestrator → Agent Execution → Tool Registry (descubrimiento) → Tool Registry (ejecución) → Respuesta
+```
+
+### 2. Registro de Nuevas Herramientas
+```
+Cliente → Orchestrator → Tool Registry (validación) → Tool Registry (registro) → Notificación
+```
+
+> 🔍 **Rol del Tool Registry**: Centralizar el registro, validación, descubrimiento y ejecución segura de herramientas disponibles para los agentes.
+
 ## Estructura
 ```
 tool-registry-service/
@@ -49,6 +86,140 @@ tool-registry-service/
 ├── requirements.txt
 ├── Dockerfile
 └── README.md
+
+## 🚦 Sistema de Colas Multi-tenant
+
+### Estructura Jerárquica de Colas del Tool Registry Service
+
+```
++-------------------------------------------------+
+|             COLAS DE TOOL REGISTRY               |
++-------------------------------------------------+
+|                                                 |
+| tool_registry_tasks:{tenant_id}                 | → Cola principal de tareas
+| tool_execution:{tenant_id}                      | → Ejecución de herramientas
+| tool_registration:{tenant_id}                   | → Registro de herramientas
+| tool_validation:{tenant_id}                     | → Validación de herramientas
+|                                                 |
++-------------------------------------------------+
+```
+
+### Características Clave
+
+- **Segmentación por tenant**: Completo aislamiento de datos entre tenants
+- **Control de acceso granular**: Permisos por agente, tenant y herramienta
+- **Ejecución asíncrona**: Procesamiento paralelo de llamadas a herramientas
+- **Validación automática**: Verificación de funcionamiento correcto de herramientas
+
+### Formato de Mensaje Estandarizado
+
+```json
+{
+  "task_id": "uuid-v4",
+  "tenant_id": "tenant-identifier",
+  "created_at": "ISO-timestamp",
+  "status": "pending|processing|completed|failed",
+  "type": "tool_execution|tool_registration|tool_discovery",
+  "priority": 0-9,
+  "metadata": {
+    "agent_id": "agent-identifier",
+    "session_id": "session-identifier",
+    "execution_id": "execution-identifier",
+    "source": "agent_execution|workflow|api"
+  },
+  "payload": {
+    "tool_id": "tool-identifier",
+    "tool_name": "tool-name",
+    "tool_type": "rag|calculator|external_api|...",
+    "parameters": {},
+    "timeout_ms": 5000
+  }
+}
+```
+
+## 🔌 Sistema de Notificaciones
+
+### WebSockets Centralizados
+
+- **Integración con orquestador**: Conexión bidireccional con Agent Orchestrator
+- **Notificaciones de herramientas**: Actualizaciones en tiempo real del estado de ejecución
+- **Reconexión automática**: Mecanismo de backoff exponencial para mayor resiliencia
+- **Autenticación por token**: Comunicación segura entre servicios
+
+### Eventos Específicos del Tool Registry Service
+
+- `tool_execution_started`: Inicio de ejecución de herramienta
+- `tool_execution_completed`: Finalización exitosa de herramienta
+- `tool_execution_failed`: Error en la ejecución de herramienta
+- `tool_registered`: Nueva herramienta registrada
+- `tool_validation_completed`: Validación de herramienta finalizada
+
+### Implementación WebSocket para Notificaciones:
+
+```python
+# websocket/notifier.py
+import asyncio
+import websockets
+import json
+import logging
+from datetime import datetime
+
+ORCHESTRATOR_WS_URL = "ws://agent-orchestrator:8000/ws/task_updates"
+
+logger = logging.getLogger(__name__)
+
+async def notify_tool_execution(task_id, tenant_id, execution_data, global_task_id=None):
+    """Notifica sobre la ejecución de una herramienta"""
+    try:
+        async with websockets.connect(ORCHESTRATOR_WS_URL) as websocket:
+            notification = {
+                "event": "tool_execution_completed",
+                "service": "tool-registry",
+                "task_id": task_id,
+                "global_task_id": global_task_id,
+                "tenant_id": tenant_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "data": {
+                    "tool_id": execution_data["tool_id"],
+                    "execution_id": execution_data["execution_id"],
+                    "result": execution_data["result"],
+                    "execution_time_ms": execution_data["execution_time_ms"]
+                }
+            }
+            await websocket.send(json.dumps(notification))
+    except Exception as e:
+        logger.error(f"Error al notificar ejecución de herramienta via WebSocket: {e}")
+
+async def notify_tool_registration(task_id, tenant_id, tool_data, global_task_id=None):
+    """Notifica el registro de una nueva herramienta"""
+    try:
+        async with websockets.connect(ORCHESTRATOR_WS_URL) as websocket:
+            notification = {
+                "event": "tool_registered",
+                "service": "tool-registry",
+                "task_id": task_id,
+                "global_task_id": global_task_id,
+                "tenant_id": tenant_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "data": {
+                    "tool_id": tool_data["tool_id"],
+                    "tool_name": tool_data["tool_name"],
+                    "tool_type": tool_data["tool_type"]
+                }
+            }
+            await websocket.send(json.dumps(notification))
+    except Exception as e:
+        logger.error(f"Error al notificar registro de herramienta via WebSocket: {e}")
+```
+
+## 🌐 Integración en el Ecosistema
+
+### Beneficios de la Arquitectura
+
+- **Extensibilidad**: Fácil adición de nuevas herramientas sin modificar otros servicios
+- **Registro centralizado**: Catálogo único de todas las herramientas disponibles
+- **Seguridad y control de acceso**: Gestión de permisos para uso de herramientas
+- **Monitoreo y observabilidad**: Seguimiento detallado de uso de cada herramienta
 ```
 
 ## Funciones Clave

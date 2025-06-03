@@ -3,6 +3,29 @@
 ## Descripción
 Microservicio optimizado que proporciona capacidades de generación de embeddings vectoriales para el sistema RAG (Retrieval Augmented Generation), utilizando exclusivamente modelos de OpenAI. Este servicio es fundamental para transformar texto en representaciones numéricas que permiten la búsqueda semántica en el sistema.
 
+## 🏗️ Ecosistema de Servicios
+
+La arquitectura se organiza en 3 niveles jerárquicos:
+
+### Nivel 1: Orquestación
+
+- **Agent Orchestrator**: Punto de entrada único, gestión de sesiones y coordinación global
+
+### Nivel 2: Servicios Funcionales
+
+- **Conversation Service**: Historial y contexto de conversaciones
+- **Workflow Engine**: Flujos de trabajo complejos multi-etapa
+- **Agent Execution**: Lógica específica del agente
+- **Tool Registry**: Registro y ejecución de herramientas
+
+### Nivel 3: Servicios de Infraestructura
+
+- **Query Service**: Procesamiento RAG y LLM
+- **Embedding Service**: Generación de embeddings vectoriales
+- **Ingestion Service**: Procesamiento de documentos
+
+> 📌 **Este documento describe el Embedding Service**, ubicado en el Nivel 3 como servicio de infraestructura especializado en la generación de vectores semánticos
+
 ## Características
 
 - Generación de embeddings de alta calidad utilizando modelos de OpenAI
@@ -28,6 +51,20 @@ EnhancedEmbeddingResponse
     ↓
 Agent Service → Query Service
 ```
+
+## 🔄 Flujos de Trabajo Principales
+
+### 1. Consulta Normal (Participación del Embedding Service)
+```
+Cliente → Orchestrator → Agent Execution → Embedding Service → Query → Respuesta
+```
+
+### 2. Ingestión de Documentos
+```
+Cliente → Orchestrator → Workflow Engine → Ingestion Service → Embedding Service → Notificación de completado
+```
+
+> 🔍 **Rol del Embedding Service**: Transformar texto en representaciones vectoriales que permiten búsquedas semánticas y contextualmente relevantes en el sistema RAG.
 
 ## Estructura
 
@@ -91,7 +128,30 @@ El servicio utiliza variables de entorno para la configuración:
 
 Para manejar de manera eficiente las solicitudes de embeddings por lotes, especialmente para operaciones de ingestado de documentos, el Embedding Service implementa un sistema simple de cola de trabajo basado en Redis Queue (RQ).
 
-### Implementación Simple:
+## 🚦 Sistema de Colas Multi-tenant
+
+### Estructura Jerárquica de Colas del Embedding Service
+
+```
++-------------------------------------+
+|          COLAS DE EMBEDDING         |
++-------------------------------------+
+|                                     |
+| embedding_tasks:{tenant_id}         | → Cola principal de tareas
+| embedding_results:{tenant_id}:{id}  | → Resultados temporales
+| embedding_batch:{tenant_id}:{batch} | → Procesos de ingestado
+|                                     |
++-------------------------------------+
+```
+
+### Características Clave
+
+- **Segmentación por tenant**: Completo aislamiento de datos entre tenants
+- **Procesamiento por lotes**: Optimización para grandes volúmenes de texto
+- **Priorización de tareas**: Consultas interactivas priorizadas sobre ingestado masivo
+- **Tracking de tokens**: Monitoreo detallado del uso por tenant
+
+### Implementación del Sistema de Colas:
 
 ```python
 # queue/job_manager.py
@@ -172,6 +232,21 @@ def run_worker():
 if __name__ == '__main__':
     run_worker()
 ```
+
+## 🔌 Sistema de Notificaciones
+
+### WebSockets Centralizados
+
+- **Hub de conexión**: Integración con el servidor WebSocket centralizado del Agent Orchestrator
+- **Notificación automática**: Actualización en tiempo real cuando los embeddings están listos
+- **Reconexión inteligente**: Mecanismo de backoff exponencial para conexiones robustas
+- **Autenticación por token**: Seguridad en las comunicaciones inter-servicio
+
+### Eventos Específicos del Embedding Service
+
+- `embeddings_generated`: Vectores generados exitosamente
+- `batch_progress_update`: Actualización de progreso en procesos por lotes
+- `embedding_failed`: Error en la generación de embeddings
 
 ### Integración con WebSocket para Notificaciones:
 
@@ -293,7 +368,32 @@ async def get_embeddings_for_query(query_text, tenant_id, collection_id=None):
         raise ValueError(f"Error en embedding service: {response.text}")
 ```
 
-## Flujo de Trabajo en el Sistema RAG
+## 🌐 Integración en el Ecosistema
+
+### Formato Estandarizado de Mensajes
+
+```json
+{
+  "task_id": "uuid-v4",
+  "tenant_id": "tenant-identifier",
+  "created_at": "ISO-timestamp",
+  "status": "pending|processing|completed|failed",
+  "service": "embedding",
+  "metadata": {
+    "collection_id": "optional-collection-id",
+    "model": "text-embedding-3-small|text-embedding-3-large",
+    "source": "query|ingestion|batch",
+    "priority": 0-9
+  },
+  "payload": {
+    "texts": ["texto1", "texto2"],
+    "dimensions": 1536,
+    "batch_size": 100
+  }
+}
+```
+
+### Flujo de Trabajo en el Sistema RAG
 
 1. **Agent Service** recibe consulta del usuario
 2. **Agent Service** solicita embeddings al **Embedding Service**
@@ -301,6 +401,13 @@ async def get_embeddings_for_query(query_text, tenant_id, collection_id=None):
 4. **Agent Service** utiliza embeddings para buscar en el **Query Service**
 5. **Query Service** encuentra documentos relevantes
 6. **Agent Service** genera respuesta con contexto enriquecido
+
+### Beneficios de la Arquitectura
+
+- **Escalabilidad**: Servicio especializado que puede escalarse independientemente
+- **Resilencia**: Fallos aislados no afectan a todo el sistema
+- **Optimización**: Procesamiento por lotes para eficiencia en costos y rendimiento
+- **Flexibilidad**: Fácil cambio de proveedor de embeddings sin afectar otros servicios
 
 ## Monitoreo y Métricas
 
