@@ -1,6 +1,6 @@
 # Agent Orchestrator Service
 
-*Versión: 2.0.0*  
+*Versión: 3.0.0*  
 *Última actualización: 2025-06-04*  
 *Responsable: Equipo Nooble Backend*
 
@@ -8,7 +8,7 @@
 
 Servicio central que coordina las interacciones entre el usuario y los diferentes servicios del sistema. Actúa como un punto de entrada unificado para gestionar el flujo de solicitudes, mantener el estado de sesiones, y orquestar la comunicación entre los múltiples microservicios de la plataforma Nooble AI.
 
-> **IMPORTANTE**: Este servicio es el componente principal de comunicación interna de la plataforma y sigue estrictamente los [Estándares de Comunicación entre Microservicios](../../common-standarts/microservice_communication_standards_part1.md) definidos para Nooble.
+> **IMPORTANTE**: Este servicio es el componente principal de comunicación interna y externa de la plataforma Nooble AI. Implementa el estándar de comunicación **Domain/Action** en todos sus mensajes, APIs y eventos WebSocket para garantizar consistencia, trazabilidad y mantenibilidad a través del sistema completo.
 
 ## 📚 Documentación
 
@@ -17,8 +17,9 @@ La documentación del Agent Orchestrator Service está organizada en las siguien
 ### Estándares y Referencias
 
 - [📒 Estándares Globales](standards/global_standards.md) - Punto central de referencia para todos los estándares
-- [📃 Clasificación de Endpoints API](api/endpoints_classification.md) - Catálogo completo de endpoints
-- [🧪 Matriz de Errores](errors/error_matrix.md) - Definición de códigos de error y estrategias
+- [📘 Estándar Domain/Action](standards/domain_action_standard.md) - Especificación completa del estándar de comunicación
+- [📃 Clasificación de Endpoints API](api/endpoints_classification.md) - Catálogo completo de endpoints Domain/Action
+- [🧪 Matriz de Errores](errors/error_matrix.md) - Definición de códigos de error por dominio
 
 ### Arquitectura y Estructura
 
@@ -40,8 +41,9 @@ La documentación del Agent Orchestrator Service está organizada en las siguien
 
 #### Comunicación Externa
 
-- [💬 Eventos WebSocket](communication/websocket/websocket_events.md) - Comunicación en tiempo real
-- [🔗 Integración Frontend](communication/frontend/frontend_integration.md) - Guía para integración de clientes
+- [💬 Eventos WebSocket](communication/websocket/websocket_events.md) - Catálogo de eventos Domain/Action para comunicación en tiempo real
+- [🔗 Integración Frontend](communication/frontend/frontend_integration.md) - Guía completa para integración de clientes con Domain/Action
+- [🔄 Ejemplos y SDK](communication/frontend/client_sdk.md) - SDK y ejemplos de implementación Domain/Action
 
 ### Configuración y Seguridad
 
@@ -129,10 +131,11 @@ agent-orchestrator-service/
 ```
 
 ## Funciones Clave
-1. Punto de entrada unificado para solicitudes de usuarios
-2. Orquestación de flujos de trabajo entre servicios
-3. Gestión de sesiones y mantenimiento de estado
-4. Coordinación de respuestas en tiempo real
+1. Punto de entrada unificado para solicitudes de usuarios (API Domain/Action)
+2. Orquestación de flujos de trabajo entre servicios (mensajería Domain/Action)
+3. Gestión de sesiones y mantenimiento de estado (consistente entre comunicaciones síncronas y asíncronas)
+4. Coordinación de respuestas en tiempo real (WebSocket con eventos Domain/Action)
+5. Trazabilidad end-to-end con metadatos de correlación en formato Domain/Action
 
 ## 🚦 Sistema de Colas Multi-tenant
 
@@ -153,52 +156,56 @@ agent-orchestrator-service/
 +----------------------------------------------------------+
 ```
 
-### Estructura Jerárquica de Colas
+### Estructura Jerárquica de Colas (Domain/Action)
 
 ```
-                  +---------------------------+
-                  |    COLAS DE ORQUESTADOR   |
-                  +---------------------------+
+                  +-----------------------------------+
+                  |    COLAS DE ORQUESTADOR (D/A)     |
+                  +-----------------------------------+
                                |
-         +--------------------+-----------------+
-         |                    |                 |
-+----------------+  +------------------+  +---------------+
-| Nivel Sesión   |  | Nivel Tarea     |  | Nivel Sistema |
-+----------------+  +------------------+  +---------------+
-|                |  |                  |  |               |
-| orchestrator:  |  | orchestrator:    |  | orchestrator: |
-| session:       |  | tasks:           |  | system:       |
-| {tenant_id}:   |  | {tenant_id}      |  | notifications |
-| {session_id}   |  |                  |  |               |
-+----------------+  +------------------+  +---------------+
+         +--------------------+-------------------+
+         |                    |                   |
++----------------+  +------------------+  +-------------------+
+| Nivel Sesión   |  | Nivel Tarea     |  | Nivel Sistema     |
++----------------+  +------------------+  +-------------------+
+|                |  |                  |  |                   |
+| orchestrator:  |  | orchestrator:    |  | orchestrator:     |
+| session:       |  | task:            |  | system:           |
+| {tenant_id}:   |  | {tenant_id}:     |  | {domain}:         |
+| {session_id}   |  | {domain}         |  | {action}          |
++----------------+  +------------------+  +-------------------+
 ```
 
 ### Características Clave
 
 - **Segmentación por tenant**: Completo aislamiento de datos entre tenants
-- **IDs únicos para trazabilidad**: Correlación de tareas distribuidas
-- **Metadatos de contexto enriquecidos**: Información completa para seguimiento
-- **Tracking de estado en tiempo real**: Actualización inmediata de estados
+- **Esquema Domain/Action**: Estructura de mensajes estandarizada para toda comunicación
+- **Trazabilidad con message_id y correlation_id**: Correlación end-to-end de solicitudes
+- **Metadatos enriquecidos**: Versión de esquema, timestamp, servicio fuente
+- **Tracking de estado en tiempo real**: Actualización inmediata con mensajes domain/action
 
-### Estructura y Tipos de Colas
+### Estructura y Tipos de Colas con Domain/Action
 
 1. **Colas de Nivel Sesión**:
    - `orchestrator:session:{tenant_id}:{session_id}`
    - Propósito: Seguimiento de sesiones activas y su estado
-   - Datos: Estado de la conversación, historial, contexto activo
+   - Datos: Mensajes Domain/Action para chat, workflow y session
+   - Formato: `{message_id, correlation_id, type: {domain, action}, data, ...}`
 
-2. **Colas de Nivel Tarea**:
-   - `orchestrator:tasks:{tenant_id}`
-   - Propósito: Tracking global de todas las tareas del tenant
-   - Estructura: Registro central de tareas distribuidas en otros servicios
+2. **Colas de Nivel Tarea por Dominio**:
+   - `orchestrator:task:{tenant_id}:{domain}`
+   - Propósito: Tracking de tareas específicas por dominio (chat, workflow, tool)
+   - Estructura: Registro centralizado de tareas con metadata Domain/Action
+   - Ejemplo: `orchestrator:task:tenant123:chat` para tareas de chat
 
-3. **Colas de Sistema**:
-   - `orchestrator:system:notifications`
-   - Propósito: Notificaciones internas del sistema
+3. **Colas de Sistema por Dominio y Acción**:
+   - `orchestrator:system:{domain}:{action}`
+   - Propósito: Eventos del sistema organizados por domain/action
+   - Ejemplos: `orchestrator:system:monitoring:alert`, `orchestrator:system:metrics:report`
 
-## 🔗 Integraciones Principales
+## 🔗 Integraciones Principales (Domain/Action)
 
-El Agent Orchestrator Service coordina con todos los demás servicios:
+El Agent Orchestrator Service coordina con todos los demás servicios utilizando el estándar Domain/Action para mensajería interna:
 
 1. **Conversation Service**: Para gestionar el historial de conversaciones
 2. **Agent Management Service**: Para obtener configuraciones de agentes
