@@ -93,7 +93,7 @@ agent-orchestrator-service/
 +----------------------------------------------------------+
 | RESPONSABILIDADES PRINCIPALES:                           |
 |                                                          |
-| 1. ◆ Punto único de entrada para clientes                |
+| 1. ◆ Punto único de entrada para ejecucion de workflows y conversaciones                |
 | 2. ◆ Gestión global de sesiones y contexto               |
 | 3. ◆ Orquestación de tareas entre servicios              |
 | 4. ◆ Seguimiento del estado de tareas asíncronas         |
