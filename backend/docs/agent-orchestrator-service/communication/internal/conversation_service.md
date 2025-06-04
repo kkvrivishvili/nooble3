@@ -94,59 +94,102 @@ sequenceDiagram
 
 ## 3. Estructura de Colas
 
-El Orchestrator interactúa con el Conversation Service a través de las siguientes colas Redis:
+El Orchestrator interactúa con el Conversation Service a través de las siguientes colas Redis. Siguiendo el estándar global de comunicación, todas las colas tienen el formato `service-name.[priority].[domain].[action]`:
 
 ### 3.1 Colas que Produce el Orchestrator 
 
-| Cola | Propósito | Formato de Mensaje | Consumidor |
-|------|-----------|-------------------|------------|
-| `conversation:tasks:{tenant_id}` | Cola principal para tareas de conversación | [ConversationTaskMessage](#31-conversationtaskmessage) | Conversation Service |
-| `conversation:store:{tenant_id}` | Almacenamiento de nuevos mensajes | [StoreMessageMessage](#32-storemessagemessage) | Conversation Service |
-| `conversation:retrieval:{tenant_id}` | Solicitudes de recuperación de contexto | [RetrieveContextMessage](#33-retrievecontextmessage) | Conversation Service |
+| Cola | Domain | Action | Propósito | Prioridad |
+|------|--------|--------|------------|----------|
+| `conversation_service.high.conversation.task` | `conversation` | `task` | Cola principal para tareas de conversación | Alta |
+| `conversation_service.medium.message.store` | `message` | `store` | Almacenamiento de nuevos mensajes | Media |
+| `conversation_service.high.context.retrieve` | `context` | `retrieve` | Solicitudes de recuperación de contexto | Alta |
+| `conversation_service.low.conversation.history` | `conversation` | `history` | Obtención de historial completo | Baja |
+| `conversation_service.high.memory.update` | `memory` | `update` | Actualización de memoria de conversación | Alta |
 
 ### 3.2 Colas que Consume el Orchestrator
 
-| Cola | Propósito | Formato de Mensaje | Productor |
-|------|-----------|-------------------|-----------|
-| `conversation:context:{tenant_id}:{session_id}` | Resultados de recuperación de contexto | [ContextResultMessage](#34-contextresultmessage) | Conversation Service |
-| `conversation:updates:{tenant_id}` | Notificaciones de actualizaciones | [ConversationUpdateMessage](#35-conversationupdatemessage) | Conversation Service |
+| Cola | Domain | Action | Propósito | Prioridad |
+|------|--------|--------|------------|----------|
+| `agent_orchestrator.high.context.result` | `context` | `result` | Resultados de recuperación de contexto | Alta |
+| `agent_orchestrator.medium.conversation.update` | `conversation` | `update` | Notificaciones de actualizaciones | Media |
+| `agent_orchestrator.high.memory.result` | `memory` | `result` | Respuestas de actualización de memoria | Alta |
+
+### 3.3 Campos de Control Estándar
+
+Todos los mensajes intercambiados en estas colas incluyen los siguientes campos de control estándar:
+
+- `message_id`: Identificador único del mensaje (UUID)
+- `correlation_id`: ID para correlacionar solicitudes y respuestas
+- `task_id`: Identificador de la tarea asociada
+- `tenant_id`: Identificador del tenant
+- `schema_version`: Versión del esquema del mensaje (actualmente "1.1")
+- `type`: Objeto con campos `domain` y `action` que categorizan el mensaje
+- `priority`: Nivel de prioridad (1-10, siendo 10 la mayor prioridad)
+- `source_service`: Servicio de origen del mensaje
+- `target_service`: Servicio de destino del mensaje
 
 ## 4. Formato de Mensajes
 
-<a id="31-conversationtaskmessage"></a>
-### 4.1 ConversationTaskMessage
+### 4.1 Mensaje de Tarea de Conversación
+
+**Domain**: `conversation`  
+**Action**: `task`
 
 ```json
 {
-  "task_id": "uuid-v4",
+  "message_id": "550e8400-e29b-41d4-a716-446655440000",
+  "task_id": "550e8400-e29b-41d4-a716-446655440001",
   "tenant_id": "tenant-identifier",
-  "created_at": "2025-06-03T16:30:45Z",
+  "correlation_id": "550e8400-e29b-41d4-a716-446655440002",
+  "created_at": "2025-06-03T16:30:45.123Z",
+  "schema_version": "1.1",
   "status": "pending",
-  "type": "store_message|retrieve_context|update_memory",
+  "type": {
+    "domain": "conversation",
+    "action": "task"
+  },
   "priority": 5,
+  "source_service": "agent_orchestrator",
+  "target_service": "conversation_service",
   "metadata": {
+    "trace_id": "trace-abc123",
     "session_id": "session-uuid",
     "user_id": "user-uuid",
-    "agent_id": "agent-uuid"
+    "agent_id": "agent-uuid",
+    "conversation_id": "conversation-uuid"
   },
   "payload": {
-    // Contenido específico de la tarea
+    "task_type": "process",
+    "task_parameters": {
+      // Parámetros específicos de la tarea
+    }
   }
 }
 ```
 
-<a id="32-storemessagemessage"></a>
-### 4.2 StoreMessageMessage
+### 4.2 Mensaje de Almacenamiento 
+
+**Domain**: `message`  
+**Action**: `store`
 
 ```json
 {
-  "task_id": "uuid-v4",
+  "message_id": "550e8400-e29b-41d4-a716-446655440003",
+  "task_id": "550e8400-e29b-41d4-a716-446655440004",
   "tenant_id": "tenant-identifier",
-  "created_at": "2025-06-03T16:32:10Z",
+  "correlation_id": "550e8400-e29b-41d4-a716-446655440005",
+  "created_at": "2025-06-03T16:32:10.456Z",
+  "schema_version": "1.1",
   "status": "pending",
-  "type": "store_message",
+  "type": {
+    "domain": "message",
+    "action": "store"
+  },
   "priority": 5,
+  "source_service": "agent_orchestrator",
+  "target_service": "conversation_service",
   "metadata": {
+    "trace_id": "trace-def456",
     "session_id": "session-uuid",
     "user_id": "user-uuid",
     "agent_id": "agent-uuid",
@@ -154,27 +197,42 @@ El Orchestrator interactúa con el Conversation Service a través de las siguien
   },
   "payload": {
     "message": {
-      "role": "user|assistant|system",
+      "id": "msg-uuid-1",
+      "role": "user",
       "content": "Contenido del mensaje",
-      "timestamp": "2025-06-03T16:32:05Z"
+      "timestamp": "2025-06-03T16:32:05.789Z",
+      "content_type": "text/plain",
+      "tokens": 15
     },
-    "update_context": true
+    "update_context": true,
+    "important": false
   }
 }
 ```
 
-<a id="33-retrievecontextmessage"></a>
-### 4.3 RetrieveContextMessage
+### 4.3 Mensaje de Solicitud de Contexto
+
+**Domain**: `context`  
+**Action**: `retrieve`
 
 ```json
 {
-  "task_id": "uuid-v4",
+  "message_id": "550e8400-e29b-41d4-a716-446655440006",
+  "task_id": "550e8400-e29b-41d4-a716-446655440007",
   "tenant_id": "tenant-identifier",
-  "created_at": "2025-06-03T16:33:20Z",
+  "correlation_id": "550e8400-e29b-41d4-a716-446655440008",
+  "created_at": "2025-06-03T16:33:20.123Z",
+  "schema_version": "1.1",
   "status": "pending",
-  "type": "retrieve_context",
+  "type": {
+    "domain": "context",
+    "action": "retrieve"
+  },
   "priority": 7,
+  "source_service": "agent_orchestrator",
+  "target_service": "conversation_service",
   "metadata": {
+    "trace_id": "trace-ghi789",
     "session_id": "session-uuid",
     "user_id": "user-uuid",
     "agent_id": "agent-uuid",
@@ -184,26 +242,44 @@ El Orchestrator interactúa con el Conversation Service a través de las siguien
     "message_count": 10,
     "include_system_messages": true,
     "max_tokens": 4000,
-    "recency_bias": 0.7
+    "recency_bias": 0.7,
+    "context_type": "chat_history",
+    "filter": {
+      "from_timestamp": "2025-06-01T00:00:00Z",
+      "exclude_tags": ["debug", "system-only"]
+    }
   }
 }
 ```
 
-<a id="34-contextresultmessage"></a>
-### 4.4 ContextResultMessage
+### 4.4 Mensaje de Resultado de Contexto
+
+**Domain**: `context`  
+**Action**: `result`
 
 ```json
 {
-  "task_id": "uuid-v4",
-  "original_task_id": "uuid-v4-from-request",
+  "message_id": "550e8400-e29b-41d4-a716-446655440009",
+  "task_id": "550e8400-e29b-41d4-a716-446655440010",
+  "original_task_id": "550e8400-e29b-41d4-a716-446655440007",
   "tenant_id": "tenant-identifier",
-  "created_at": "2025-06-03T16:33:45Z",
+  "correlation_id": "550e8400-e29b-41d4-a716-446655440008",
+  "created_at": "2025-06-03T16:33:45.456Z",
+  "schema_version": "1.1",
   "status": "completed",
-  "type": "context_result",
+  "type": {
+    "domain": "context",
+    "action": "result"
+  },
+  "source_service": "conversation_service",
+  "target_service": "agent_orchestrator",
   "metadata": {
+    "trace_id": "trace-ghi789",
     "session_id": "session-uuid",
+    "user_id": "user-uuid",
     "agent_id": "agent-uuid",
-    "conversation_id": "conversation-uuid"
+    "conversation_id": "conversation-uuid",
+    "processing_time_ms": 235
   },
   "payload": {
     "messages": [
@@ -211,95 +287,176 @@ El Orchestrator interactúa con el Conversation Service a través de las siguien
         "id": "msg-uuid-1",
         "role": "user",
         "content": "¿Cómo puedo configurar mi agente?",
-        "timestamp": "2025-06-03T16:30:00Z"
+        "timestamp": "2025-06-03T16:30:00.000Z",
+        "content_type": "text/plain",
+        "tokens": 12
       },
       {
         "id": "msg-uuid-2",
         "role": "assistant",
         "content": "Puedes configurar tu agente desde el dashboard...",
-        "timestamp": "2025-06-03T16:30:20Z"
+        "timestamp": "2025-06-03T16:30:20.000Z",
+        "content_type": "text/plain",
+        "tokens": 15
       },
       // ... más mensajes ...
     ],
     "context_summary": "Conversación sobre configuración de agentes y opciones disponibles",
     "total_messages": 12,
     "included_messages": 10,
-    "total_tokens": 1250
+    "total_tokens": 1250,
+    "has_more": true,
+    "relevance_score": 0.85,
+    "context_type": "chat_history"
   }
 }
 ```
 
-<a id="35-conversationupdatemessage"></a>
-### 4.5 ConversationUpdateMessage
+### 4.5 Mensaje de Actualización de Conversación
+
+**Domain**: `conversation`  
+**Action**: `update`
 
 ```json
 {
-  "event": "conversation_updated",
-  "timestamp": "2025-06-03T16:34:10Z",
+  "message_id": "550e8400-e29b-41d4-a716-446655440011",
   "tenant_id": "tenant-identifier",
-  "data": {
-    "conversation_id": "conversation-uuid",
+  "correlation_id": "550e8400-e29b-41d4-a716-446655440012",
+  "created_at": "2025-06-03T16:34:10.789Z",
+  "schema_version": "1.1",
+  "type": {
+    "domain": "conversation",
+    "action": "update"
+  },
+  "priority": 4,
+  "source_service": "conversation_service",
+  "target_service": "agent_orchestrator", 
+  "metadata": {
+    "trace_id": "trace-jkl012",
     "session_id": "session-uuid",
+    "user_id": "user-uuid"
+  },
+  "payload": {
+    "update_type": "new_message",
+    "conversation_id": "conversation-uuid",
     "agent_id": "agent-uuid",
     "messages_count": 12,
     "last_message": {
       "id": "msg-uuid-12",
       "role": "assistant",
       "content_preview": "Aquí tienes las opciones de configuración...",
-      "timestamp": "2025-06-03T16:34:05Z"
-    }
+      "timestamp": "2025-06-03T16:34:05.456Z",
+      "content_type": "text/plain",
+      "tokens": 18
+    },
+    "requires_attention": false,
+    "update_channels": ["websocket", "notification"],
+    "importance": "normal"
   }
 }
 ```
 
 ## 5. Comunicación WebSocket
 
-El Orchestrator recibe y envía eventos WebSocket al Conversation Service para actualizaciones en tiempo real.
+El Orchestrator recibe y envía mensajes WebSocket al Conversation Service para actualizaciones en tiempo real, siguiendo el formato domain/action.
 
-### 5.1 Eventos que Recibe el Orchestrator
+### 5.1 Mensajes que Recibe el Orchestrator
 
-| Evento | Propósito | Origen | Acción |
-|--------|-----------|--------|--------|
-| `conversation.completed` | Tarea completada | Conversation Service | Actualizar estado y notificar al cliente |
-| `conversation.failed` | Error en tarea | Conversation Service | Manejo de errores y notificación |
-| `conversation.updated` | Actualización de conversación | Conversation Service | Actualizar caché y propagar si es necesario |
+| Domain | Action | Propósito | Origen | Procesamiento |
+|--------|--------|------------|--------|---------------|
+| `task` | `completed` | Notificación de tarea completada | Conversation Service | Actualizar estado y notificar al cliente |
+| `task` | `failed` | Error en tarea de procesamiento | Conversation Service | Manejo de errores y reintentos |
+| `conversation` | `update` | Actualización de datos de conversación | Conversation Service | Actualizar caché y propagar |
+| `memory` | `update` | Actualización de memoria de conversación | Conversation Service | Propagar a todos los servicios relevantes |
+| `system` | `status` | Estado y estadísticas del servicio | Conversation Service | Monitoreo y alertas |
 
-### 5.2 Eventos que Envía el Orchestrator
+### 5.2 Mensajes que Envía el Orchestrator
 
-| Evento | Propósito | Destino | Acción |
-|--------|-----------|---------|--------|
-| `conversation.created` | Nueva tarea creada | Conversation Service | Inicializar procesamiento |
-| `conversation.cancel` | Cancelar tarea en curso | Conversation Service | Detener procesamiento |
-| `system.ping` | Verificar conexión | Conversation Service | Mantener conexión activa |
+| Domain | Action | Propósito | Destino | Procesamiento |
+|--------|--------|------------|---------|---------------|
+| `conversation` | `create` | Creación de nueva conversación | Conversation Service | Inicialización de conversación |
+| `task` | `cancel` | Cancelar tarea en proceso | Conversation Service | Detener procesamiento de tarea |
+| `session` | `register` | Registrar sesión para actualizaciones | Conversation Service | Activar notificaciones para sesión |
+| `system` | `ping` | Verificación de conexión | Conversation Service | Mantener conexión activa |
 
 ### 5.3 Implementación
 
 ```python
-# En el Orchestrator
-async def handle_conversation_event(event_data):
-    event_type = event_data.get("event")
+# En el Orchestrator - Manejador de Mensajes WebSocket
+async def handle_websocket_message(message_data):
+    # Extraer domain y action del mensaje
+    message_type = message_data.get("type", {})
+    domain = message_type.get("domain")
+    action = message_type.get("action")
     
-    if event_type == "conversation.completed":
+    # Procesar mensaje basado en domain/action
+    if domain == "task" and action == "completed":
         # Procesar tarea completada
-        task_id = event_data["data"]["task_id"]
-        tenant_id = event_data["tenant_id"]
-        # Actualizar estado de tarea y notificar al cliente
-        await update_task_status(task_id, tenant_id, "completed")
-        await notify_client(tenant_id, event_data["data"])
+        task_id = message_data["payload"]["task_id"]
+        tenant_id = message_data["tenant_id"]
+        correlation_id = message_data.get("correlation_id")
         
-    elif event_type == "conversation.failed":
-        # Manejar error
-        error = event_data["data"]["error"]
-        task_id = event_data["data"]["task_id"]
-        tenant_id = event_data["tenant_id"]
+        # Log para trazabilidad
+        logger.info(f"Tarea completada. task_id={task_id}, trace_id={message_data['metadata'].get('trace_id')}")
+        
+        # Actualizar estado de tarea y notificar al cliente
+        await update_task_status(task_id, tenant_id, "completed", correlation_id)
+        await notify_client(tenant_id, message_data["payload"], correlation_id)
+        
+    elif domain == "task" and action == "failed":
+        # Manejar error en tarea
+        error = message_data["payload"]["error"]
+        task_id = message_data["payload"]["task_id"]
+        tenant_id = message_data["tenant_id"]
+        trace_id = message_data["metadata"].get("trace_id")
+        
         # Registrar error y posiblemente reintentar
+        logger.error(f"Error en tarea: {error}. task_id={task_id}, trace_id={trace_id}")
         await handle_task_failure(task_id, tenant_id, error)
         
-    elif event_type == "conversation.updated":
+    elif domain == "conversation" and action == "update":
         # Actualizar cache de conversación
-        conversation_id = event_data["data"]["conversation_id"]
-        tenant_id = event_data["tenant_id"]
-        await update_conversation_cache(tenant_id, conversation_id, event_data["data"])
+        conversation_id = message_data["payload"]["conversation_id"]
+        tenant_id = message_data["tenant_id"]
+        update_type = message_data["payload"]["update_type"]
+        
+        logger.debug(f"Actualización de conversación: {update_type} para {conversation_id}")
+        await update_conversation_cache(tenant_id, conversation_id, message_data["payload"])
+```
+
+### 5.4 Registro de Suscripciones
+
+Para recibir actualizaciones específicas, el Orchestrator debe registrarse utilizando un mensaje de suscripción:
+
+```python
+async def register_for_conversation_updates(websocket, tenant_id, session_id=None, conversation_id=None):
+    # Crear mensaje de registro con formato domain/action
+    registration_message = {
+        "message_id": str(uuid.uuid4()),
+        "tenant_id": tenant_id,
+        "created_at": datetime.utcnow().isoformat() + "Z",
+        "schema_version": "1.1",
+        "type": {
+            "domain": "subscription",
+            "action": "register"
+        },
+        "source_service": "agent_orchestrator",
+        "target_service": "conversation_service",
+        "payload": {
+            "topics": [
+                "conversation.update",
+                "task.completed",
+                "task.failed"
+            ],
+            "filters": {
+                "session_id": session_id,
+                "conversation_id": conversation_id
+            }
+        }
+    }
+    
+    # Enviar mensaje de registro
+    await websocket.send(json.dumps(registration_message))
 ```
 
 ## 6. REST API

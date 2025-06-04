@@ -120,340 +120,636 @@ El Orchestrator interactúa con el Agent Execution Service a través de las sigu
 
 ### 4.1 Estructura Base de Mensajes
 
-Todos los mensajes intercambiados entre Agent Orchestrator Service y Agent Execution Service siguen esta estructura base definida en el documento de estándares:
+Todos los mensajes intercambiados entre Agent Orchestrator Service y Agent Execution Service utilizan la estructura base estandarizada definida en [message_schemas.md](./message_schemas.md):
 
 ```json
 {
-  "message_id": "uuid-v4",
-  "tenant_id": "tenant-identifier",
-  "timestamp": "ISO-8601-datetime",
-  "version": "1.0",
-  "type": "request|response|event",
-  "source": "service-name",
-  "destination": "service-name",
-  "correlation_id": "uuid-v4",
-  "task_id": "uuid-v4",
-  "session_id": "session-id",
-  "status": "pending|completed|failed",
-  "priority": 0-9,
-  "payload": {}
+  "message_id": "uuid-v4",              // Identificador único del mensaje
+  "task_id": "uuid-v4",               // ID de tarea asociada
+  "tenant_id": "tenant-identifier",    // ID del tenant
+  "session_id": "session-identifier",  // ID de sesión (cuando aplique)
+  "conversation_id": "uuid-v4",        // ID de la conversación (cuando aplique)
+  "correlation_id": "uuid-v4",         // ID de correlación para trazabilidad
+  "created_at": "ISO-8601",           // Timestamp de creación
+  "schema_version": "1.1",            // Versión del esquema
+  "status": "pending|processing|completed|error",  // Estado
+  "type": {                           // Tipo estructurado
+    "domain": "agent",                 // Dominio funcional
+    "action": "execute|status|response|error"  // Acción solicitada
+  },
+  "priority": 0-9,                     // Prioridad (0=más alta, 9=más baja)
+  "source_service": "agent_orchestrator", // Servicio que origina el mensaje
+  "target_service": "agent_execution",   // Servicio destinatario
+  "metadata": {},                      // Metadatos extensibles
+  "payload": {}                        // Contenido específico del mensaje
 }
 ```
 
-### 4.2 AgentExecutionTaskMessage
+### 4.2 Solicitud de Ejecución de Agente
+
+**Domain**: `agent`  
+**Action**: `execute`
 
 ```json
 {
-  "message_id": "uuid-v4",
-  "tenant_id": "tenant-identifier",
-  "timestamp": "2025-06-03T16:40:15Z",
-  "version": "1.0",
-  "type": "request",
-  "source": "orchestrator",
-  "destination": "agent-execution",
-  "correlation_id": "request-correlation-id",
-  "task_id": "uuid-v4",
-  "session_id": "session-identifier",
+  "message_id": "550e8400-e29b-41d4-a716-446655440000",
+  "task_id": "550e8400-e29b-41d4-a716-446655440001",
+  "tenant_id": "tenant-ab123",
+  "session_id": "session-xyz789",
+  "conversation_id": "conv-123456",
+  "correlation_id": "550e8400-e29b-41d4-a716-446655440002",
+  "created_at": "2025-06-04T10:15:30.123Z",
+  "schema_version": "1.1",
   "status": "pending",
-  "priority": 5,
+  "type": {
+    "domain": "agent",
+    "action": "execute"
+  },
+  "priority": 3, // Mayor prioridad para actualizaciones de estado
+  "source_service": "agent_orchestrator",
+  "target_service": "agent_execution",
   "metadata": {
-    "conversation_id": "conversation-id",
-    "workflow_id": "optional-workflow-id",
-    "agent_id": "agent-identifier",
-    "execution_id": "execution-uuid"
+    "source": "api",
+    "user_id": "user-123",
+    "timeout_ms": 60000,
+    "expected_duration_ms": 15000,
+    "trace_id": "trace-abc123",
+    "client_version": "1.5.0"
   },
   "payload": {
-    "operation": "execute_agent",
-    "query": "¿Cómo puedo configurar mi agente para procesamiento de documentos?",
-    "streaming": true,
+    "query": "¿Cómo puedo optimizar mi campaña de marketing digital?",
     "agent_config": {
-      "model": "gpt-4",
-      "temperature": 0.7,
-      "max_tokens": 1000,
-      "tools_enabled": true,
-      "system_prompt": "Eres un asistente experto..."
-    },
-    "context": {
-      "conversation_history": [
-        {"role": "user", "content": "..."},
-        {"role": "assistant", "content": "..."}
-      ],
-      "user_info": {
-        "user_id": "user-uuid",
-        "preferences": {}
+      "agent_id": "marketing-advisor",
+      "version": "1.2",
+      "parameters": {
+        "temperature": 0.7,
+        "model": "gpt-4",
+        "response_format": "markdown"
       }
-    }
-  }
-}
-```
-
-<a id="42-agentresponsemessage"></a>
-### 4.2 AgentResponseMessage
-
-```json
-{
-  "task_id": "uuid-v4",
-  "original_task_id": "uuid-from-request",
-  "tenant_id": "tenant-identifier",
-  "agent_id": "agent-identifier",
-  "execution_id": "execution-uuid",
-  "created_at": "2025-06-03T16:40:45Z",
-  "status": "completed",
-  "type": "agent_response",
-  "metadata": {
-    "conversation_id": "conversation-id",
-    "session_id": "session-identifier",
-    "workflow_id": "optional-workflow-id",
-    "execution_time_ms": 2500,
-    "token_usage": {
-      "prompt_tokens": 420,
-      "completion_tokens": 350,
-      "total_tokens": 770
-    }
-  },
-  "payload": {
-    "response": "Para configurar tu agente para procesamiento de documentos, necesitas seguir estos pasos...",
-    "tool_calls": [
+    },
+    "context": [
       {
-        "tool_id": "document_processor",
-        "inputs": {
-          "document_type": "pdf",
-          "extraction_level": "full"
-        },
-        "outputs": {
-          "supported_formats": ["pdf", "docx", "txt"],
-          "configuration_options": ["básico", "avanzado"]
+        "type": "conversation_history",
+        "content": [...]
+      },
+      {
+        "type": "user_preferences",
+        "content": {
+          "industry": "tecnología",
+          "budget_range": "mid",
+          "goals": ["brand_awareness", "lead_generation"]
         }
       }
     ],
-    "thinking_process": "El usuario quiere información sobre configuración...",
-    "additional_contexts": [
+    "stream": true,
+    "tools": [
       {
-        "source": "knowledge_base",
-        "content": "Fragmento de documentación sobre configuración..."
+        "name": "search_analytics",
+        "description": "Buscar datos analíticos",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Consulta de búsqueda"
+            },
+            "period": {
+              "type": "string",
+              "enum": ["last_week", "last_month", "last_3_months", "last_year"],
+              "description": "Período de tiempo"
+            }
+          },
+          "required": ["query"]
+        }
       }
-    ]
+    ],
+    "max_tokens": 2000
   }
 }
 ```
 
-<a id="43-agentstreamingmessage"></a>
-### 4.3 AgentStreamingMessage
+### 4.3 Notificación de Estado
+
+**Domain**: `agent`  
+**Action**: `status`
 
 ```json
 {
-  "task_id": "uuid-v4",
-  "original_task_id": "uuid-from-request",
-  "tenant_id": "tenant-identifier",
-  "agent_id": "agent-identifier",
-  "execution_id": "execution-uuid",
-  "created_at": "2025-06-03T16:40:35Z",
-  "type": "agent_streaming",
+  "message_id": "550e8400-e29b-41d4-a716-446655440010",
+  "task_id": "550e8400-e29b-41d4-a716-446655440001", // Mismo task_id que la solicitud
+  "tenant_id": "tenant-ab123",
+  "session_id": "session-xyz789",
+  "conversation_id": "conv-123456",
+  "correlation_id": "550e8400-e29b-41d4-a716-446655440002", // Mismo correlation_id
+  "created_at": "2025-06-04T10:15:32.456Z",
+  "schema_version": "1.1",
+  "status": "processing",
+  "type": {
+    "domain": "agent",
+    "action": "status"
+  },
+  "priority": 2, // Mayor prioridad para actualizaciones de estado
+  "source_service": "agent_execution",
+  "target_service": "agent_orchestrator",
   "metadata": {
-    "conversation_id": "conversation-id",
-    "session_id": "session-identifier",
-    "sequence": 12,
-    "is_final": false
+    "trace_id": "trace-abc123",
+    "processed_at": "2025-06-04T10:15:32.456Z"
   },
   "payload": {
-    "token": "configuración",
-    "finish_reason": null
+    "progress": 25,
+    "status_detail": "Analizando estrategias de marketing digital",
+    "estimated_completion_seconds": 45,
+    "stream_content": {
+      "type": "thinking",
+      "content": "Examinando mejores prácticas de optimización de campañas..."
+    }
   }
 }
 ```
 
-<a id="44-executioncancellationmessage"></a>
-### 4.4 ExecutionCancellationMessage
+### 4.4 Respuesta Final del Agente
+
+**Domain**: `agent`  
+**Action**: `response`
 
 ```json
 {
-  "task_id": "uuid-v4",
-  "tenant_id": "tenant-identifier",
-  "created_at": "2025-06-03T16:41:05Z",
-  "type": "execution_cancellation",
-  "priority": 9,
+  "message_id": "550e8400-e29b-41d4-a716-446655440020",
+  "task_id": "550e8400-e29b-41d4-a716-446655440001", // Mismo task_id que solicitud original
+  "tenant_id": "tenant-ab123",
+  "session_id": "session-xyz789",
+  "conversation_id": "conv-123456",
+  "correlation_id": "550e8400-e29b-41d4-a716-446655440002", // Mismo correlation_id
+  "created_at": "2025-06-04T10:15:50.789Z",
+  "schema_version": "1.1",
+  "status": "completed",
+  "type": {
+    "domain": "agent",
+    "action": "response"
+  },
+  "priority": 2,
+  "source_service": "agent_execution",
+  "target_service": "agent_orchestrator",
+  "metadata": {
+    "trace_id": "trace-abc123",
+    "completed_at": "2025-06-04T10:15:50.789Z",
+    "processing_time_ms": 20666
+  },
   "payload": {
-    "execution_id": "execution-uuid",
-    "reason": "user_requested|timeout|error|workflow_cancelled"
+    "response": "# Optimización de Campañas de Marketing Digital\n\nPara optimizar su campaña de marketing digital, recomiendo enfocarse en cinco áreas clave:\n\n1. **Segmentación del público**...\n",
+    "completion_tokens": 756,
+    "total_tokens": 1234,
+    "tool_calls": [
+      {
+        "tool_name": "search_analytics",
+        "parameters": {
+          "query": "tasas de conversión marketing digital 2025",
+          "period": "last_3_months"
+        },
+        "result": { /* contenido del resultado */ }
+      }
+    ],
+    "sources": [
+      {
+        "document_id": "doc-456",
+        "chunks": [1, 2],
+        "relevance_score": 0.95
+      }
+    ],
+    "thinking_process": "Primero analicé las tendencias actuales en marketing digital..."
   }
 }
 ```
 
-<a id="45-executionstatusupdatemessage"></a>
-### 4.5 ExecutionStatusUpdateMessage
+### 4.5 Streaming de Tokens
+
+**Domain**: `agent`  
+**Action**: `token`
 
 ```json
 {
-  "task_id": "uuid-v4",
-  "original_task_id": "uuid-from-request",
-  "tenant_id": "tenant-identifier",
-  "agent_id": "agent-identifier",
-  "execution_id": "execution-uuid",
-  "created_at": "2025-06-03T16:41:15Z",
-  "type": "execution_status_update",
+  "message_id": "550e8400-e29b-41d4-a716-446655440030",
+  "task_id": "550e8400-e29b-41d4-a716-446655440001",
+  "tenant_id": "tenant-ab123",
+  "session_id": "session-xyz789",
+  "conversation_id": "conv-123456",
+  "correlation_id": "550e8400-e29b-41d4-a716-446655440002",
+  "created_at": "2025-06-04T10:15:35.123Z",
+  "schema_version": "1.1",
+  "status": "processing",
+  "type": {
+    "domain": "agent",
+    "action": "token"
+  },
+  "priority": 1, // Prioridad máxima para tokens en streaming
+  "source_service": "agent_execution",
+  "target_service": "agent_orchestrator",
+  "metadata": {
+    "trace_id": "trace-abc123",
+    "sequence": 15
+  },
   "payload": {
-    "status": "started|processing|tool_calling|completing|completed|failed",
-    "progress": 65,
-    "current_operation": "llamando a herramienta document_processor",
-    "estimated_completion_time": "2025-06-03T16:41:45Z",
-    "error": null
+    "token": "Para",
+    "is_last": false,
+    "content_type": "response" // o "thinking", "tool_call", etc.
+  }
+}
+```
+
+### 4.6 Cancelación de Ejecución
+
+**Domain**: `agent`  
+**Action**: `cancel`
+
+```json
+{
+  "message_id": "550e8400-e29b-41d4-a716-446655440040",
+  "task_id": "550e8400-e29b-41d4-a716-446655440001",
+  "tenant_id": "tenant-ab123",
+  "session_id": "session-xyz789",
+  "conversation_id": "conv-123456",
+  "correlation_id": "550e8400-e29b-41d4-a716-446655440002",
+  "created_at": "2025-06-04T10:15:45.789Z",
+  "schema_version": "1.1",
+  "status": "cancelled",
+  "type": {
+    "domain": "agent",
+    "action": "cancel"
+  },
+  "priority": 1, // Alta prioridad para cancelaciones
+  "source_service": "agent_orchestrator", // Puede ser iniciado por el orquestador
+  "target_service": "agent_execution",
+  "metadata": {
+    "trace_id": "trace-abc123",
+    "reason_code": "user_requested" // o "timeout", "error", "system"
+  },
+  "payload": {
+    "reason": "Cancelado por solicitud del usuario",
+    "immediate": true,
+    "save_state": false
+  }
+}
+```
+
+### 4.7 Solicitud de Estado
+
+**Domain**: `agent`  
+**Action**: `query_status`
+
+```json
+{
+  "message_id": "550e8400-e29b-41d4-a716-446655440050",
+  "task_id": "550e8400-e29b-41d4-a716-446655440060", // Nuevo task_id para consulta
+  "tenant_id": "tenant-ab123",
+  "correlation_id": "550e8400-e29b-41d4-a716-446655440002", // Correlation ID de la ejecución original
+  "created_at": "2025-06-04T10:16:30.123Z",
+  "schema_version": "1.1",
+  "status": "pending",
+  "type": {
+    "domain": "agent",
+    "action": "query_status"
+  },
+  "priority": 3,
+  "source_service": "agent_orchestrator",
+  "target_service": "agent_execution",
+  "metadata": {
+    "trace_id": "trace-abc123"
+  },
+  "payload": {
+    "original_task_id": "550e8400-e29b-41d4-a716-446655440001",
+    "include_details": true
   }
 }
 ```
 
 ## 5. Comunicación WebSocket
 
-El Orchestrator recibe y envía eventos WebSocket al Agent Execution Service para actualizaciones en tiempo real.
+El Orchestrator recibe y envía mensajes WebSocket al Agent Execution Service para actualizaciones en tiempo real. Estos mensajes utilizan el mismo formato estandarizado que la comunicación por colas, pero se transmiten a través de WebSockets para mayor inmediatez.
 
-### 5.1 Eventos que Recibe el Orchestrator
+### 5.1 Mensajes que Recibe el Orchestrator
 
-| Evento | Propósito | Origen | Acción |
-|--------|-----------|--------|--------|
-| `agent_execution_progress` | Actualización de progreso | Agent Execution Service | Actualizar estado y notificar al cliente |
-| `agent_response_token` | Token individual en modo streaming | Agent Execution Service | Reenviar inmediatamente al cliente |
-| `tool_call_requested` | Solicitud de llamada a herramienta | Agent Execution Service | Coordinar con Tool Registry |
-| `agent_execution_completed` | Ejecución finalizada | Agent Execution Service | Actualizar estado y notificar al cliente |
-| `agent_execution_failed` | Error en ejecución | Agent Execution Service | Manejo de errores y notificación |
+| Domain | Action | Propósito | Origen | Procesamiento |
+|--------|--------|-----------|--------|---------------|
+| `agent` | `status` | Actualización de progreso | Agent Execution Service | Actualizar estado interno y notificar al cliente |
+| `agent` | `token` | Token individual en modo streaming | Agent Execution Service | Reenviar inmediatamente al cliente |
+| `agent` | `tool_request` | Solicitud de llamada a herramienta | Agent Execution Service | Coordinar llamada con Tool Registry Service |
+| `agent` | `response` | Respuesta final del agente | Agent Execution Service | Actualizar estado y notificar al cliente |
+| `agent` | `error` | Error en ejecución | Agent Execution Service | Manejo de errores y notificación |
 
-### 5.2 Eventos que Envía el Orchestrator
+### 5.2 Mensajes que Envía el Orchestrator
 
-| Evento | Propósito | Destino | Acción |
-|--------|-----------|---------|--------|
-| `execution_request` | Solicitar nueva ejecución | Agent Execution Service | Iniciar procesamiento |
-| `execution_cancel` | Cancelar ejecución en progreso | Agent Execution Service | Detener procesamiento |
-| `tool_result` | Resultado de llamada a herramienta | Agent Execution Service | Incorporar en ejecución |
+| Domain | Action | Propósito | Destino | Procesamiento |
+|--------|--------|-----------|---------|---------------|
+| `agent` | `execute` | Solicitar nueva ejecución | Agent Execution Service | Iniciar procesamiento de agente |
+| `agent` | `cancel` | Cancelar ejecución en progreso | Agent Execution Service | Detener procesamiento |
+| `agent` | `tool_result` | Resultado de llamada a herramienta | Agent Execution Service | Incorporar resultado en ejecución |
+| `agent` | `query_status` | Consultar estado de ejecución | Agent Execution Service | Obtener estado actual |
 
-### 5.3 Implementación 
+### 5.3 Implementación con Nuevo Formato
 
 ```python
-# En el Orchestrator
-async def handle_agent_execution_event(event_data):
-    event_type = event_data.get("event")
-    tenant_id = event_data.get("tenant_id")
-    task_id = event_data.get("task_id")
-    global_task_id = event_data.get("global_task_id")
+# En el Orchestrator Service
+async def handle_agent_execution_message(message):
+    # Extraer campos comunes estandarizados
+    message_id = message.get("message_id")
+    task_id = message.get("task_id")
+    tenant_id = message.get("tenant_id")
+    correlation_id = message.get("correlation_id")
+    session_id = message.get("session_id")
+    conversation_id = message.get("conversation_id")
     
-    if event_type == "agent_response_token":
-        # Reenviar token de streaming al cliente
-        token = event_data["data"]["token"]
-        is_final = event_data["data"].get("is_final", False)
-        session_id = event_data["data"]["session_id"]
+    # Obtener tipo de mensaje
+    domain = message.get("type", {}).get("domain")
+    action = message.get("type", {}).get("action")
+    status = message.get("status")
+    
+    # Procesar según domain/action
+    if domain == "agent" and action == "token":
+        # Procesar token en modo streaming
+        token = message["payload"]["token"]
+        is_last = message["payload"].get("is_last", False)
+        content_type = message["payload"].get("content_type", "response")
         
+        # Reenviar al cliente
         await websocket_manager.send_token_to_session(
             tenant_id, 
             session_id, 
             token, 
-            is_final
+            is_last,
+            content_type
         )
         
-    elif event_type == "tool_call_requested":
+    elif domain == "agent" and action == "tool_request":
         # Coordinar llamada a herramienta
-        tool_request = event_data["data"]
-        execution_id = tool_request["execution_id"]
+        tool_request = message["payload"]
+        tool_name = tool_request.get("tool_name")
+        tool_parameters = tool_request.get("parameters")
+        call_id = tool_request.get("call_id")
         
         # Delegar a Tool Registry
-        result = await coordinate_tool_call(tenant_id, tool_request)
-        
-        # Devolver resultado al Agent Execution
-        await notify_tool_result(
-            tenant_id,
-            execution_id,
-            tool_request["tool_call_id"],
-            result
+        result = await tool_registry_service.execute_tool(
+            tenant_id=tenant_id,
+            tool_name=tool_name,
+            parameters=tool_parameters,
+            session_id=session_id
         )
         
-    elif event_type == "agent_execution_completed":
-        # Procesar finalización
-        execution_id = event_data["data"]["execution_id"]
-        result = event_data["data"]["result"]
+        # Enviar resultado de vuelta al Agent Execution
+        await send_tool_result(
+            tenant_id=tenant_id,
+            task_id=task_id,
+            correlation_id=correlation_id,
+            call_id=call_id,
+            result=result
+        )
         
-        # Actualizar estado y notificar al cliente
-        await update_execution_status(tenant_id, execution_id, "completed")
-        await notify_client_execution_completed(tenant_id, global_task_id, result)
+    elif domain == "agent" and action == "response":
+        # Procesar respuesta final
+        response_text = message["payload"]["response"]
+        tool_calls = message["payload"].get("tool_calls", [])
+        sources = message["payload"].get("sources", [])
+        
+        # Actualizar conversación y notificar al cliente
+        await conversation_service.add_agent_message(
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+            content=response_text,
+            metadata={
+                "tool_calls": tool_calls,
+                "sources": sources,
+                "task_id": task_id
+            }
+        )
+        
+        # Notificar finalización al cliente
+        await websocket_manager.notify_execution_completed(
+            tenant_id=tenant_id,
+            session_id=session_id,
+            task_id=task_id
+        )
 ```
 
 ## 6. REST API
 
-Además de la comunicación asíncrona, el Orchestrator también utiliza las siguientes APIs REST del Agent Execution Service:
+Además de la comunicación asíncrona, el Orchestrator también utiliza las siguientes APIs REST del Agent Execution Service. Los endpoints siguen el mismo estándar de estructura de mensajes con domain/action para mantener la coherencia en toda la plataforma.
 
 ### 6.1 Endpoints Utilizados
 
-| Endpoint | Método | Propósito | Parámetros |
-|----------|--------|-----------|------------|
-| `/api/v1/execute/{agent_id}` | POST | Ejecutar agente (síncrono) | agent_id, query, context |
-| `/api/v1/executions/{execution_id}` | GET | Obtener estado de ejecución | execution_id |
-| `/api/v1/executions/{execution_id}/cancel` | POST | Cancelar ejecución | execution_id |
-| `/api/v1/internal/agent/{agent_id}/validate` | POST | Validar configuración del agente | agent_id, config |
-| `/api/v1/internal/streaming/{execution_id}` | GET | Conectar a stream existente | execution_id |
+| Endpoint | Método | Domain | Action | Propósito |
+|----------|--------|--------|--------|------------|
+| `/api/v1/agents/{agent_id}/execute` | POST | agent | execute | Ejecutar agente (síncrono o asíncrono) |
+| `/api/v1/tasks/{task_id}` | GET | agent | query_status | Obtener estado de una tarea |
+| `/api/v1/tasks/{task_id}/cancel` | POST | agent | cancel | Cancelar ejecución en progreso |
+| `/api/v1/agents/{agent_id}/validate` | POST | agent | validate | Validar configuración del agente |
+| `/api/v1/tasks/{task_id}/stream` | GET | agent | stream | Conectar a stream de tokens existente |
 
 ### 6.2 Ejemplos de Comunicación REST
 
-**Ejecución Síncrona (para consultas simples)**:
+**Ejecución de Agente (usando nuevos estándares)**:
 ```python
-async def execute_agent_sync(tenant_id, agent_id, query, context=None, timeout_ms=5000):
-    """Ejecuta un agente de forma síncrona para consultas rápidas"""
-    url = f"{AGENT_EXECUTION_SERVICE_URL}/api/v1/execute/{agent_id}"
+async def execute_agent(tenant_id, agent_id, query, context=None, session_id=None, conversation_id=None, stream=False):
+    """Ejecuta un agente utilizando el formato estandarizado"""
+    url = f"{AGENT_EXECUTION_SERVICE_URL}/api/v1/agents/{agent_id}/execute"
+    
+    # Generar identificadores únicos
+    task_id = str(uuid.uuid4())
+    message_id = str(uuid.uuid4())
+    correlation_id = str(uuid.uuid4())
+    
     payload = {
+        "message_id": message_id,
+        "task_id": task_id,
         "tenant_id": tenant_id,
-        "query": query,
-        "context": context or {},
-        "timeout_ms": timeout_ms,
-        "stream": False
+        "session_id": session_id,
+        "conversation_id": conversation_id,
+        "correlation_id": correlation_id,
+        "created_at": datetime.utcnow().isoformat(),
+        "schema_version": "1.1",
+        "status": "pending",
+        "type": {
+            "domain": "agent",
+            "action": "execute"
+        },
+        "priority": 3,
+        "source_service": "agent_orchestrator",
+        "target_service": "agent_execution",
+        "metadata": {
+            "source": "api",
+            "user_id": context.get("user_id") if context else None,
+            "timeout_ms": 60000,
+            "trace_id": f"trace-{str(uuid.uuid4())[:8]}",
+            "client_version": "1.5.0"
+        },
+        "payload": {
+            "query": query,
+            "agent_config": {
+                "agent_id": agent_id,
+                "version": "latest",
+                "parameters": {
+                    "temperature": 0.7,
+                    "model": "gpt-4",
+                    "response_format": "markdown"
+                }
+            },
+            "context": context or [],
+            "stream": stream
+        }
     }
     
-    async with httpx.AsyncClient(timeout=timeout_ms/1000 + 1) as client:
+    async with httpx.AsyncClient(timeout=120) as client:
         response = await client.post(
             url,
             json=payload,
-            headers={"Authorization": f"Bearer {SERVICE_TOKEN}"}
+            headers={
+                "Authorization": f"Bearer {SERVICE_TOKEN}",
+                "X-Tenant-ID": tenant_id,
+                "X-Schema-Version": "1.1"
+            }
         )
         
         if response.status_code == 200:
-            return response.json()["data"]
+            return response.json()
         else:
             logger.error(f"Error executing agent: {response.text}")
-            raise ServiceCommunicationError(f"Error executing agent: {response.status_code}")
+            raise AgentExecutionError(f"Failed to execute agent: {response.status_code}")
 ```
 
-**Verificar Estado de Ejecución**:
+**Verificación de Estado (usando nuevos estándares)**:
 ```python
-async def check_execution_status(tenant_id, execution_id):
-    """Verifica el estado actual de una ejecución"""
-    url = f"{AGENT_EXECUTION_SERVICE_URL}/api/v1/executions/{execution_id}"
-    params = {
-        "tenant_id": tenant_id
+async def check_task_status(tenant_id, task_id):
+    """Verifica el estado actual de una tarea usando el formato estandarizado"""
+    url = f"{AGENT_EXECUTION_SERVICE_URL}/api/v1/tasks/{task_id}"
+    
+    # Generar identificadores únicos para la solicitud
+    message_id = str(uuid.uuid4())
+    correlation_id = str(uuid.uuid4())
+    
+    # Crear solicitud con el formato estandarizado
+    query_payload = {
+        "message_id": message_id,
+        "task_id": str(uuid.uuid4()),  # Nuevo task_id para la consulta
+        "tenant_id": tenant_id,
+        "correlation_id": correlation_id,
+        "created_at": datetime.utcnow().isoformat(),
+        "schema_version": "1.1",
+        "status": "pending",
+        "type": {
+            "domain": "agent",
+            "action": "query_status"
+        },
+        "priority": 3,
+        "source_service": "agent_orchestrator",
+        "target_service": "agent_execution",
+        "metadata": {
+            "trace_id": f"trace-{str(uuid.uuid4())[:8]}"
+        },
+        "payload": {
+            "original_task_id": task_id,
+            "include_details": true
+        }
     }
     
     async with httpx.AsyncClient() as client:
         response = await client.get(
             url,
-            params=params,
-            headers={"Authorization": f"Bearer {SERVICE_TOKEN}"}
+            headers={
+                "Authorization": f"Bearer {SERVICE_TOKEN}",
+                "X-Tenant-ID": tenant_id,
+                "X-Schema-Version": "1.1",
+                "X-Correlation-ID": correlation_id
+            }
         )
         
         if response.status_code == 200:
-            return response.json()["data"]
+            return response.json()
         elif response.status_code == 404:
-            raise ExecutionNotFoundError(f"Execution {execution_id} not found")
+            return {
+                "status": "not_found",
+                "message_id": str(uuid.uuid4()),
+                "task_id": task_id,
+                "tenant_id": tenant_id,
+                "created_at": datetime.utcnow().isoformat(),
+                "schema_version": "1.1",
+                "status": "error",
+                "type": {
+                    "domain": "agent",
+                    "action": "error"
+                },
+                "metadata": {
+                    "error_code": "NOT_FOUND",
+                    "error_category": "client",
+                    "error_message": "Task not found"
+                }
+            }
         else:
-            logger.error(f"Error checking execution: {response.text}")
-            raise ServiceCommunicationError(f"Error checking execution: {response.status_code}")
+            logger.error(f"Error checking task status: {response.text}")
+            return {
+                "status": "error", 
+                "message": "Failed to check task status",
+                "code": response.status_code
+            }
 ```
 
 ## 7. Gestión de Errores
 
-### 7.1 Errores Comunes y Estrategias
+### 7.1 Códigos de Error Estandarizados
 
-| Error | Causa | Estrategia de Manejo |
-|-------|-------|----------------------|
-| `AgentNotFoundError` | ID de agente no existe | Notificar al usuario y sugerir alternativas |
-| `InvalidAgentConfigError` | Configuración de agente no válida | Utilizar configuración por defecto, logear error |
-| `LLMProviderError` | Error en proveedor LLM | Reintentar con otro proveedor si está disponible |
-| `ToolExecutionFailed` | Error en ejecución de herramienta | Continuar sin resultado de herramienta, notificar limitación |
-| `ExecutionTimeoutError` | Timeout de ejecución | Devolver respuesta parcial o solicitar refinamiento |
-| `AgentRateLimitError` | Límite de tasa excedido | Encolar con prioridad baja, notificar demora |
+Todos los errores siguen el formato estandarizado con domain/action y códigos de error definidos en el documento global de esquemas de mensajes. A continuación, se detallan los errores específicos para la integración con Agent Execution Service:
 
-### 7.2 Circuito de Recuperación
+| Error Code | Domain | Action | Error Category | Causa | Estrategia de Manejo |
+|------------|--------|--------|---------------|-------|----------------------|
+| `AGENT_NOT_FOUND` | `agent` | `error` | `client` | ID de agente no existe | Notificar al usuario y sugerir alternativas |
+| `INVALID_AGENT_CONFIG` | `agent` | `error` | `validation` | Configuración de agente no válida | Utilizar configuración por defecto, logear error |
+| `LLM_PROVIDER_ERROR` | `agent` | `error` | `dependency` | Error en proveedor LLM | Reintentar con otro proveedor si está disponible |
+| `TOOL_EXECUTION_FAILED` | `tool` | `error` | `execution` | Error en ejecución de herramienta | Continuar sin resultado de herramienta, notificar limitación |
+| `EXECUTION_TIMEOUT` | `agent` | `error` | `timeout` | Timeout de ejecución | Devolver respuesta parcial o solicitar refinamiento |
+| `RATE_LIMIT_EXCEEDED` | `agent` | `error` | `quota` | Límite de tasa excedido | Encolar con prioridad baja, notificar demora |
+
+### 7.2 Ejemplo de Mensaje de Error
+
+```json
+{
+  "message_id": "550e8400-e29b-41d4-a716-446655440099",
+  "task_id": "550e8400-e29b-41d4-a716-446655440001",
+  "tenant_id": "tenant-ab123",
+  "correlation_id": "550e8400-e29b-41d4-a716-446655440002",
+  "created_at": "2025-06-04T10:22:30.123Z",
+  "schema_version": "1.1",
+  "status": "error",
+  "type": {
+    "domain": "agent",
+    "action": "error"
+  },
+  "priority": 5, // Mayor prioridad para notificaciones de error
+  "source_service": "agent_execution",
+  "target_service": "agent_orchestrator",
+  "metadata": {
+    "trace_id": "trace-abc123",
+    "error_code": "LLM_PROVIDER_ERROR",
+    "error_category": "dependency",
+    "error_source": "openai",
+    "retry_count": 3,
+    "error_id": "err-a1b2c3d4"
+  },
+  "payload": {
+    "original_task_id": "550e8400-e29b-41d4-a716-446655440001",
+    "error_message": "Error al conectar con el proveedor de LLM",
+    "error_details": "El servicio OpenAI reportó error 503 Service Unavailable",
+    "remediation_steps": [
+      "Intentar nuevamente en unos minutos",
+      "Probar con un modelo alternativo",
+      "Verificar la cuota y límites del servicio"
+    ],
+    "diagnostic_info": {
+      "http_status": 503,
+      "latency_ms": 12500,
+      "model": "gpt-4"
+    }
+  }
+}
+```
+
+### 7.3 Circuito de Recuperación
 
 ```mermaid
 flowchart TD

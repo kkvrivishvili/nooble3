@@ -83,6 +83,23 @@ Como servicio de nivel 1 (orquestación), el Agent Orchestrator Service está co
   - `orchestration.py`: OrchestrationPlan, ServiceCall
   - `batch.py`: BatchRequest, BatchResponse
 
+#### Mapa de Responsabilidades del Orquestador
+
+```
++----------------------------------------------------------+
+|                   AGENT ORCHESTRATOR                     |
++----------------------------------------------------------+
+| RESPONSABILIDADES PRINCIPALES:                           |
+|                                                          |
+| 1. ◆ Punto único de entrada para ejecucion de workflows y conversaciones|
+| 2. ◆ Gestión global de sesiones y contexto               |
+| 3. ◆ Orquestación de tareas entre servicios              |
+| 4. ◆ Seguimiento del estado de tareas asíncronas         |
+| 5. ◆ Servidor WebSocket para notificaciones              |
+| 6. ◆ Aplicación de políticas de seguridad y tenancy      |
++----------------------------------------------------------+
+```
+
 ### 2.2 Flujo de Datos
 
 1. Las solicitudes llegan desde el frontend a través de la API REST o WebSocket
@@ -97,6 +114,44 @@ Como servicio de nivel 1 (orquestación), el Agent Orchestrator Service está co
 10. Se envían respuestas y actualizaciones al cliente vía HTTP o WebSocket
 
 Este flujo permite la ejecución coordinada de operaciones complejas que involucran múltiples servicios, manteniendo el control centralizado del proceso y el feedback en tiempo real al usuario.
+
+#### Sistema de Colas Multi-tenant
+
+##### Estructura Jerárquica de Colas
+
+```
+                  +---------------------------+
+                  |    COLAS DE ORQUESTADOR   |
+                  +---------------------------+
+                               |
+         +--------------------+-----------------+
+         |                    |                 |
++----------------+  +------------------+  +---------------+
+| Nivel Sesión   |  | Nivel Tarea     |  | Nivel Sistema |
++----------------+  +------------------+  +---------------+
+|                |  |                  |  |               |
+| orchestrator:  |  | orchestrator:    |  | orchestrator: |
+| session:       |  | tasks:           |  | system:       |
+| {tenant_id}:   |  | {tenant_id}      |  | notifications |
+| {session_id}   |  |                  |  |               |
++----------------+  +------------------+  +---------------+
+```
+
+##### Tipos de Colas
+
+1. **Colas de Nivel Sesión**:
+   - `orchestrator:session:{tenant_id}:{session_id}`
+   - Propósito: Seguimiento de sesiones activas y su estado
+   - Datos: Estado de la conversación, historial, contexto activo
+
+2. **Colas de Nivel Tarea**:
+   - `orchestrator:tasks:{tenant_id}`
+   - Propósito: Tracking global de todas las tareas del tenant
+   - Estructura: Registro central de tareas distribuidas en otros servicios
+
+3. **Colas de Sistema**:
+   - `orchestrator:system:notifications`
+   - Propósito: Notificaciones internas del sistema
 
 ## 3. Dependencias
 

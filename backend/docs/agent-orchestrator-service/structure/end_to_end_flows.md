@@ -197,9 +197,68 @@ sequenceDiagram
     Orchestrator->>Cliente: 10. [Callback/WebSocket] Resultados
 ```
 
-## 6. Flujo de Recuperación ante Fallos
+## 6. Flujo de Trabajo Asíncrono y WebSockets
 
-### 6.1 Fallo de Servicio Nivel 2
+### 6.1 Diagrama del Flujo de Trabajo Asíncrono
+
+```
++--------+          +------------------+          +----------------+
+|        |  HTTP    |                  | Encolar   |                |
+|Cliente | -------> |Agent Orchestrator| -------> | Redis Queue    |
+|        |          |                  |          |                |
++--------+          +------------------+          +----------------+
+    ^                       |  ^                         |
+    |                       |  |                         |
+    |     WebSocket         |  |                         |
+    +-----Notificación------+  |                         |
+                               |                         |
+                               |      Workers            |
+                               | <--------------------   |
+                               |                         |
+                             +-v---------+              |
+                             |           |              |
+                             | Servicios | ------------>+
+                             |           | Notificación WebSocket
+                             +-----------+
+```
+
+### 6.2 Arquitectura de Comunicación Asíncrona
+
+```
+                 [1. Solicitud HTTP inicial]
+ Cliente ------> Agent Orchestrator Service --------+
+    ^                                               |
+    |                                               v
+    |                                     [2. Solicitud de tarea]
+    |                                               |
+    |                                               v
+    |                                       Query Service
+    |                                          o
+    |                                    Embedding Service
+    |                                               |
+    |      [4. Actualización WebSocket]             |
+    +------ Agent Orchestrator <--- [3. Notificación WebSocket] 
+```
+
+### 6.3 Flujo del Proceso Asíncrono
+
+1. **Recepción de Solicitudes**:
+   - Agent Orchestrator recibe solicitud HTTP del cliente
+   - Valida permisos, rate limits y contexto del tenant
+
+2. **Delegación de Trabajo**:
+   - Envía solicitud HTTP al servicio apropiado (Query/Embedding Service)
+   - Recibe un `job_id` inmediatamente sin esperar resultados
+   - Almacena el ID de trabajo y lo asocia con la sesión del cliente
+
+3. **Servidor WebSocket para Notificaciones**:
+   - Expone un endpoint WebSocket en `ws://agent-orchestrator:8000/ws/task_updates`
+   - Recibe notificaciones de finalización de tareas de los servicios
+   - Procesa y reenvía la información relevante al cliente
+
+## 7. Flujo de Recuperación ante Fallos
+
+### 7.1 Fallo de Servicio Nivel 2
 
 ```mermaid
 sequenceDiagram
