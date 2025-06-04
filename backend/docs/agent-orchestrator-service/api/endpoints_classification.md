@@ -33,22 +33,11 @@ Este documento complementa el estándar Domain/Action con detalles específicos 
 
 ## 1. Introducción
 
-Este documento complementa el estándar Domain/Action con detalles específicos sobre la clasificación y catalogación de los endpoints API REST implementados en el Agent Orchestrator Service. asegura trazabilidad, consistencia y facilita el mantenimiento de la API.
+Este documento complementa el [estándar Domain/Action](../standards/domain_action.md) con detalles específicos sobre la clasificación y catalogación de los endpoints API REST implementados en el Agent Orchestrator Service.
 
-## 2. Convenciones de Nomenclatura con Estándar Domain/Action
+> **Nota**: Las convenciones generales de estructura de endpoints se han movido al documento principal del estándar Domain/Action. Este documento se enfoca en el catálogo completo de endpoints implementados en la plataforma.
 
-### Estructura Base de Endpoints
-
-Todos los endpoints siguen la estructura domain/action en su URL:
-
-| Tipo de Endpoint | Formato de Path | Ejemplo |
-|-----------------|----------------|---------|  
-| Frontend (Público) | `/api/v{n}/{domain}.{action}` | `/api/v1/chat.message` |
-| Interno (Servicio) | `/internal/v{n}/{domain}.{action}` | `/internal/v1/workflow.execute` |
-| WebSocket | `/ws/v{n}/{domain}` | `/ws/v1/chat/{session_id}` |
-| Salud y Diagnóstico | `/health/{check}`, `/metrics` | `/health/ready` |
-
-### Dominios Principales y sus Endpoints
+## 2. Catálogo de Endpoints por Dominio
 
 | Dominio | Descripción | Ejemplos de Endpoints |
 |---------|-------------|---------------------|
@@ -189,60 +178,11 @@ Endpoints para comunicación exclusiva entre servicios del backend, organizados 
 | GET | `/metrics` | Métricas Prometheus | API Key |
 | GET | `/internal/v1/debug/sessions/{session_id}` | Información de depuración | mTLS |
 
-## 5. Convenciones de Respuesta HTTP con Domain/Action
+## 5. Respuestas HTTP
 
-### 5.1 Códigos de Estado
+> **Nota**: Las convenciones generales sobre códigos de estado HTTP y formato de respuesta están documentadas en la [sección 6. Manejo de Errores](../standards/domain_action.md#6-manejo-de-errores) y [sección 2. Estructura de Mensajes](../standards/domain_action.md#2-estructura-de-mensajes) del estándar Domain/Action principal.
 
-Códigos de estado HTTP estándar utilizados:
-
-| Código | Descripción | Uso |
-|--------|------------|-----|
-| 200 OK | Éxito | Operación completada con éxito |
-| 201 Created | Recurso creado | Nuevo recurso creado |
-| 204 No Content | Sin contenido | Operación exitosa, sin contenido que devolver |
-| 400 Bad Request | Solicitud incorrecta | Error en parámetros o estructura domain/action |
-| 401 Unauthorized | No autorizado | Credenciales no válidas o faltantes |
-| 403 Forbidden | Prohibido | No tiene permisos para esta operación |
-| 404 Not Found | No encontrado | Recurso o domain.action no encontrado |
-| 409 Conflict | Conflicto | Estado de recurso conflictivo |
-| 422 Unprocessable Entity | Entidad no procesable | Estructura domain/action inválida |
-| 429 Too Many Requests | Demasiadas solicitudes | Límite de tasa excedido |
-| 500 Internal Server Error | Error interno | Error inesperado en el servidor |
-
-### 5.2 Formato de Respuesta Estándar Domain/Action
-
-Todas las respuestas HTTP siguen la estructura domain/action consistente:
-
-```json
-{
-  "message_id": "uuid-v4", 
-  "correlation_id": "uuid-v4", // Mismo ID de la solicitud original
-  "type": {
-    "domain": "domain_name",
-    "action": "response"
-  },
-  "schema_version": "1.0",
-  "created_at": "ISO-8601",
-  "data": {
-    // Datos específicos de la respuesta
-  },
-  "status": {
-    "code": 200,
-    "message": "OK"
-  },
-  "error": {
-    // Solo presente si hay error
-    "code": "ERROR_CODE",
-    "message": "Mensaje descriptivo",
-    "details": {}
-  },
-  "meta": {
-    "request_id": "uuid-v4",
-    "processing_time_ms": 235,
-    "source_service": "agent-orchestrator"
-  }
-}
-```
+Este catálogo utiliza los códigos de estado HTTP estándar para todas las respuestas, complementados con la estructura Domain/Action para proporcionar contexto adicional y detalles de error cuando sea necesario.
 
 ### 5.3 Estructura de Paginación con Domain/Action
 
@@ -282,69 +222,27 @@ Estructura estándar para respuestas paginadas:
 }
 ```
 
-## 6. Autenticación y Autorización con Domain/Action
+## 6. Autenticación y Autorización
 
-### 6.1 Métodos de Autenticación
+> **Nota**: Las convenciones generales sobre autenticación y autorización se han trasladado al documento principal del [estándar Domain/Action](../standards/domain_action.md). Consulte las secciones relevantes allí para una referencia completa.
 
-| Tipo | Mecanismo | Uso | Header |
-|------|-----------|-----|-------|
-| JWT | Bearer Token | Endpoints frontend | `Authorization: Bearer {jwt_token}` |
-| mTLS | Certificados de cliente | Comunicación entre servicios | N/A (TLS mutuo) |
-| API Key | Header de API Key | Endpoints internos y métricas | `X-API-Key: {api_key}` |
-| HMAC | Firma de solicitud | Webhooks externos | `X-Signature: {hmac}` |
+Este catálogo incluye información específica sobre los requisitos de autenticación para cada endpoint, como se muestra en las tablas anteriores.
 
-### 6.2 Claims JWT con Domain/Action
+### 6.1 Métodos de Autenticación por Tipo de Endpoint
 
-Los tokens JWT incluyen claims específicos para domain/action:
+Resumen de métodos de autenticación utilizados en los endpoints del Agent Orchestrator:
 
-```json
-{
-  "sub": "user_id",
-  "iss": "nooble-auth",
-  "exp": 1684830077,
-  "iat": 1684743677,
-  "tenant_id": "tenant-uuid",
-  "permissions": [
-    "session:read",
-    "session:write",
-    "chat:read",
-    "chat:write",
-    "workflow:execute",
-    "agent:read"
-  ],
-  "domains": ["session", "chat", "workflow", "agent"],
-  "role": "user"
-}
-```
-
-### 6.3 Permisos por Rol usando Domain/Action
-
-| Rol | Permisos |
-|-----|----------|
-| Usuario | `session:read`, `session:write`, `chat:read`, `chat:write`, `agent:read`, `workflow:execute` |
-| Administrador | `*:*` (acceso total) |
-| Servicio | Permisos específicos por servicio (ej. `workflow:*`, `notification:send`) |
-| Monitor | `system:read`, `telemetry:read`, `workflow:status` |
-
-## 7. Versionado de API
-
-### Estrategia de Versionado
-
-- Versionado en URL para cambios incompatibles (`/api/v{n}/{domain}.{action}` → `/api/v{n+1}/{domain}.{action}`)
-- Adición de campos nuevos opcionales sin cambio de versión
-- Al menos 6 meses de soporte para versiones anteriores
-- Cabecera `Sunset` para indicar endpoints obsoletos
-
-### Ciclo de Vida de Versiones
-
-1. **Desarrollo**: `/api/beta/{feature}/`
-2. **Estable**: `/api/v{n}/`
-3. **Desaprobado**: Cabecera `Deprecated: true`
-4. **Retirado**: Endpoint eliminado
+| Método | Uso |
+|---------|-----|
+| JWT | Todos los endpoints frontend (`/api/v1/*`) |
+| mTLS | Comunicación entre servicios (`/internal/v1/*`) |
+| API Key | Endpoints de monitoreo y diagnóstico (`/health/*`, `/metrics`) |
 
 ## 7. Ejemplos de Uso
 
-### Crear Sesión y Enviar Mensaje (Frontend)
+> **Nota**: Para información detallada sobre el versionado de API, consulte la [sección 7. Versionado](../standards/domain_action.md#7-versionado) del estándar Domain/Action principal.
+
+A continuación se muestran ejemplos prácticos de cómo utilizar los endpoints catalogados en este documento:
 
 ```javascript
 // 1. Crear una nueva sesión
