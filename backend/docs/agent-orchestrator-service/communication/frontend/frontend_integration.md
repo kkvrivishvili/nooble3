@@ -4,42 +4,12 @@
 *Última actualización: 2025-06-10*  
 *Responsable: Equipo Nooble Frontend*
 
+> **IMPORTANTE**: El estándar Domain/Action se ha consolidado en [domain_action.md](../../standards/domain_action.md).  
+> Por favor, consulte ese documento para la documentación completa sobre la estructura de los mensajes, dominios, acciones, y formatos.
+
 ## 1. Introducción
 
-Este documento proporciona una guía detallada para integrar aplicaciones frontend con el Agent Orchestrator Service utilizando el estándar global domain/action. El estándar domain/action estructura todas las comunicaciones (REST, WebSocket, mensajería asíncrona) en un formato consistente y trazable, facilitando el desarrollo, depuración y evolución de las integraciones frontend-backend.
-
-## 2. Estructura Base Domain/Action
-
-Todas las comunicaciones siguen esta estructura común:
-
-```json
-{
-  "message_id": "uuid-v4",           // ID único del mensaje
-  "correlation_id": "uuid-v4",      // Para correlacionar solicitudes/respuestas
-  "type": {                        // Clasificación del mensaje
-    "domain": "session|chat|workflow|agent|tool|system",
-    "action": "create|update|message|execute|etc"
-  },
-  "schema_version": "1.0",         // Versión del esquema
-  "created_at": "ISO-8601",        // Timestamp de creación
-  "tenant_id": "tenant-uuid",      // ID de tenant (multi-tenancy)
-  "source_service": "frontend",    // Servicio de origen
-  "data": {                        // Carga útil específica del message
-    // Contenido variable según domain.action
-  }
-}
-```
-
-### 2.1 Dominios y Acciones Principales
-
-| Dominio | Acciones Comunes | Descripción |
-|---------|-----------------|-------------|
-| `session` | create, get, update, close | Gestión del ciclo de vida de sesiones |
-| `chat` | message, history, stream | Comunicación conversacional |
-| `workflow` | execute, status, cancel | Ejecución de tareas y workflows |
-| `agent` | list, get, assign | Gestión de agentes |
-| `tool` | execute, result | Ejecución de herramientas |
-| `system` | error, ping, status | Operaciones de sistema |
+Este documento proporciona una guía detallada para integrar aplicaciones frontend con el Agent Orchestrator Service utilizando el [estándar global domain/action](../../standards/domain_action.md). Esta guía se enfoca en los aspectos prácticos de la implementación frontend, complementando la documentación estándar.
 
 ## 3. Endpoints API REST con Domain/Action
 

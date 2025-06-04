@@ -4,62 +4,30 @@
 *Última actualización: 2025-06-04*  
 *Responsable: Equipo Nooble Backend*
 
+> **IMPORTANTE**: El estándar Domain/Action se ha consolidado en [domain_action.md](../../standards/domain_action.md).  
+> Por favor, consulte la sección [10. Eventos WebSocket](../../standards/domain_action.md#10-eventos-websocket) para ver los principios generales y la estructura estándar de los mensajes.
+
 ## Índice
 - [Catálogo de Eventos WebSocket Domain/Action](#catálogo-de-eventos-websocket-domainaction)
-  - [Índice](#índice)
   - [1. Introducción](#1-introducción)
-  - [2. Estructura Base de Mensajes Domain/Action](#2-estructura-base-de-mensajes-domainaction)
-  - [3. Eventos de Servidor a Cliente](#3-eventos-de-servidor-a-cliente)
-    - [3.1 Evento: chat.stream](#31-evento-chatstream)
-    - [3.2 Evento: chat.completed](#32-evento-chatcompleted)
-    - [3.3 Evento: chat.status_update](#33-evento-chatstatus_update)
-    - [3.4 Evento: tool.execute](#34-evento-toolexecute)
-    - [3.5 Evento: tool.result](#35-evento-toolresult)
-    - [3.6 Evento: system.error](#36-evento-systemerror)
-    - [3.7 Evento: workflow.status_update](#37-evento-workflowstatus_update)
-  - [4. Eventos de Cliente a Servidor](#4-eventos-de-cliente-a-servidor)
-    - [4.1 Evento: workflow.cancel](#41-evento-workflowcancel)
-    - [4.2 Evento: system.ping](#42-evento-systemping)
-    - [4.3 Evento: tool.result](#43-evento-toolresult)
-  - [4. Gestión de Estados y Reconexión](#4-gestión-de-estados-y-reconexión)
-    - [4.1 Reconexión del Cliente](#41-reconexión-del-cliente)
-    - [4.2 Sincronización de Estado](#42-sincronización-de-estado)
+  - [2. Eventos de Servidor a Cliente](#2-eventos-de-servidor-a-cliente)
+    - [2.1 Evento: chat.stream](#21-evento-chatstream)
+    - [2.2 Evento: chat.completed](#22-evento-chatcompleted)
+    - [2.3 Evento: chat.status_update](#23-evento-chatstatus_update)
+    - [2.4 Evento: tool.execute](#24-evento-toolexecute)
+    - [2.5 Evento: tool.result](#25-evento-toolresult)
+    - [2.6 Evento: system.error](#26-evento-systemerror)
+    - [2.7 Evento: workflow.status_update](#27-evento-workflowstatus_update)
+  - [3. Eventos de Cliente a Servidor](#3-eventos-de-cliente-a-servidor)
+    - [3.1 Evento: workflow.cancel](#31-evento-workflowcancel)
+    - [3.2 Evento: system.ping](#32-evento-systemping)
+    - [3.3 Evento: tool.result](#33-evento-toolresult)
 
 ## 1. Introducción
 
-Este documento define el catálogo completo de eventos WebSocket utilizados en la comunicación en tiempo real entre el Agent Orchestrator Service y los clientes frontend, implementando el estándar global domain/action. Sirve como referencia centralizada para estandarizar los nombres, formatos y estructura de todos los eventos, asegurando consistencia y trazabilidad en la comunicación.
+Este documento define el catálogo detallado de eventos WebSocket utilizados en la comunicación en tiempo real entre el Agent Orchestrator Service y los clientes frontend. Para los principios generales del estándar Domain/Action y la estructura de los mensajes, por favor consulte la [documentación consolidada](../../standards/domain_action.md).
 
-## 2. Estructura Base de Mensajes Domain/Action
-
-Todos los eventos WebSocket siguen la estructura estandarizada domain/action. Cada mensaje incluye:
-
-```json
-{
-  "message_id": "uuid-v4",           // Identificador único del mensaje
-  "correlation_id": "uuid-v4",       // ID para correlacionar solicitudes y respuestas
-  "type": {                        // Clasificación del mensaje
-    "domain": "string",            // Dominio funcional (chat, tool, system, workflow)
-    "action": "string"             // Acción específica dentro del dominio
-  },
-  "schema_version": "1.0",         // Versión del esquema de mensaje
-  "created_at": "ISO-8601",        // Timestamp de creación
-  "tenant_id": "string",           // Identificador del tenant
-  "source_service": "string",      // Servicio que originó el mensaje
-  "data": {}                       // Payload específico del mensaje
-}
-```
-
-### Dominios y Acciones Principales
-
-Los eventos WebSocket se clasifican en estos dominios principales:
-
-| Dominio | Descripción | Ejemplos de Acciones |
-|---------|-------------|---------------------|
-| `chat` | Interacción conversacional | stream, completed, status_update |
-| `tool` | Operaciones con herramientas | execute, result |
-| `workflow` | Flujos de trabajo | status_update, cancel |
-| `system` | Operaciones del sistema | error, ping |
-| `session` | Gestión de sesiones | update, sync |
+## 2. Eventos de Servidor a Cliente
 
 ## 3. Eventos de Servidor a Cliente
 

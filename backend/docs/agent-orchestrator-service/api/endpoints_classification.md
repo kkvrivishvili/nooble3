@@ -1,8 +1,15 @@
-# Clasificación de Endpoints API del Agent Orchestrator Service con Domain/Action
+# Clasificación de Endpoints API del Agent Orchestrator Service
 
 *Versión: 2.0.0*  
 *Última actualización: 2025-06-04*  
 *Responsable: Equipo Nooble Backend*
+
+> **IMPORTANTE**: El estándar Domain/Action se ha consolidado en [domain_action.md](../standards/domain_action.md).  
+> Por favor, consulte la sección [11. API REST y Endpoints](../standards/domain_action.md#11-api-rest-y-endpoints) para los principios generales y convenciones de nomenclatura.
+
+## Introducción
+
+Este documento complementa el estándar Domain/Action con detalles específicos sobre la clasificación y catalogación de los endpoints API REST implementados en el Agent Orchestrator Service.
 
 ## Índice
 - [Clasificación de Endpoints API del Agent Orchestrator Service](#clasificación-de-endpoints-api-del-agent-orchestrator-service)
@@ -26,7 +33,7 @@
 
 ## 1. Introducción
 
-Este documento establece una clasificación clara de todos los endpoints API del Agent Orchestrator Service, implementando el estándar global domain/action para URL, parámetros y respuestas. La organización distingue entre los endpoints públicos orientados al frontend y los endpoints internos para comunicación entre servicios, agrupados además por dominio funcional. Esta clasificación asegura trazabilidad, consistencia y facilita el mantenimiento de la API.
+Este documento complementa el estándar Domain/Action con detalles específicos sobre la clasificación y catalogación de los endpoints API REST implementados en el Agent Orchestrator Service. asegura trazabilidad, consistencia y facilita el mantenimiento de la API.
 
 ## 2. Convenciones de Nomenclatura con Estándar Domain/Action
 
