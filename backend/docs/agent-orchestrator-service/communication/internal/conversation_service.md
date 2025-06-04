@@ -461,81 +461,252 @@ async def register_for_conversation_updates(websocket, tenant_id, session_id=Non
 
 ## 6. REST API
 
-Además de la comunicación asíncrona, el Orchestrator también utiliza las siguientes APIs REST del Conversation Service:
+Además de la comunicación asíncrona, el Orchestrator utiliza las siguientes APIs REST del Conversation Service. Todos los endpoints son accesibles mediante comunicación HTTP/HTTPS y siguen el patrón domain/action en sus mensajes JSON.
 
 ### 6.1 Endpoints Utilizados
 
-| Endpoint | Método | Propósito | Parámetros |
-|----------|--------|-----------|------------|
-| `/api/v1/conversations` | POST | Crear nueva conversación | tenant_id, agent_id, metadata |
-| `/api/v1/conversations/{id}` | GET | Obtener detalles de conversación | conversation_id |
-| `/api/v1/conversations/{id}/messages` | GET | Obtener mensajes de conversación | conversation_id, limit, offset |
-| `/api/v1/conversations/{id}/messages` | POST | Añadir mensaje a conversación | conversation_id, message |
-| `/api/v1/internal/context/{conversation_id}` | GET | Obtener contexto (uso interno) | conversation_id, token_limit, message_count |
+| Endpoint | Método | Domain | Action | Propósito | Parámetros Principales |
+|----------|--------|--------|--------|------------|------------------------|
+| `/api/v1/conversations` | POST | `conversation` | `create` | Crear nueva conversación | tenant_id, agent_id, user_id, metadata |
+| `/api/v1/conversations/{id}` | GET | `conversation` | `retrieve` | Obtener detalles de conversación | conversation_id |
+| `/api/v1/conversations/{id}/messages` | GET | `message` | `list` | Listar mensajes de conversación | conversation_id, limit, offset |
+| `/api/v1/conversations/{id}/messages` | POST | `message` | `create` | Añadir mensaje a conversación | conversation_id, role, content |
+| `/api/v1/internal/context/{conversation_id}` | GET | `context` | `retrieve` | Obtener contexto (uso interno) | conversation_id, max_tokens, message_count |
+| `/api/v1/conversations/{id}/memory` | GET | `memory` | `retrieve` | Obtener memoria de conversación | conversation_id, memory_key |
+| `/api/v1/conversations/{id}/memory` | PUT | `memory` | `update` | Actualizar memoria de conversación | conversation_id, memory_key, memory_value |
 
-### 6.2 Ejemplos de Comunicación REST
+### 6.2 Headers Estándar
+
+Todas las solicitudes REST deben incluir los siguientes headers estándar:
+
+```
+Authorization: Bearer {SERVICE_TOKEN}
+X-Tenant-ID: {tenant_id}
+X-Correlation-ID: {correlation_id}
+X-Request-ID: {request_id}
+X-Schema-Version: 1.1
+Content-Type: application/json
+```
+
+### 6.3 Ejemplos de Comunicación REST
 
 **Crear Conversación**:
 ```python
 async def create_conversation(tenant_id, agent_id, user_id, metadata=None):
     url = f"{CONVERSATION_SERVICE_URL}/api/v1/conversations"
+    correlation_id = str(uuid.uuid4())
+    request_id = str(uuid.uuid4())
+    trace_id = str(uuid.uuid4())
+    
+    # Preparar cuerpo del mensaje siguiendo el estándar domain/action
     payload = {
+        "message_id": str(uuid.uuid4()),
         "tenant_id": tenant_id,
-        "agent_id": agent_id,
-        "user_id": user_id,
-        "metadata": metadata or {}
+        "schema_version": "1.1",
+        "created_at": datetime.utcnow().isoformat() + "Z",
+        "type": {
+            "domain": "conversation",
+            "action": "create"
+        },
+        "source_service": "agent_orchestrator",
+        "metadata": {
+            "trace_id": trace_id,
+            "session_id": None,  # Se asignará posteriormente
+            "user_id": user_id
+        },
+        "payload": {
+            "agent_id": agent_id,
+            "metadata": metadata or {},
+            "initial_context": [],
+            "tags": []
+        }
     }
     
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            url,
-            json=payload,
-            headers={"Authorization": f"Bearer {SERVICE_TOKEN}"}
-        )
-        
-        if response.status_code == 201:
-            return response.json()["data"]
-        else:
-            raise ServiceCommunicationError(f"Error creating conversation: {response.text}")
+    # Headers estandarizados
+    headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": tenant_id,
+        "X-Correlation-ID": correlation_id,
+        "X-Request-ID": request_id,
+        "X-Schema-Version": "1.1",
+        "Content-Type": "application/json"
+    }
+    
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        try:
+            response = await client.post(url, json=payload, headers=headers)
+            response.raise_for_status()
+            
+            # Procesar respuesta con domain/action
+            response_data = response.json()
+            
+            # Verificar que la respuesta cumple con el formato esperado
+            if (response_data.get("type", {}).get("domain") == "conversation" and 
+                response_data.get("type", {}).get("action") == "created"):
+                
+                return response_data.get("payload", {})
+            else:
+                logger.error(f"Formato de respuesta inesperado: {response_data}")
+                raise ServiceCommunicationError("Formato de respuesta inesperado")
+                
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Error HTTP: {e.response.status_code} - {e.response.text}")
+            raise ServiceCommunicationError(f"Error creando conversación: {e.response.text}")
+            
+        except (httpx.RequestError, httpx.TimeoutException) as e:
+            logger.error(f"Error de conexión: {str(e)}")
+            raise ServiceCommunicationError(f"Error de conexión: {str(e)}")
 ```
 
 **Obtener Contexto (para consultas síncronas rápidas)**:
 ```python
 async def get_conversation_context_sync(tenant_id, conversation_id, message_count=10, max_tokens=4000):
     url = f"{CONVERSATION_SERVICE_URL}/api/v1/internal/context/{conversation_id}"
+    correlation_id = str(uuid.uuid4())
+    request_id = str(uuid.uuid4())
+    trace_id = get_current_trace_id() or str(uuid.uuid4())
+    
+    # Parámetros de consulta
     params = {
-        "tenant_id": tenant_id,
         "message_count": message_count,
         "max_tokens": max_tokens
     }
     
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            url,
-            params=params,
-            headers={"Authorization": f"Bearer {SERVICE_TOKEN}"}
-        )
-        
-        if response.status_code == 200:
-            return response.json()["data"]
-        else:
-            logger.error(f"Error retrieving context: {response.text}")
+    # Headers estandarizados
+    headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": tenant_id,
+        "X-Correlation-ID": correlation_id,
+        "X-Request-ID": request_id,
+        "X-Trace-ID": trace_id,
+        "X-Schema-Version": "1.1"
+    }
+    
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        try:
+            response = await client.get(url, params=params, headers=headers)
+            response.raise_for_status()
+            
+            # Procesar respuesta con domain/action
+            response_data = response.json()
+            
+            # Verificar formato de respuesta
+            if (response_data.get("type", {}).get("domain") == "context" and 
+                response_data.get("type", {}).get("action") == "result"):
+                
+                return response_data.get("payload", {})
+            else:
+                logger.warning(f"Formato de respuesta inesperado: {response_data}")
+                return {"messages": []}
+                
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Error obteniendo contexto: {e.response.status_code} - {e.response.text}")
             return {"messages": []}
+            
+        except (httpx.RequestError, httpx.TimeoutException) as e:
+            logger.error(f"Error de conexión al obtener contexto: {str(e)}")
+            return {"messages": []}
+```
+
+**Actualizar Memoria de Conversación**:
+```python
+async def update_conversation_memory(tenant_id, conversation_id, memory_key, memory_value):
+    url = f"{CONVERSATION_SERVICE_URL}/api/v1/conversations/{conversation_id}/memory"
+    correlation_id = str(uuid.uuid4())
+    request_id = str(uuid.uuid4())
+    trace_id = get_current_trace_id() or str(uuid.uuid4())
+    
+    # Preparar cuerpo del mensaje siguiendo el estándar domain/action
+    payload = {
+        "message_id": str(uuid.uuid4()),
+        "tenant_id": tenant_id,
+        "schema_version": "1.1",
+        "created_at": datetime.utcnow().isoformat() + "Z",
+        "type": {
+            "domain": "memory",
+            "action": "update"
+        },
+        "source_service": "agent_orchestrator",
+        "metadata": {
+            "trace_id": trace_id,
+            "conversation_id": conversation_id
+        },
+        "payload": {
+            "memory_key": memory_key,
+            "memory_value": memory_value,
+            "ttl": 86400  # 24 horas en segundos
+        }
+    }
+    
+    # Headers estandarizados
+    headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": tenant_id,
+        "X-Correlation-ID": correlation_id,
+        "X-Request-ID": request_id,
+        "X-Trace-ID": trace_id,
+        "X-Schema-Version": "1.1",
+        "Content-Type": "application/json"
+    }
+    
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        try:
+            response = await client.put(url, json=payload, headers=headers)
+            response.raise_for_status()
+            return True
+        except Exception as e:
+            logger.error(f"Error actualizando memoria: {str(e)}")
+            return False
 ```
 
 ## 7. Gestión de Errores
 
-### 7.1 Errores Comunes y Estrategias
+### 7.1 Estructura de Códigos de Error
 
-| Error | Causa | Estrategia de Manejo |
-|-------|-------|----------------------|
-| `ConversationNotFound` | ID de conversación no existe | Crear nueva conversación y notificar al usuario |
-| `ContextProcessingError` | Error al procesar contexto | Utilizar contexto parcial o vacío, logear error |
-| `MessageStorageError` | Error al almacenar mensaje | Reintentar con backoff exponencial |
-| `RateLimitExceeded` | Límite de tasa excedido | Esperar y reintentar con jitter |
-| `ServiceTimeout` | Timeout de servicio | Fallback a modo sin contexto, reintentar en segundo plano |
+Siguiendo el estándar global de comunicación, los códigos de error siguen el formato `domain.action.error_type` para facilitar la categorización, el diagnóstico y la respuesta adecuada:
 
-### 7.2 Circuito de Recuperación
+| Código de Error | Significado | HTTP Status | Acción Recomendada |
+|-----------------|------------|-------------|--------------------|
+| `conversation.retrieve.not_found` | Conversación solicitada no existe | 404 | Crear nueva conversación o mostrar mensaje al usuario |
+| `conversation.create.duplicate` | Ya existe una conversación con el mismo ID | 409 | Usar la conversación existente |
+| `message.store.validation_error` | Formato de mensaje inválido | 400 | Corregir formato del mensaje y reintentar |
+| `context.retrieve.processing_error` | Error al procesar o extraer contexto | 500 | Utilizar contexto parcial o continuar sin contexto |
+| `memory.update.exceeded_limit` | Límite de tamaño de memoria excedido | 413 | Reducir tamaño de datos de memoria |
+| `system.auth.unauthorized` | Credenciales inválidas o expiradas | 401 | Renovar token de servicio |
+| `system.rate.limit_exceeded` | Límite de tasa excedido | 429 | Implementar backoff y reducir frecuencia |
+| `system.resource.unavailable` | Servicio temporalmente no disponible | 503 | Activar circuit breaker y usar fallbacks |
+
+### 7.2 Formato de Mensaje de Error
+
+```json
+{
+  "message_id": "550e8400-e29b-41d4-a716-446655440099",
+  "correlation_id": "550e8400-e29b-41d4-a716-446655440098",
+  "created_at": "2025-06-03T16:35:00.123Z",
+  "schema_version": "1.1",
+  "type": {
+    "domain": "context",
+    "action": "error"
+  },
+  "source_service": "conversation_service",
+  "target_service": "agent_orchestrator",
+  "metadata": {
+    "trace_id": "trace-xyz123",
+    "original_request_id": "550e8400-e29b-41d4-a716-446655440097"
+  },
+  "error": {
+    "code": "context.retrieve.processing_error",
+    "message": "Error al procesar contexto para la conversación",
+    "details": "Se excedió el tiempo de procesamiento al extraer vectores semánticos",
+    "retry_after": 5,  // Segundos recomendados para reintentar
+    "severity": "error",
+    "user_message": "Estamos experimentando problemas al procesar tu historial de conversación"
+  },
+  "status": 500
+}
+```
+
+### 7.3 Circuito de Recuperación
 
 ```mermaid
 flowchart TD
@@ -554,9 +725,97 @@ flowchart TD
     H --> I[Actualizar contexto en segundo plano]
 ```
 
-### 7.3 Política de Reintentos
+### 7.4 Implementación de Circuit Breaker
+
+```python
+from circuit_breaker import CircuitBreaker
+
+# Configuración del patrón circuit breaker
+context_service_breaker = CircuitBreaker(
+    name="conversation_context_service",
+    failure_threshold=5,           # Fallos consecutivos para abrir circuito
+    recovery_timeout=30,           # Segundos antes de probar conexión nuevamente
+    expected_exception=ServiceCommunicationError  # Excepciones a considerar como fallos
+)
+
+@context_service_breaker
+async def get_conversation_context_with_circuit_breaker(tenant_id, conversation_id, **params):
+    try:
+        # Crear identificadores para trazabilidad
+        correlation_id = str(uuid.uuid4())
+        trace_id = get_current_trace_id() or str(uuid.uuid4())
+        
+        # Preparar mensaje de solicitud con domain/action
+        request = {
+            "message_id": str(uuid.uuid4()),
+            "tenant_id": tenant_id,
+            "correlation_id": correlation_id,
+            "created_at": datetime.utcnow().isoformat() + "Z",
+            "schema_version": "1.1",
+            "type": {
+                "domain": "context",
+                "action": "retrieve"
+            },
+            "source_service": "agent_orchestrator",
+            "metadata": {
+                "trace_id": trace_id,
+                "conversation_id": conversation_id
+            },
+            "payload": params
+        }
+        
+        # Realizar solicitud con reintento exponencial
+        for attempt in range(3):
+            try:
+                # Implementación de solicitud...
+                response = await send_request(request)
+                
+                # Verificar formato de respuesta
+                if (response.get("type", {}).get("domain") == "context" and 
+                    response.get("type", {}).get("action") == "result"):
+                    return response.get("payload", {})
+                    
+                # Manejar error con formato estandarizado
+                elif response.get("type", {}).get("action") == "error":
+                    error_code = response.get("error", {}).get("code")
+                    error_message = response.get("error", {}).get("message")
+                    logger.error(f"Error recuperando contexto: {error_code} - {error_message}")
+                    
+                    # Verificar si es un error temporal
+                    if error_code.startswith("system.rate") or error_code.endswith("unavailable"):
+                        retry_after = response.get("error", {}).get("retry_after", 1)
+                        await asyncio.sleep(retry_after * (2 ** attempt) * (0.8 + 0.4 * random.random()))  # Backoff con jitter
+                        continue
+                        
+            except (httpx.RequestError, httpx.TimeoutException) as e:
+                if attempt < 2:  # Reintento para excepciones de conexión
+                    await asyncio.sleep(1 * (2 ** attempt) * (0.8 + 0.4 * random.random()))  # Backoff con jitter
+                else:
+                    raise ServiceCommunicationError(f"Error de comunicación después de reintentos: {str(e)}")
+                    
+        # Si llegamos aquí, agotar reintentos sin éxito
+        return {"messages": [], "error": "No se pudo recuperar contexto después de reintentos"}
+        
+    except Exception as e:
+        # Propagar la excepción para que la maneje el circuit breaker
+        context_service_breaker.record_failure()
+        logger.error(f"Circuit breaker registrando fallo: {str(e)}")
+        raise
+
+# Uso del servicio con circuit breaker
+async def get_context_safe(tenant_id, conversation_id, **params):
+    try:
+        return await get_conversation_context_with_circuit_breaker(tenant_id, conversation_id, **params)
+    except Exception as e:
+        logger.warning(f"Circuit breaker activo o error en servicio: {str(e)}")
+        # Fallback a plan alternativo si el circuit breaker está abierto
+        return {"messages": [], "fallback": True}
+```
+
+### 7.5 Política de Reintentos
 
 - **Exponential Backoff**: Retraso inicial de 1s, duplicando hasta 16s
 - **Jitter**: +/- 20% del valor de retraso para prevenir tormentas de sincronización
-- **Máximo de Intentos**: 3 para operaciones críticas
+- **Máximo de Intentos**: 3 para operaciones críticas, 1 para operaciones no críticas
 - **Circuit Breaker**: Se activa después de 5 fallos consecutivos, timeout de reset de 30s
+- **Prioridad de Fallo**: En caso de error parcial, priorizar continuar la operación con datos degradados en lugar de fallar completamente

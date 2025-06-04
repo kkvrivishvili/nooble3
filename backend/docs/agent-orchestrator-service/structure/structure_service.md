@@ -78,12 +78,14 @@ Como servicio de nivel 1 (orquestación), el Agent Orchestrator Service está co
   - `context.py`: Propagación de contexto
 
 - **Modelos (models/)**:
+  - `message.py`: MessageBase, DomainAction, ServiceMessage
   - `chat.py`: ChatRequest, ChatResponse
   - `session.py`: Session, SessionState
   - `orchestration.py`: OrchestrationPlan, ServiceCall
   - `batch.py`: BatchRequest, BatchResponse
+  - `domain_actions.py`: Definición de todos los domain/action soportados
 
-#### Mapa de Responsabilidades del Orquestador
+#### Mapa de Responsabilidades del Orquestador con Estándar Domain/Action
 
 ```
 +----------------------------------------------------------+
@@ -93,31 +95,83 @@ Como servicio de nivel 1 (orquestación), el Agent Orchestrator Service está co
 |                                                          |
 | 1. ◆ Punto único de entrada para ejecucion de workflows y conversaciones|
 | 2. ◆ Gestión global de sesiones y contexto               |
-| 3. ◆ Orquestación de tareas entre servicios              |
-| 4. ◆ Seguimiento del estado de tareas asíncronas         |
-| 5. ◆ Servidor WebSocket para notificaciones              |
+| 3. ◆ Orquestación de tareas entre servicios via domain/action   |
+| 4. ◆ Seguimiento del estado con correlation_id unificado   |
+| 5. ◆ Servidor WebSocket para notificaciones domain/action  |
 | 6. ◆ Aplicación de políticas de seguridad y tenancy      |
+| 7. ◆ Validación de mensajes con estándar domain/action   |
 +----------------------------------------------------------+
 ```
 
-### 2.2 Flujo de Datos
 
-1. Las solicitudes llegan desde el frontend a través de la API REST o WebSocket
+### 2.2 Implementación del Estándar Domain/Action
+
+El Agent Orchestrator Service implementa un estándar de comunicación unificado basado en el patrón domain/action para todas las interacciones entre servicios, flujos asíncronos y notificaciones en tiempo real.
+
+#### 2.2.1 Estructura Base de Mensajes
+
+Todos los mensajes intercambiados entre servicios siguen esta estructura estándar:
+
+```json
+{
+  "message_id": "uuid-v4",
+  "correlation_id": "uuid-v4",
+  "type": {
+    "domain": "string",
+    "action": "string"
+  },
+  "schema_version": "1.0",
+  "created_at": "ISO-8601 timestamp",
+  "tenant_id": "string",
+  "source_service": "string",
+  "target_service": "string",
+  "priority": 0-9,
+  "data": {} // payload específico del mensaje
+}
+```
+
+#### 2.2.2 Dominios Principales
+
+| Dominio | Descripción | Ejemplos de Acciones |
+|---------|-------------|---------------------|
+| `session` | Gestión de sesiones de usuario | create, update, close |
+| `chat` | Interacciones conversacionales | message, typing, history |
+| `workflow` | Definición y ejecución de workflows | define, execute, status, cancel |
+| `agent` | Operaciones con agentes | invoke, configure, feedback |
+| `tool` | Herramientas y extensiones | register, execute, list |
+| `system` | Operaciones del sistema | notification, error, metric |
+
+#### 2.2.3 Beneficios para la Arquitectura
+
+- **Desacoplamiento**: Los servicios se comunican mediante mensajes con un formato estandarizado
+- **Trazabilidad**: Cada mensaje mantiene su cadena de correlación completa
+- **Escalabilidad**: Se pueden enrutar mensajes basados en dominio y acción
+- **Mantenibilidad**: Estructura consistente en todo el sistema
+- **Documentación Autogenerada**: Los mensajes son autodocumentados
+
+### 2.3 Flujo de Datos con Estándar Domain/Action
+
+1. Las solicitudes llegan desde el frontend a través de la API REST o WebSocket y son clasificadas por dominio y acción
 2. Se valida la autenticación y pertenencia al tenant correcto mediante middleware
-3. El controlador correspondiente procesa la solicitud y la envía al orquestador
-4. El orquestador determina el plan de ejecución y los servicios a involucrar
-5. El coordinador de servicios distribuye las tareas entre los servicios apropiados
-6. Las tareas se envían a Redis Queue para procesamiento asíncrono
-7. El sistema mantiene seguimiento del estado general de la tarea y sus subtareas
-8. Los servicios individuales notifican su progreso y resultados
-9. El orquestador combina los resultados intermedios según el plan
-10. Se envían respuestas y actualizaciones al cliente vía HTTP o WebSocket
+3. El controlador correspondiente procesa la solicitud y la envía al orquestador con un formato domain/action estandarizado
+4. El orquestador determina el plan de ejecución basándose en el dominio y acción de la solicitud
+5. El coordinador de servicios distribuye las tareas usando colas específicas por dominio y acción con la estructura:
+   ```
+   service-name.[priority].[domain].[action]
+   ```
+6. Las tareas se envían a Redis Queue con metadatos estándar: `message_id`, `correlation_id`, `task_id`, etc.
+7. El sistema mantiene seguimiento del estado usando el `correlation_id` para relacionar solicitudes y respuestas
+8. Los servicios individuales notifican su progreso y resultados manteniendo el mismo `correlation_id` y formato domain/action
+9. El orquestador combina los resultados intermedios según el plan de orquestación
+10. Se envían respuestas y actualizaciones al cliente vía HTTP o WebSocket, siguiendo la estructura domain/action en eventos WebSocket
 
-Este flujo permite la ejecución coordinada de operaciones complejas que involucran múltiples servicios, manteniendo el control centralizado del proceso y el feedback en tiempo real al usuario.
+Este flujo permite la ejecución coordinada de operaciones complejas que involucran múltiples servicios, manteniendo el control centralizado del proceso y el feedback en tiempo real al usuario. El estándar domain/action facilita el enrutamiento, trazabilidad y escalabilidad del sistema.
 
-#### Sistema de Colas Multi-tenant
+#### Sistema de Colas Multi-tenant con Estándar Domain/Action
 
 ##### Estructura Jerárquica de Colas
+
+Las colas del orquestador implementan el estándar domain/action para unificar la comunicación entre servicios, manteniendo la estructura jerárquica original con un esquema de nomenclatura mejorado:
 
 ```
                   +---------------------------+
@@ -130,28 +184,52 @@ Este flujo permite la ejecución coordinada de operaciones complejas que involuc
 | Nivel Sesión   |  | Nivel Tarea     |  | Nivel Sistema |
 +----------------+  +------------------+  +---------------+
 |                |  |                  |  |               |
-| orchestrator:  |  | orchestrator:    |  | orchestrator: |
-| session:       |  | tasks:           |  | system:       |
-| {tenant_id}:   |  | {tenant_id}      |  | notifications |
-| {session_id}   |  |                  |  |               |
+| orchestrator.  |  | orchestrator.    |  | orchestrator. |
+| [priority].    |  | [priority].      |  | [priority].   |
+| session.       |  | workflow.        |  | system.       |
+| [action]       |  | [action]         |  | [action]      |
 +----------------+  +------------------+  +---------------+
 ```
+
+##### Estándar de Nomenclatura Domain/Action
+
+Cada cola sigue la convención estandarizada:
+```
+service-name.[priority].[domain].[action]
+```
+Donde:
+- **service-name**: Nombre del servicio (ej. orchestrator, workflow-engine)
+- **priority**: Prioridad de la cola (high, medium, low)
+- **domain**: Dominio funcional (session, workflow, tool, agent)
+- **action**: Operación específica (define, execute, status, cancel)
 
 ##### Tipos de Colas
 
 1. **Colas de Nivel Sesión**:
-   - `orchestrator:session:{tenant_id}:{session_id}`
-   - Propósito: Seguimiento de sesiones activas y su estado
+   - `orchestrator.high.session.create`
+   - `orchestrator.medium.session.update`
+   - `orchestrator.medium.session.state`
+   - Propósito: Gestión de sesiones activas y su estado
    - Datos: Estado de la conversación, historial, contexto activo
 
 2. **Colas de Nivel Tarea**:
-   - `orchestrator:tasks:{tenant_id}`
+   - `orchestrator.high.workflow.execute`
+   - `orchestrator.medium.workflow.status`
+   - `orchestrator.high.agent.invoke`
    - Propósito: Tracking global de todas las tareas del tenant
    - Estructura: Registro central de tareas distribuidas en otros servicios
 
 3. **Colas de Sistema**:
-   - `orchestrator:system:notifications`
-   - Propósito: Notificaciones internas del sistema
+   - `orchestrator.medium.system.notification`
+   - `orchestrator.high.system.error`
+   - Propósito: Gestión de notificaciones y errores internos del sistema
+
+##### Beneficios de la Implementación Domain/Action
+
+- **Enrutamiento Inteligente**: Los mensajes se dirigen automáticamente al servicio correcto basado en el dominio
+- **Priorización Clara**: Niveles de prioridad explícitos para gestión de carga
+- **Trazabilidad Mejorada**: Facilitación de seguimiento end-to-end de operaciones
+- **Escalabilidad**: Permite escalar consumidores específicamente por dominio y acción
 
 ## 3. Dependencias
 
@@ -234,17 +312,36 @@ Este flujo permite la ejecución coordinada de operaciones complejas que involuc
 
 ## 5. Operaciones y Mantenimiento
 
-### 5.1 Monitoreo y Disponibilidad
+### 5.1 Monitoreo y Disponibilidad con Domain/Action
 
-- **Health Check**: Endpoint `/health` con verificación profunda de conexiones a todos los servicios dependientes
-- **Métricas Críticas**:
-  - Tasa de completitud de workflows
-  - Latencia entre recepción y respuesta
-  - Tasa de errores por servicio downstream
-  - Utilización de memoria y conexiones
-  - Tiempo de respuesta por tipo de flujo
-- **Logs**: Formato estructurado JSON con trazabilidad completa de solicitudes usando IDs de correlación
-- **Alertas**: Múltiples niveles de alertas (advertencia/crítica) configuradas para umbrales de latencia y errores
+- **Health Check**: Endpoint `/health` con verificación profunda de conexiones a todos los servicios dependientes, organizado por dominios funcionales
+
+- **Métricas Domain/Action**:
+  - `{domain}.{action}.request_count`: Contador de solicitudes por dominio y acción
+  - `{domain}.{action}.duration_ms`: Histograma de tiempo de ejecución por dominio y acción
+  - `{domain}.{action}.error_count`: Contador de errores por dominio y acción
+  - `{domain}.queue.depth`: Profundidad de cola por dominio
+  - `{domain}.active_tasks`: Tareas activas por dominio
+  
+- **Logs Estructurados**:
+  Formato estructurado JSON con trazabilidad completa usando el estándar domain/action:
+  ```json
+  {
+    "timestamp": "2025-06-04T04:15:00.000Z",
+    "level": "info",
+    "correlation_id": "uuid-v4",
+    "domain": "workflow",
+    "action": "execute",
+    "tenant_id": "tenant-identifier",
+    "message": "Workflow execution started",
+    "execution_id": "exec-12345",
+    "workflow_id": "doc-processor-v1"
+  }
+  ```
+
+- **Dashboard por Dominio**: Paneles de control dedicados para cada dominio funcional (workflow, agent, tool, etc.)
+
+- **Alertas Domain/Action**: Alertas configuradas por dominio y acción con umbrales específicos para cada tipo de operación
 
 ### 5.2 Respaldo y Recuperación
 
