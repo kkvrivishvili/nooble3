@@ -9,10 +9,11 @@
 2. [Esquema de Base de Datos](#2-esquema-de-base-de-datos)
 3. [Tablas Principales](#3-tablas-principales)
 4. [Índices y Relaciones](#4-índices-y-relaciones)
+5. [Referencias entre Servicios](#5-referencias-entre-servicios)
 
 ## 1. Introducción
 
-Este documento describe la estructura de base de datos para el Workflow Engine Service dentro de la plataforma Nooble AI. Este servicio es responsable de definir, gestionar y ejecutar flujos de trabajo que coordinan las actividades de los agentes.
+Este documento describe la estructura de base de datos para el Workflow Engine Service dentro de la plataforma Nooble AI. Este servicio es responsable de gestionar la definición, ejecución y monitoreo de flujos de trabajo que pueden ser utilizados por los agentes.
 
 ## 2. Esquema de Base de Datos
 
@@ -24,109 +25,122 @@ CREATE SCHEMA IF NOT EXISTS workflow_engine;
 
 ## 3. Tablas Principales
 
-### 3.1 Tabla: `workflow_engine.workflow_definitions`
+### 3.1 Tabla: `workflow_engine.definitions`
 
 ```sql
-CREATE TABLE workflow_engine.workflow_definitions (
+CREATE TABLE workflow_engine.definitions (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL,
     name VARCHAR(255) NOT NULL,
     description TEXT,
-    version INTEGER DEFAULT 1,
+    version VARCHAR(50) NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE,
     created_by UUID,
     updated_by UUID,
-    status VARCHAR(50) DEFAULT 'active',
+    status VARCHAR(50) DEFAULT 'draft',
     definition JSONB NOT NULL
 );
 ```
 
-### 3.2 Tabla: `workflow_engine.workflow_instances`
+### 3.2 Tabla: `workflow_engine.instances`
 
 ```sql
-CREATE TABLE workflow_engine.workflow_instances (
+CREATE TABLE workflow_engine.instances (
     id UUID PRIMARY KEY,
-    workflow_definition_id UUID NOT NULL,
+    definition_id UUID NOT NULL,
     tenant_id UUID NOT NULL,
-    session_id UUID,
-    correlation_id UUID,
+    agent_id UUID, -- Referencia a agent_management.agents.id
+    session_id UUID, -- Referencia a agent_orchestrator.sessions.id
     status VARCHAR(50) NOT NULL,
     started_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     completed_at TIMESTAMP WITH TIME ZONE,
-    current_step VARCHAR(100),
-    context JSONB,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE,
     created_by UUID,
-    error_code VARCHAR(50),
-    error_message TEXT,
-    FOREIGN KEY (workflow_definition_id) REFERENCES workflow_engine.workflow_definitions (id)
+    context JSONB,
+    result JSONB,
+    FOREIGN KEY (definition_id) REFERENCES workflow_engine.definitions (id) ON DELETE CASCADE
 );
 ```
 
-### 3.3 Tabla: `workflow_engine.workflow_steps`
+### 3.3 Tabla: `workflow_engine.steps`
 
 ```sql
-CREATE TABLE workflow_engine.workflow_steps (
+CREATE TABLE workflow_engine.steps (
     id UUID PRIMARY KEY,
-    workflow_instance_id UUID NOT NULL,
+    instance_id UUID NOT NULL,
     tenant_id UUID NOT NULL,
-    step_name VARCHAR(100) NOT NULL,
+    step_name VARCHAR(255) NOT NULL,
     step_type VARCHAR(50) NOT NULL,
-    step_index INTEGER NOT NULL,
     status VARCHAR(50) NOT NULL,
     started_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     completed_at TIMESTAMP WITH TIME ZONE,
-    input JSONB,
-    output JSONB,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE,
+    inputs JSONB,
+    outputs JSONB,
     error_code VARCHAR(50),
     error_message TEXT,
-    retry_count INTEGER DEFAULT 0,
-    FOREIGN KEY (workflow_instance_id) REFERENCES workflow_engine.workflow_instances (id)
+    FOREIGN KEY (instance_id) REFERENCES workflow_engine.instances (id) ON DELETE CASCADE
 );
 ```
 
-### 3.4 Tabla: `workflow_engine.workflow_transitions`
+### 3.4 Tabla: `workflow_engine.transitions`
 
 ```sql
-CREATE TABLE workflow_engine.workflow_transitions (
+CREATE TABLE workflow_engine.transitions (
     id UUID PRIMARY KEY,
-    workflow_instance_id UUID NOT NULL,
+    instance_id UUID NOT NULL,
     tenant_id UUID NOT NULL,
-    from_step VARCHAR(100) NOT NULL,
-    to_step VARCHAR(100) NOT NULL,
+    from_step_id UUID NOT NULL,
+    to_step_id UUID NOT NULL,
     transition_time TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    condition_met VARCHAR(255),
-    metadata JSONB,
-    FOREIGN KEY (workflow_instance_id) REFERENCES workflow_engine.workflow_instances (id)
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE,
+    condition_result BOOLEAN,
+    condition_expression TEXT,
+    FOREIGN KEY (instance_id) REFERENCES workflow_engine.instances (id) ON DELETE CASCADE,
+    FOREIGN KEY (from_step_id) REFERENCES workflow_engine.steps (id) ON DELETE CASCADE,
+    FOREIGN KEY (to_step_id) REFERENCES workflow_engine.steps (id) ON DELETE CASCADE
 );
 ```
 
 ## 4. Índices y Relaciones
 
 ```sql
--- Índices para definiciones de flujo de trabajo
-CREATE INDEX idx_workflow_definitions_tenant_id ON workflow_engine.workflow_definitions (tenant_id);
-CREATE INDEX idx_workflow_definitions_name ON workflow_engine.workflow_definitions (name);
-CREATE INDEX idx_workflow_definitions_status ON workflow_engine.workflow_definitions (status);
-CREATE INDEX idx_workflow_definitions_version ON workflow_engine.workflow_definitions (version);
+-- Índices para definiciones de workflows
+CREATE INDEX idx_definitions_tenant_id ON workflow_engine.definitions (tenant_id);
+CREATE INDEX idx_definitions_name ON workflow_engine.definitions (name);
+CREATE INDEX idx_definitions_version ON workflow_engine.definitions (version);
+CREATE INDEX idx_definitions_status ON workflow_engine.definitions (status);
+CREATE INDEX idx_definitions_created_at ON workflow_engine.definitions (created_at);
 
--- Índices para instancias de flujo de trabajo
-CREATE INDEX idx_workflow_instances_workflow_definition_id ON workflow_engine.workflow_instances (workflow_definition_id);
-CREATE INDEX idx_workflow_instances_tenant_id ON workflow_engine.workflow_instances (tenant_id);
-CREATE INDEX idx_workflow_instances_session_id ON workflow_engine.workflow_instances (session_id);
-CREATE INDEX idx_workflow_instances_status ON workflow_engine.workflow_instances (status);
-CREATE INDEX idx_workflow_instances_current_step ON workflow_engine.workflow_instances (current_step);
+-- Índices para instancias de workflows
+CREATE INDEX idx_instances_definition_id ON workflow_engine.instances (definition_id);
+CREATE INDEX idx_instances_tenant_id ON workflow_engine.instances (tenant_id);
+CREATE INDEX idx_instances_agent_id ON workflow_engine.instances (agent_id);
+CREATE INDEX idx_instances_session_id ON workflow_engine.instances (session_id);
+CREATE INDEX idx_instances_status ON workflow_engine.instances (status);
+CREATE INDEX idx_instances_started_at ON workflow_engine.instances (started_at);
 
--- Índices para pasos de flujo de trabajo
-CREATE INDEX idx_workflow_steps_workflow_instance_id ON workflow_engine.workflow_steps (workflow_instance_id);
-CREATE INDEX idx_workflow_steps_tenant_id ON workflow_engine.workflow_steps (tenant_id);
-CREATE INDEX idx_workflow_steps_step_name ON workflow_engine.workflow_steps (step_name);
-CREATE INDEX idx_workflow_steps_status ON workflow_engine.workflow_steps (status);
-CREATE INDEX idx_workflow_steps_step_index ON workflow_engine.workflow_steps (step_index);
+-- Índices para pasos de workflows
+CREATE INDEX idx_steps_instance_id ON workflow_engine.steps (instance_id);
+CREATE INDEX idx_steps_tenant_id ON workflow_engine.steps (tenant_id);
+CREATE INDEX idx_steps_step_name ON workflow_engine.steps (step_name);
+CREATE INDEX idx_steps_step_type ON workflow_engine.steps (step_type);
+CREATE INDEX idx_steps_status ON workflow_engine.steps (status);
 
--- Índices para transiciones de flujo de trabajo
-CREATE INDEX idx_workflow_transitions_workflow_instance_id ON workflow_engine.workflow_transitions (workflow_instance_id);
-CREATE INDEX idx_workflow_transitions_tenant_id ON workflow_engine.workflow_transitions (tenant_id);
-CREATE INDEX idx_workflow_transitions_from_step ON workflow_engine.workflow_transitions (from_step);
-CREATE INDEX idx_workflow_transitions_to_step ON workflow_engine.workflow_transitions (to_step);
+-- Índices para transiciones de workflows
+CREATE INDEX idx_transitions_instance_id ON workflow_engine.transitions (instance_id);
+CREATE INDEX idx_transitions_tenant_id ON workflow_engine.transitions (tenant_id);
+CREATE INDEX idx_transitions_from_step_id ON workflow_engine.transitions (from_step_id);
+CREATE INDEX idx_transitions_to_step_id ON workflow_engine.transitions (to_step_id);
 ```
+
+## 5. Referencias entre Servicios
+
+| Campo | Referencia a | Descripción |
+|-------|-------------|-------------|
+| agent_id | agent_management.agents.id | Agente que inicia o está asociado con esta instancia de workflow |
+| session_id | agent_orchestrator.sessions.id | Sesión en la que se ejecuta este workflow |

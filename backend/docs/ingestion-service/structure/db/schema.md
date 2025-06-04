@@ -9,6 +9,7 @@
 2. [Esquema de Base de Datos](#2-esquema-de-base-de-datos)
 3. [Tablas Principales](#3-tablas-principales)
 4. [Índices y Relaciones](#4-índices-y-relaciones)
+5. [Referencias entre Servicios](#5-referencias-entre-servicios)
 
 ## 1. Introducción
 
@@ -60,7 +61,7 @@ CREATE TABLE ingestion.documents (
     file_size INTEGER,
     num_pages INTEGER,
     metadata JSONB,
-    FOREIGN KEY (collection_id) REFERENCES ingestion.collections (id)
+    FOREIGN KEY (collection_id) REFERENCES ingestion.collections (id) ON DELETE CASCADE
 );
 ```
 
@@ -74,12 +75,13 @@ CREATE TABLE ingestion.document_chunks (
     collection_id UUID NOT NULL,
     content TEXT NOT NULL,
     chunk_index INTEGER NOT NULL,
-    embedding_id UUID,
+    embedding_id UUID, -- Referencia a embedding_service.embedding_requests.id
     page_number INTEGER,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     status VARCHAR(50) DEFAULT 'active',
     metadata JSONB,
-    FOREIGN KEY (document_id) REFERENCES ingestion.documents (id)
+    FOREIGN KEY (document_id) REFERENCES ingestion.documents (id) ON DELETE CASCADE,
+    FOREIGN KEY (collection_id) REFERENCES ingestion.collections (id) ON DELETE CASCADE
 );
 ```
 
@@ -100,8 +102,10 @@ CREATE TABLE ingestion.ingestion_jobs (
     total_documents INTEGER,
     processed_documents INTEGER DEFAULT 0,
     failed_documents INTEGER DEFAULT 0,
+    created_by UUID,
+    updated_at TIMESTAMP WITH TIME ZONE,
     metadata JSONB,
-    FOREIGN KEY (collection_id) REFERENCES ingestion.collections (id)
+    FOREIGN KEY (collection_id) REFERENCES ingestion.collections (id) ON DELETE CASCADE
 );
 ```
 
@@ -120,6 +124,7 @@ CREATE INDEX idx_documents_title ON ingestion.documents (title);
 CREATE INDEX idx_documents_type ON ingestion.documents (type);
 CREATE INDEX idx_documents_status ON ingestion.documents (status);
 CREATE INDEX idx_documents_source_id ON ingestion.documents (source_id);
+CREATE INDEX idx_documents_created_at ON ingestion.documents (created_at);
 
 -- Índices para chunks de documentos
 CREATE INDEX idx_document_chunks_document_id ON ingestion.document_chunks (document_id);
@@ -133,4 +138,11 @@ CREATE INDEX idx_ingestion_jobs_tenant_id ON ingestion.ingestion_jobs (tenant_id
 CREATE INDEX idx_ingestion_jobs_collection_id ON ingestion.ingestion_jobs (collection_id);
 CREATE INDEX idx_ingestion_jobs_status ON ingestion.ingestion_jobs (status);
 CREATE INDEX idx_ingestion_jobs_job_type ON ingestion.ingestion_jobs (job_type);
+CREATE INDEX idx_ingestion_jobs_created_at ON ingestion.ingestion_jobs (created_at);
 ```
+
+## 5. Referencias entre Servicios
+
+| Campo | Referencia a | Descripción |
+|-------|-------------|-------------|
+| embedding_id | embedding.embedding_requests.id | Embedding generado para este fragmento de documento |
