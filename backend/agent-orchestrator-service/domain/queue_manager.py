@@ -1,14 +1,14 @@
 """
-Gestor de colas con formato Domain:Action estandarizado.
+Gestor de colas con formato Domain:Action estandarizado - CORREGIDO con pool de Redis.
 """
 
 import json
 import logging
 from typing import Dict, Any, Optional
 from datetime import datetime
-import redis.asyncio as redis
 from models.base_actions import BaseAction
 from config.settings import get_settings
+from common.redis_pool import get_redis_client  # Usar pool compartido
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -20,31 +20,13 @@ class DomainQueueManager:
     """
     
     def __init__(self):
-        self.redis_client = None
+        self._redis_client = None
     
-    async def connect(self):
-        """Conecta a Redis."""
-        if not self.redis_client:
-            self.redis_client = redis.from_url(
-                settings.redis_url,
-                decode_responses=True,
-                socket_connect_timeout=5,
-                socket_keepalive=True,
-                socket_keepalive_options={}
-            )
-            
-            try:
-                await self.redis_client.ping()
-                logger.info("Conectado a Redis exitosamente")
-            except Exception as e:
-                logger.error(f"Error conectando a Redis: {str(e)}")
-                raise
-    
-    async def disconnect(self):
-        """Desconecta de Redis."""
-        if self.redis_client:
-            await self.redis_client.close()
-            self.redis_client = None
+    async def _get_redis(self):
+        """Obtiene cliente Redis del pool compartido."""
+        if not self._redis_client:
+            self._redis_client = await get_redis_client()
+        return self._redis_client
     
     def _get_queue_name(self, action: BaseAction) -> str:
         """
@@ -78,7 +60,7 @@ class DomainQueueManager:
             bool: True si se encoló exitosamente
         """
         try:
-            await self.connect()
+            redis_client = await self._get_redis()
             
             # Usar dominio específico si se proporciona (para enviar a otros servicios)
             if target_domain:
@@ -87,7 +69,7 @@ class DomainQueueManager:
                 queue_name = self._get_queue_name(action)
             
             # Verificar límite de cola
-            queue_size = await self.redis_client.llen(queue_name)
+            queue_size = await redis_client.llen(queue_name)
             if queue_size >= settings.max_queue_size:
                 logger.warning(f"Cola llena para {queue_name}: {queue_size}")
                 return False
@@ -102,7 +84,7 @@ class DomainQueueManager:
             }
             
             # Encolar (LPUSH para FIFO con BRPOP)
-            await self.redis_client.lpush(queue_name, json.dumps(action_data))
+            await redis_client.lpush(queue_name, json.dumps(action_data))
             
             # Actualizar estadísticas
             await self._update_queue_stats(action.tenant_id, "enqueued")
@@ -136,12 +118,12 @@ class DomainQueueManager:
             Dict con datos de la acción o None
         """
         try:
-            await self.connect()
+            redis_client = await self._get_redis()
             
             queue_name = f"{domain}:{tenant_id}:{action}:{priority}"
             
             # BRPOP para obtener acción
-            result = await self.redis_client.brpop(queue_name, timeout=timeout)
+            result = await redis_client.brpop(queue_name, timeout=timeout)
             
             if result:
                 _, action_json = result
@@ -176,7 +158,7 @@ class DomainQueueManager:
             metadata: Metadatos adicionales
         """
         try:
-            await self.connect()
+            redis_client = await self._get_redis()
             
             status_key = self._get_status_key(action_id, tenant_id)
             
@@ -189,7 +171,7 @@ class DomainQueueManager:
             }
             
             # Guardar con TTL
-            await self.redis_client.setex(
+            await redis_client.setex(
                 status_key,
                 settings.task_timeout_seconds,
                 json.dumps(status_data)
@@ -220,10 +202,10 @@ class DomainQueueManager:
             Dict con estado o None si no existe
         """
         try:
-            await self.connect()
+            redis_client = await self._get_redis()
             
             status_key = self._get_status_key(action_id, tenant_id)
-            status_json = await self.redis_client.get(status_key)
+            status_json = await redis_client.get(status_key)
             
             if status_json:
                 return json.loads(status_json)
@@ -254,10 +236,10 @@ class DomainQueueManager:
             Tamaño de la cola
         """
         try:
-            await self.connect()
+            redis_client = await self._get_redis()
             
             queue_name = f"{domain}:{tenant_id}:{action}:{priority}"
-            return await self.redis_client.llen(queue_name)
+            return await redis_client.llen(queue_name)
             
         except Exception as e:
             logger.error(f"Error obteniendo tamaño de cola: {str(e)}")
@@ -280,10 +262,10 @@ class DomainQueueManager:
             priority: Prioridad
         """
         try:
-            await self.connect()
+            redis_client = await self._get_redis()
             
             queue_name = f"{domain}:{tenant_id}:{action}:{priority}"
-            await self.redis_client.delete(queue_name)
+            await redis_client.delete(queue_name)
             
             logger.info(f"Cola limpiada: {queue_name}")
             
@@ -299,20 +281,21 @@ class DomainQueueManager:
             operation: Tipo de operación (enqueued, dequeued, completed, failed)
         """
         try:
+            redis_client = await self._get_redis()
             stats_key = self._get_queue_stats_key(tenant_id)
             
             # Incrementar contador
-            await self.redis_client.hincrby(stats_key, operation, 1)
+            await redis_client.hincrby(stats_key, operation, 1)
             
             # Actualizar timestamp
-            await self.redis_client.hset(
+            await redis_client.hset(
                 stats_key,
                 f"last_{operation}",
                 datetime.now().isoformat()
             )
             
             # Establecer TTL de 24 horas
-            await self.redis_client.expire(stats_key, 86400)
+            await redis_client.expire(stats_key, 86400)
             
         except Exception as e:
             logger.error(f"Error actualizando estadísticas: {str(e)}")
@@ -328,10 +311,10 @@ class DomainQueueManager:
             Dict con estadísticas
         """
         try:
-            await self.connect()
+            redis_client = await self._get_redis()
             
             stats_key = self._get_queue_stats_key(tenant_id)
-            stats = await self.redis_client.hgetall(stats_key)
+            stats = await redis_client.hgetall(stats_key)
             
             return {
                 "tenant_id": tenant_id,
@@ -348,3 +331,39 @@ class DomainQueueManager:
         except Exception as e:
             logger.error(f"Error obteniendo estadísticas: {str(e)}")
             return {}
+    
+    async def estimate_wait_time(self, tenant_id: str, action: str) -> float:
+        """
+        Estima tiempo de espera basado en estadísticas reales.
+        
+        Args:
+            tenant_id: ID del tenant
+            action: Tipo de acción
+            
+        Returns:
+            Tiempo estimado en segundos
+        """
+        try:
+            redis_client = await self._get_redis()
+            
+            # Obtener métricas de los últimos 100 procesados
+            metrics_key = f"action_metrics:{tenant_id}:{action}"
+            recent_times = await redis_client.lrange(metrics_key, 0, 99)
+            
+            if not recent_times:
+                # Sin datos históricos, usar estimación por defecto
+                return 8.0
+            
+            # Calcular promedio
+            times = [float(t) for t in recent_times]
+            avg_time = sum(times) / len(times)
+            
+            # Obtener tamaño actual de cola
+            queue_size = await self.get_queue_size("agent", tenant_id, action)
+            
+            # Estimar tiempo total (tiempo promedio * posición en cola)
+            return avg_time * (queue_size + 1)
+            
+        except Exception as e:
+            logger.error(f"Error estimando tiempo: {str(e)}")
+            return 8.0  # Fallback
